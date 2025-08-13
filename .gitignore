@@ -1,0 +1,17 @@
+# Environment variables - THIS IS THE MOST IMPORTANT PART
+.env
+
+# Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# IDE and editor configuration
+.idea/
+.vscode/

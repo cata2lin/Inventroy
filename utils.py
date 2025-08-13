@@ -1,0 +1,1 @@
+import hmacimport hashlibdef verify_hmac(secret, data, hmac_header):    calculated_hmac = hmac.new(        secret.encode("utf-8"),        data,        hashlib.sha256    ).hexdigest()    return hmac.compare_digest(calculated_hmac, hmac_header)
