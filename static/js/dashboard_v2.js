@@ -62,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
         window.history.replaceState({ path: newUrl }, '', newUrl);
     };
 
-    const fetchOrders = async () => {
+    const fetchOrders = debounce(async () => {
         elements.tableContainer.setAttribute('aria-busy', 'true');
         updateUrl();
         
@@ -89,7 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } finally {
             elements.tableContainer.removeAttribute('aria-busy');
         }
-    };
+    }, 300);
 
     const renderAll = (data) => {
         renderMetrics(data);
@@ -149,18 +149,8 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // --- Initialization and Event Listeners ---
     const setupEventListeners = () => {
-        elements.filters.search.addEventListener('input', debounce(() => {
-            state.filters.search = elements.filters.search.value;
-            state.page = 1;
-            fetchOrders();
-        }, 500));
-
-        elements.filters.tags.addEventListener('input', debounce(() => {
-            state.filters.tags = elements.filters.tags.value;
-            state.page = 1;
-            fetchOrders();
-        }, 500));
-
+        elements.filters.search.addEventListener('input', debounce(() => { state.filters.search = elements.filters.search.value; state.page = 1; fetchOrders(); }, 500));
+        elements.filters.tags.addEventListener('input', debounce(() => { state.filters.tags = elements.filters.tags.value; state.page = 1; fetchOrders(); }, 500));
         ['startDate', 'endDate'].forEach(key => {
             elements.filters[key].addEventListener('change', () => {
                 const filterKey = { startDate: 'start_date', endDate: 'end_date' }[key];
@@ -169,7 +159,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 fetchOrders();
             });
         });
-
         ['financialStatus', 'fulfillmentStatus', 'hasNote'].forEach(key => {
             elements.filters[key].addEventListener('change', (e) => {
                 const filterKey = { financialStatus: 'financial_status', fulfillmentStatus: 'fulfillment_status', hasNote: 'has_note' }[key];
@@ -178,24 +167,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 fetchOrders();
             });
         });
-        
         elements.filters.stores.addEventListener('change', () => {
             state.filters.store_ids = Array.from(elements.filters.stores.querySelectorAll('input:checked')).map(cb => cb.value);
             state.page = 1;
             fetchOrders();
         });
-
         elements.filters.columns.addEventListener('change', () => {
             state.hiddenColumns = allColumns.filter(c => !document.querySelector(`input[name="col-${c.key}"]`).checked).map(c => c.key);
             renderTable(); // Re-render from cache
             updateUrl();
         });
-
         elements.filters.reset.addEventListener('click', () => {
             window.history.pushState({}, '', window.location.pathname);
             initialize();
         });
-        
         elements.pagination.prev.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchOrders(); } });
         elements.pagination.next.addEventListener('click', () => { if ((state.page * 50) < state.totalCount) { state.page++; fetchOrders(); } });
     };
