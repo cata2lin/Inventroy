@@ -2,7 +2,7 @@
 
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, or_, desc, asc
-from typing import Optional
+from typing import Optional, List
 
 import models
 
@@ -11,6 +11,7 @@ def get_inventory_report(
     skip: int, 
     limit: int, 
     view: str = 'individual',
+    store_ids: Optional[List[int]] = None, # ADDED
     search: Optional[str] = None,
     product_type: Optional[str] = None,
     category: Optional[str] = None,
@@ -36,14 +37,19 @@ def get_inventory_report(
     base_query = db.query(
         models.ProductVariant,
         models.Product,
+        models.Store.name.label("store_name"), # ADDED
         func.coalesce(committed_sq.c.committed, 0).label("committed_qty")
     ).join(
         models.Product, models.ProductVariant.product_id == models.Product.id
+    ).join(
+        models.Store, models.Product.store_id == models.Store.id # ADDED
     ).outerjoin(
         committed_sq, models.ProductVariant.sku == committed_sq.c.sku
     )
 
-    # --- FILTERING (applies to both views) ---
+    # --- FILTERING ---
+    if store_ids:
+        base_query = base_query.filter(models.Product.store_id.in_(store_ids))
     if search:
         search_ilike = f"%{search}%"
         base_query = base_query.filter(or_(models.ProductVariant.sku.ilike(search_ilike), models.ProductVariant.barcode.ilike(search_ilike), models.Product.title.ilike(search_ilike)))
@@ -53,40 +59,34 @@ def get_inventory_report(
         base_query = base_query.filter(models.Product.product_category == category)
     
     on_hand_col = func.coalesce(models.ProductVariant.inventory_quantity, 0)
-    committed_col = func.coalesce(committed_sq.c.committed, 0)
     retail_value_col = on_hand_col * func.coalesce(models.ProductVariant.price, 0)
     inventory_value_col = on_hand_col * func.coalesce(models.ProductVariant.cost, 0)
 
-    # --- AGGREGATES (Calculated on the filtered set before grouping/pagination) ---
     aggregates = base_query.with_entities(
         func.sum(retail_value_col).label("total_retail_value"),
         func.sum(inventory_value_col).label("total_inventory_value"),
         func.sum(on_hand_col).label("total_on_hand")
     ).one()
 
-    # --- VIEW-SPECIFIC LOGIC ---
     if view == 'grouped':
+        # Logic for grouped view remains largely the same but now will be pre-filtered by store
         query_base = base_query.filter(models.ProductVariant.barcode.isnot(None))
         total_count = query_base.distinct(models.ProductVariant.barcode).count()
         on_hand_agg = func.max(on_hand_col).label("on_hand")
-        committed_agg = func.sum(committed_col).label("committed")
+        committed_agg = func.sum(func.coalesce(committed_sq.c.committed, 0)).label("committed")
         
-        primary_variant_sq = db.query(
-            models.ProductVariant.barcode,
-            func.min(models.Product.id).over(partition_by=models.ProductVariant.barcode, order_by=models.ProductVariant.is_primary_variant.desc(), rows=(None,None)).label('primary_product_id')
-        ).filter(models.ProductVariant.barcode.isnot(None)).join(models.Product).distinct().subquery('primary_variant_sq')
+        primary_variant_sq = db.query(models.ProductVariant.barcode, func.min(models.Product.id).over(partition_by=models.ProductVariant.barcode, order_by=models.ProductVariant.is_primary_variant.desc()).label('primary_product_id')).filter(models.ProductVariant.barcode.isnot(None)).join(models.Product).distinct().subquery('primary_variant_sq')
         PrimaryProduct = aliased(models.Product)
 
         agg_query = query_base.join(primary_variant_sq, primary_variant_sq.c.barcode == models.ProductVariant.barcode).join(PrimaryProduct, PrimaryProduct.id == primary_variant_sq.c.primary_product_id)\
-            .with_entities(models.ProductVariant.barcode, on_hand_agg, committed_agg, (on_hand_agg - committed_agg).label("available"), func.json_agg(func.json_build_object('sku', models.ProductVariant.sku, 'title', models.Product.title)).label("variants_json"), PrimaryProduct.title.label("primary_title"), PrimaryProduct.image_url.label("primary_image_url"))\
-            .group_by(models.ProductVariant.barcode, PrimaryProduct.title, PrimaryProduct.image_url)
+            .with_entities(models.ProductVariant.barcode.label("barcode"), on_hand_agg, committed_agg, (on_hand_agg - committed_agg).label("available"), func.json_agg(func.json_build_object('sku', models.ProductVariant.sku, 'title', models.Product.title)).label("variants_json"), PrimaryProduct.title.label("primary_title"), models.Store.name.label("store_name"), PrimaryProduct.image_url.label("primary_image_url"))\
+            .group_by(models.ProductVariant.barcode, PrimaryProduct.title, models.Store.name, PrimaryProduct.image_url)
 
-        sort_column_map = {'on_hand': on_hand_agg, 'committed': committed_agg, 'available': (on_hand_agg - committed_agg)}
+        sort_column_map = {'on_hand': on_hand_agg, 'committed': committed_agg, 'available': (on_hand_agg - committed_agg), 'primary_title': "primary_title", "barcode": "barcode"}
         sort_column = sort_column_map.get(sort_by, on_hand_agg)
-        order_func = sort_column.desc() if sort_order == 'desc' else sort_column.asc()
+        order_func = asc(sort_column) if sort_order == 'asc' else desc(sort_column)
         results = agg_query.order_by(order_func.nulls_last()).offset(skip).limit(limit).all()
         inventory_list = [dict(row._mapping) for row in results]
-
     else: # Individual View
         if min_retail is not None: base_query = base_query.filter(retail_value_col >= min_retail)
         if max_retail is not None: base_query = base_query.filter(retail_value_col <= max_retail)
@@ -95,20 +95,21 @@ def get_inventory_report(
         total_count = base_query.count()
 
         sort_column_map = {
-            'price': models.ProductVariant.price, 'cost': models.ProductVariant.cost, 'on_hand': on_hand_col, 'committed': committed_col,
-            'available': on_hand_col - committed_col, 'retail_value': retail_value_col, 'inventory_value': inventory_value_col,
+            'price': models.ProductVariant.price, 'cost': models.ProductVariant.cost, 'on_hand': on_hand_col, 'committed': func.coalesce(committed_sq.c.committed, 0),
+            'available': on_hand_col - func.coalesce(committed_sq.c.committed, 0), 'retail_value': retail_value_col, 'inventory_value': inventory_value_col,
             'product_title': models.Product.title, 'sku': models.ProductVariant.sku, 'barcode': models.ProductVariant.barcode,
-            'type': models.Product.product_type, 'category': models.Product.product_category, 'status': models.Product.status
+            'type': models.Product.product_type, 'category': models.Product.product_category, 'status': models.Product.status,
+            'store_name': models.Store.name # ADDED
         }
         sort_column = sort_column_map.get(sort_by, on_hand_col)
-        order_func = sort_column.desc() if sort_order == 'desc' else sort_column.asc()
+        order_func = asc(sort_column) if sort_order == 'asc' else desc(sort_column)
         results = base_query.order_by(order_func.nulls_last()).offset(skip).limit(limit).all()
         inventory_list = [
             {"image_url": p.image_url, "product_title": p.title, "variant_title": v.title, "sku": v.sku, "barcode": v.barcode,
-             "type": p.product_type, "category": p.product_category, "status": p.status, "price": float(v.price or 0), "cost": float(v.cost or 0),
+             "store_name": s_name, "type": p.product_type, "category": p.product_category, "status": p.status, "price": float(v.price or 0), "cost": float(v.cost or 0),
              "on_hand": v.inventory_quantity or 0, "committed": int(c), "available": (v.inventory_quantity or 0) - int(c),
              "retail_value": (v.inventory_quantity or 0) * float(v.price or 0), "inventory_value": (v.inventory_quantity or 0) * float(v.cost or 0)}
-            for v, p, c in results
+            for v, p, s_name, c in results
         ]
     
     return {
