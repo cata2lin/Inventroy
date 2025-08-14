@@ -192,4 +192,4 @@ def get_inventory_by_store(db, store_id: int):
     """
     Returns all inventory items for a given store_id.
     """
-    return db.query(models.Inventory).filter(models.Inventory.store_id == store_id).all()
+    return db.query(models.ProductVariant).filter(models.ProductVariant.store_id == store_id).all()
