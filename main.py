@@ -13,8 +13,15 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
 from database import engine, Base
-# Import all routers, including the new one
-from routes import orders, dashboard, inventory, products, mutations, dashboard_v2
+# Import all final routers
+from routes import (
+    orders, 
+    dashboard, 
+    products, 
+    mutations, 
+    dashboard_v2, 
+    inventory_v2
+)
 
 Base.metadata.create_all(bind=engine)
 load_dotenv()
@@ -28,16 +35,21 @@ app = FastAPI(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="static")
 
-# Include all routers
+# Include all API routers
 app.include_router(orders.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api/dashboard") # Old dashboard
-app.include_router(inventory.router, prefix="/api/inventory")
+app.include_router(dashboard_v2.router)
 app.include_router(mutations.router)
-app.include_router(dashboard_v2.router) # New dashboard API
+app.include_router(inventory_v2.router)
+
+# Note: The old inventory and products routers are now superseded by inventory_v2
+# but can be kept if any legacy functionality depends on them.
+
+# --- HTML Page Routes ---
 
 @app.get("/", response_class=RedirectResponse, include_in_schema=False)
 async def read_root():
-    # Point root to the new dashboard
+    # Redirect root to the new dashboard
     return RedirectResponse(url="/dashboard-v2")
 
 @app.get("/dashboard-v2", response_class=HTMLResponse, include_in_schema=False)
@@ -50,6 +62,7 @@ async def get_products_page(request: Request):
 
 @app.get("/inventory", response_class=HTMLResponse, include_in_schema=False)
 async def get_inventory_page(request: Request):
+    # This now serves the new V2 inventory page
     return templates.TemplateResponse("inventory.html", {"request": request})
 
 @app.get("/mutations", response_class=HTMLResponse, include_in_schema=False)

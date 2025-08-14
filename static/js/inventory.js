@@ -1,22 +1,29 @@
 // static/js/inventory.js
 
 document.addEventListener('DOMContentLoaded', () => {
-    const contentEl = document.getElementById('inventory-content');
-    const searchInput = document.getElementById('searchInput');
-    const groupToggle = document.getElementById('groupToggle');
-    const prevButton = document.getElementById('prevButton');
-    const nextButton = document.getElementById('nextButton');
-    const pageIndicator = document.getElementById('pageIndicator');
-    const totalsContainer = document.getElementById('totals-container');
-    const totalRetailEl = document.getElementById('totalRetailValue');
-    const totalInventoryEl = document.getElementById('totalInventoryValue');
-    const adjustmentModal = document.getElementById('adjustmentModal');
-    
-    const state = {
-        page: 1, limit: 50, search: '',
-        view: 'grouped', sortBy: 'on_hand', sortOrder: 'desc',
-        totalCount: 0
+    // --- Element References ---
+    const elements = {
+        metrics: document.getElementById('metrics-container'),
+        filters: {
+            search: document.getElementById('search-input'),
+            type: document.getElementById('type-filter'),
+            category: document.getElementById('category-filter'),
+            minRetail: document.getElementById('min-retail-input'),
+            maxRetail: document.getElementById('max-retail-input'),
+            minInv: document.getElementById('min-inv-input'),
+            maxInv: document.getElementById('max-inv-input'),
+            reset: document.getElementById('reset-filters'),
+        },
+        tableContainer: document.getElementById('inventory-table-container'),
+        pagination: {
+            prev: document.getElementById('prev-button'),
+            next: document.getElementById('next-button'),
+            indicator: document.getElementById('page-indicator'),
+        },
     };
+
+    // --- State Management ---
+    let state = {};
 
     const debounce = (func, delay) => {
         let timeout;
@@ -25,256 +32,171 @@ document.addEventListener('DOMContentLoaded', () => {
             timeout = setTimeout(() => func.apply(this, args), delay);
         };
     };
-    
-    const loadInventory = async () => {
-        const skip = (state.page - 1) * state.limit;
-        contentEl.innerHTML = '<progress></progress>';
+
+    const updateUrl = () => {
+        const params = new URLSearchParams(window.location.search);
+        Object.entries(state).forEach(([key, value]) => {
+            if (value) params.set(key, value);
+            else params.delete(key);
+        });
+        window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+    };
+
+    const fetchInventory = debounce(async () => {
+        elements.tableContainer.setAttribute('aria-busy', 'true');
+        updateUrl();
         
         const params = new URLSearchParams({
-            skip: skip, limit: state.limit, view: state.view,
-            sort_by: state.sortBy, sort_order: state.sortOrder
+            skip: ((state.page || 1) - 1) * 50, limit: 50,
+            sort_by: state.sortBy, sort_order: state.sortOrder,
+            ...state.filters
         });
-        if (state.search) params.append('search', state.search);
 
         try {
-            const response = await fetch(API_ENDPOINTS.getGroupedInventory(params));
-            if (!response.ok) throw new Error('Failed to load inventory.');
+            const response = await fetch(API_ENDPOINTS.getInventoryReport(params));
+            if (!response.ok) throw new Error('Failed to fetch inventory report.');
             const data = await response.json();
             
             state.totalCount = data.total_count;
-            renderData(data.inventory);
-            
-            if (state.view === 'individual' && data.total_retail_value !== undefined) {
-                totalsContainer.style.display = 'block';
-                totalRetailEl.textContent = `Total Retail Value: ${data.total_retail_value.toFixed(2)}`;
-                totalInventoryEl.textContent = `Total Inventory Value: ${data.total_inventory_value.toFixed(2)}`;
-            } else {
-                totalsContainer.style.display = 'none';
-            }
-
-            updatePagination();
+            renderAll(data);
         } catch (error) {
-            contentEl.innerHTML = `<p>Error: ${error.message}</p>`;
+            elements.tableContainer.innerHTML = `<p style="color: var(--pico-color-red-500);">${error.message}</p>`;
+        } finally {
+            elements.tableContainer.removeAttribute('aria-busy');
         }
+    }, 400);
+
+    const renderAll = (data) => {
+        renderMetrics(data);
+        renderTable(data.inventory);
+        updatePagination();
     };
 
-    const renderData = (inventory) => {
-        if (state.view === 'grouped') {
-            renderGroupedView(inventory);
-        } else {
-            renderIndividualView(inventory);
-        }
+    const renderMetrics = (data) => {
+        elements.metrics.innerHTML = `
+            <div class="metric"><h4>${(data.total_retail_value || 0).toLocaleString('ro-RO')} RON</h4><p>Total Retail Value</p></div>
+            <div class="metric"><h4>${(data.total_inventory_value || 0).toLocaleString('ro-RO')} RON</h4><p>Total Inventory Value</p></div>
+            <div class="metric"><h4>${(data.total_on_hand || 0).toLocaleString()}</h4><p>Total Products On Hand</p></div>`;
+    };
+
+    const renderTable = (inventory) => {
+        const headers = [
+            { key: 'image_url', label: 'Image', sortable: false }, { key: 'product_title', label: 'Product / Variant' },
+            { key: 'sku', label: 'SKU' }, { key: 'barcode', label: 'Barcode' },
+            { key: 'type', label: 'Type' }, { key: 'category', label: 'Category' },
+            { key: 'status', label: 'Status' }, { key: 'price', label: 'Price' }, { key: 'cost', label: 'Cost' },
+            { key: 'on_hand', label: 'On Hand' }, { key: 'committed', label: 'Committed' },
+            { key: 'available', label: 'Available' }, { key: 'retail_value', label: 'Retail Value' },
+            { key: 'inventory_value', label: 'Inv. Value' }
+        ];
+
+        let tableHtml = '<div class="overflow-auto"><table><thead><tr>';
+        headers.forEach(h => {
+            const sortClass = state.sortBy === h.key ? `class="${state.sortOrder}"` : '';
+            const sortable = h.sortable !== false ? `data-sort-by="${h.key}"` : '';
+            tableHtml += `<th ${sortable} ${sortClass}>${h.label}</th>`;
+        });
+        tableHtml += '</tr></thead><tbody>';
+
+        (inventory || []).forEach(item => {
+            tableHtml += `
+                <tr>
+                    <td><img src="${item.image_url || 'https://via.placeholder.com/40'}" alt="${item.product_title}" style="width: 40px; border-radius: 4px;"></td>
+                    <td>${item.product_title}<br><small>${item.variant_title}</small></td>
+                    <td>${item.sku || ''}</td>
+                    <td>${item.barcode || ''}</td>
+                    <td>${item.type || ''}</td>
+                    <td>${item.category || ''}</td>
+                    <td><span class="status-${(item.status || '').toLowerCase()}">${item.status}</span></td>
+                    <td>${(item.price || 0).toFixed(2)}</td>
+                    <td>${(item.cost || 0).toFixed(2)}</td>
+                    <td>${item.on_hand}</td>
+                    <td>${item.committed}</td>
+                    <td>${item.available}</td>
+                    <td>${(item.retail_value || 0).toFixed(2)}</td>
+                    <td>${(item.inventory_value || 0).toFixed(2)}</td>
+                </tr>
+            `;
+        });
+        tableHtml += '</tbody></table></div>';
+        elements.tableContainer.innerHTML = tableHtml;
         addSortEventListeners();
     };
-
-    const renderGroupedView = (inventory) => {
-        if (inventory.length === 0) {
-            contentEl.innerHTML = '<p>No inventory groups found.</p>';
-            return;
-        }
-        let html = '';
-        inventory.forEach(group => {
-            html += `
-                <article class="product-card">
-                    <img src="${group.image_url || 'https://via.placeholder.com/80'}" alt="${group.title}">
-                    
-                    <div>
-                        <strong>${group.title}</strong><br>
-                        <small>Barcode: ${group.barcode}</small><br>
-                        <small>Category: ${group.category || 'N/A'}</small> | <small>Type: ${group.type || 'N/A'}</small> | <small>Status: ${group.status}</small>
-                        <details>
-                            <summary>${group.variants.length} SKU(s)</summary>
-                            <ul class="variant-list">
-                                ${group.variants.map(v => `
-                                    <li>
-                                        <span>${v.sku} (${v.title})</span>
-                                        <button class="secondary outline" onclick="setPrimaryVariant('${group.barcode}', ${v.variant_id})">Make Primary</button>
-                                    </li>`).join('')}
-                            </ul>
-                        </details>
-                    </div>
-                    <div class="quantity-display"><h2>${group.on_hand}</h2><p>On Hand</p></div>
-                    <div class="quantity-display"><h2>${group.committed}</h2><p>Committed</p></div>
-                    <div class="quantity-display"><h2>${group.available}</h2><p>Available</p></div>
-                     <div>
-                        <button onclick="openAdjustmentModal(this)" data-barcode="${group.barcode}" data-title="${group.title}" data-on-hand="${group.on_hand}">Adjust Stock</button>
-                    </div>
-                </article>`;
-        });
-        contentEl.innerHTML = html;
-    };
     
-    const renderIndividualView = (inventory) => {
-        if (inventory.length === 0) {
-            contentEl.innerHTML = '<p>No products found.</p>';
-            return;
-        }
-        const table = document.createElement('table');
-        table.innerHTML = `
-            <thead>
-                <tr>
-                    <th>Image</th>
-                    <th>Product / Variant</th>
-                    <th>SKU</th>
-                    <th>Barcode</th>
-                    <th>Type</th>
-                    <th>Category</th>
-                    <th>Status</th>
-                    <th data-sort-by="price">Price</th>
-                    <th data-sort-by="cost">Cost</th>
-                    <th data-sort-by="on_hand">On Hand</th>
-                    <th data-sort-by="committed">Committed</th>
-                    <th data-sort-by="available">Available</th>
-                    <th data-sort-by="retail_value">Retail Value</th>
-                    <th data-sort-by="inventory_value">Inv. Value</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${inventory.map(item => `
-                    <tr>
-                        <td><img src="${item.image_url || 'https://via.placeholder.com/40'}" alt="${item.product_title}"></td>
-                        <td>${item.product_title}<br><small>${item.title}</small></td>
-                        <td>${item.sku || 'N/A'}</td>
-                        <td>${item.barcode || 'N/A'}</td>
-                        <td>${item.type || 'N/A'}</td>
-                        <td>${item.category || 'N/A'}</td>
-                        <td>${item.status || 'N/A'}</td>
-                        <td>${item.price.toFixed(2)}</td>
-                        <td>${(item.cost || 0).toFixed(2)}</td>
-                        <td>${item.on_hand}</td>
-                        <td>${item.committed}</td>
-                        <td>${item.available}</td>
-                        <td>${item.retail_value.toFixed(2)}</td>
-                        <td>${item.inventory_value.toFixed(2)}</td>
-                    </tr>
-                `).join('')}
-            </tbody>`;
-        contentEl.innerHTML = '';
-        contentEl.appendChild(table);
-    };
-
     const updatePagination = () => {
-        pageIndicator.textContent = `Page ${state.page}`;
-        prevButton.disabled = state.page === 1;
-        nextButton.disabled = (state.page * state.limit) >= state.totalCount;
+        const totalPages = Math.ceil(state.totalCount / 50);
+        elements.pagination.indicator.textContent = `Page ${state.page} of ${totalPages > 0 ? totalPages : 1}`;
+        elements.pagination.prev.disabled = state.page === 1;
+        elements.pagination.next.disabled = state.page >= totalPages;
     };
-    
+
     const addSortEventListeners = () => {
-        document.querySelectorAll('th[data-sort-by]').forEach(th => {
-            th.classList.remove('asc', 'desc');
-            if (th.dataset.sortBy === state.sortBy) {
-                th.classList.add(state.sortOrder);
-            }
-            th.onclick = () => {
+        elements.tableContainer.querySelectorAll('th[data-sort-by]').forEach(th => {
+            th.addEventListener('click', () => {
                 const newSortBy = th.dataset.sortBy;
-                if (state.sortBy === newSortBy) {
-                    state.sortOrder = state.sortOrder === 'asc' ? 'desc' : 'asc';
-                } else {
-                    state.sortBy = newSortBy;
-                    state.sortOrder = 'desc';
-                }
+                state.sortOrder = (state.sortBy === newSortBy && state.sortOrder === 'desc') ? 'asc' : 'desc';
+                state.sortBy = newSortBy;
                 state.page = 1;
-                loadInventory();
-            };
+                fetchInventory();
+            });
         });
     };
 
-    window.setPrimaryVariant = async (barcode, variantId) => {
+    const initialize = async () => {
+        // Load filter options
         try {
-            const response = await fetch(API_ENDPOINTS.setPrimaryVariant, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ barcode: barcode, variant_id: variantId })
-            });
-            if (!response.ok) throw new Error('Failed to set primary variant.');
-            await loadInventory();
+            const response = await fetch(API_ENDPOINTS.getInventoryFilters);
+            const data = await response.json();
+            data.types.forEach(t => elements.filters.type.add(new Option(t, t)));
+            data.categories.forEach(c => elements.filters.category.add(new Option(c, c)));
         } catch (error) {
-            alert(`Error: ${error.message}`);
-        }
-    };
-
-    // Modal Logic
-    const toggleModal = (e) => {
-        const modalId = e.currentTarget.dataset.target;
-        const modal = document.getElementById(modalId);
-        if (modal) modal.showModal();
-    };
-
-    window.openAdjustmentModal = (button) => {
-        document.getElementById('modalProductTitle').textContent = button.dataset.title;
-        document.getElementById('modalBarcode').textContent = button.dataset.barcode;
-        document.getElementById('modalCurrentOnHand').textContent = button.dataset.onHand;
-        document.getElementById('modalHiddenBarcode').value = button.dataset.barcode;
-        document.getElementById('adjustmentValue').value = '';
-        document.getElementById('adjustmentReason').value = '';
-        adjustmentModal.showModal();
-    };
-
-    window.submitAdjustment = async (action) => {
-        const barcode = document.getElementById('modalHiddenBarcode').value;
-        const quantityInput = document.getElementById('adjustmentValue');
-        const reason = document.getElementById('adjustmentReason').value;
-        
-        if (!quantityInput.value) {
-            alert('Please enter a quantity.');
-            return;
+            console.error("Could not load filter options:", error);
         }
 
-        const payload = {
-            barcode: barcode,
-            quantity: parseInt(quantityInput.value, 10),
-            reason: reason || 'Manual adjustment',
-            source_info: 'Grouped Inventory Page'
-        };
-        
-        const endpointMap = {
-            set: API_ENDPOINTS.setInventoryQuantity,
-            add: API_ENDPOINTS.addInventoryQuantity,
-            subtract: API_ENDPOINTS.subtractInventoryQuantity
+        // Initialize state from URL
+        const params = new URLSearchParams(window.location.search);
+        state = {
+            page: parseInt(params.get('page') || '1', 10),
+            sortBy: params.get('sortBy') || 'on_hand',
+            sortOrder: params.get('sortOrder') || 'desc',
+            filters: {
+                search: params.get('search') || '',
+                product_type: params.get('product_type') || '',
+                category: params.get('category') || '',
+                min_retail: params.get('min_retail') || '',
+                max_retail: params.get('max_retail') || '',
+                min_inventory: params.get('min_inventory') || '',
+                max_inventory: params.get('max_inventory') || '',
+            }
         };
 
-        try {
-            const response = await fetch(endpointMap[action], {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+        // Update UI from state
+        Object.entries(state.filters).forEach(([key, value]) => {
+            const elKey = {product_type: 'type', category: 'category', min_retail: 'minRetail', max_retail: 'maxRetail', min_inventory: 'minInv', max_inventory: 'maxInv'}[key] || key;
+            if (elements.filters[elKey]) elements.filters[elKey].value = value;
+        });
+
+        // Add event listeners
+        Object.entries(elements.filters).forEach(([key, el]) => {
+            if (key === 'reset') return;
+            el.addEventListener('input', () => {
+                const filterKey = {type: 'product_type', minRetail: 'min_retail', maxRetail: 'max_retail', minInv: 'min_inventory', maxInv: 'max_inventory'}[key] || key;
+                state.filters[filterKey] = el.value;
+                state.page = 1;
+                fetchInventory();
             });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.detail || 'Adjustment failed.');
-            showToast(result.message || 'Inventory updated!', 'success');
-            adjustmentModal.close();
-            await loadInventory();
-        } catch(error) {
-            alert(`Error: ${error.message}`);
-        }
+        });
+        
+        elements.filters.reset.addEventListener('click', () => {
+            window.history.replaceState({}, '', window.location.pathname);
+            initialize();
+        });
+
+        elements.pagination.prev.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchInventory(); }});
+        elements.pagination.next.addEventListener('click', () => { if ((state.page * 50) < state.totalCount) { state.page++; fetchInventory(); }});
+
+        await fetchInventory();
     };
-    
-    // Event Listeners
-    searchInput.addEventListener('input', debounce(() => {
-        state.search = searchInput.value;
-        state.page = 1;
-        loadInventory();
-    }, 500));
 
-    groupToggle.addEventListener('change', () => {
-        state.view = groupToggle.checked ? 'grouped' : 'individual';
-        state.page = 1;
-        loadInventory();
-    });
-    
-    prevButton.addEventListener('click', () => {
-        if (state.page > 1) {
-            state.page--;
-            loadInventory();
-        }
-    });
-
-    nextButton.addEventListener('click', () => {
-        if ((state.page * state.limit) < state.totalCount) {
-            state.page++;
-            loadInventory();
-        }
-    });
-
-    loadInventory();
+    initialize();
 });

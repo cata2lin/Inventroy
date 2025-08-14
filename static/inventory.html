@@ -3,87 +3,52 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Grouped Inventory - Inventory Intelligence</title>
+    <title>Inventory Report - Inventory Intelligence</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
     <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
-    <main class="container">
+    <main class="container-fluid">
         <nav>
             <ul>
                 <li><strong>Inventory Intelligence</strong></li>
             </ul>
             <ul>
-                <li><a href="/dashboard">Dashboard</a></li>
-                <li><a href="/products">Product Editor</a></li>
-                <li><a href="/inventory" role="button" class="contrast">Grouped Inventory</a></li>
+                <li><a href="/dashboard-v2">Dashboard</a></li>
+                <li><a href="/products">Products</a></li>
+                <li><a href="/inventory" role="button" class="contrast">Inventory</a></li>
             </ul>
         </nav>
 
-        <h1>Inventory Report</h1>
-        
-        <article>
-            <div class="grid">
-                <div>
-                  <label for="searchInput">Search by SKU, Barcode, Type, or Category</label>
-                  <input type="search" id="searchInput" placeholder="Search...">
-                </div>
-                <fieldset>
-                    <label for="groupToggle">
-                        <input type="checkbox" id="groupToggle" name="groupToggle" role="switch" checked>
-                        Group by Barcode
-                    </label>
-                </fieldset>
-            </div>
-        </article>
-        
-        <article id="totals-container" style="display: none;">
-            <div class="grid" style="grid-template-columns: 1fr 1fr;">
-                <div>
-                    <h3 id="totalRetailValue">Total Retail Value: </h3>
-                </div>
-                <div>
-                    <h3 id="totalInventoryValue">Total Inventory Value: </h3>
-                </div>
-            </div>
+        <hgroup>
+            <h1>Inventory Report</h1>
+            <h2>Detailed view of all product variants across all stores.</h2>
+        </hgroup>
+
+        <article class="filter-container">
+            <section id="metrics-container" class="grid"></section>
+            <section class="controls-grid">
+                <input type="search" id="search-input" placeholder="Search SKU, Barcode, Name...">
+                <select id="type-filter"><option value="">All Types</option></select>
+                <select id="category-filter"><option value="">All Categories</option></select>
+                <input type="number" id="min-retail-input" placeholder="Min Retail Value">
+                <input type="number" id="max-retail-input" placeholder="Max Retail Value">
+                <input type="number" id="min-inv-input" placeholder="Min Inv. Value">
+                <input type="number" id="max-inv-input" placeholder="Max Inv. Value">
+                <button id="reset-filters" class="secondary outline">Reset</button>
+            </section>
         </article>
 
-        <div id="inventory-content">
-            <progress></progress>
-        </div>
-        
-        <div class="grid" style="grid-template-columns: 1fr auto 1fr;">
-            <button id="prevButton" class="secondary outline" disabled>&larr; Previous</button>
-            <span id="pageIndicator">Page 1</span>
-            <button id="nextButton" class="secondary outline">Next &rarr;</button>
+        <article id="inventory-table-container" aria-busy="true">
+            <p>Loading...</p>
+        </article>
+
+        <div class="grid pagination-controls">
+            <button id="prev-button" class="secondary outline" disabled>&larr; Previous</button>
+            <span id="page-indicator">Page 1</span>
+            <button id="next-button" class="secondary outline">Next &rarr;</button>
         </div>
     </main>
-    
-    <div id="toast"></div>
-
-    <dialog id="adjustmentModal">
-      <article>
-        <header>
-          <button aria-label="Close" rel="prev" data-target="adjustmentModal" onclick="toggleModal(event)"></button>
-          <p><strong>Adjust On Hand Quantity</strong></p>
-        </header>
-        <p>
-            <strong>Product:</strong> <span id="modalProductTitle"></span><br>
-            <strong>Barcode:</strong> <span id="modalBarcode"></span><br>
-            <strong>Current On Hand:</strong> <span id="modalCurrentOnHand"></span>
-        </p>
-        <input type="hidden" id="modalHiddenBarcode">
-        <div class="grid">
-            <input type="number" id="adjustmentValue" placeholder="Enter quantity">
-            <input type="text" id="adjustmentReason" placeholder="Reason (e.g., stock count)">
-        </div>
-        <footer>
-            <button class="secondary" onclick="submitAdjustment('subtract')">Subtract</button>
-            <button class="secondary" onclick="submitAdjustment('add')">Add</button>
-            <button onclick="submitAdjustment('set')">Set To</button>
-        </footer>
-      </article>
-    </dialog>
 
     <script src="/static/js/config.js"></script>
     <script src="/static/js/inventory.js"></script>
