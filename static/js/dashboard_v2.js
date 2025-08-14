@@ -61,7 +61,6 @@ document.addEventListener('DOMContentLoaded', () => {
             sort_order: state.sortOrder,
         });
 
-        // Collect filter values from state
         Object.entries(state.filters).forEach(([key, value]) => {
             if (value !== null && value !== '' && value.length !== 0) {
                 if (Array.isArray(value)) {
@@ -120,6 +119,8 @@ document.addEventListener('DOMContentLoaded', () => {
         tableHtml += '</tr></thead><tbody>';
 
         orders.forEach(order => {
+            const noteText = order.note || '';
+            const tagsText = order.tags || '';
             tableHtml += `
                 <tr>
                     <td>${order.name}</td>
@@ -127,9 +128,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td>${new Date(order.created_at).toLocaleDateString()}</td>
                     <td>${formatCurrency(order.total_price, order.currency)}</td>
                     <td><span class="status-${(order.fulfillment_status || '').toLowerCase()}">${order.fulfillment_status || 'N/A'}</span></td>
-                    <td class="${order.cancelled ? 'status-unfulfilled' : ''}">${order.cancelled ? `Yes (${order.cancel_reason || 'No reason'})` : 'No'}</td>
-                    <td title="${order.note || ''}">${order.note ? 'Yes' : 'No'}</td>
-                    <td>${order.tags || ''}</td>
+                    <td class="${order.cancelled ? 'status-cancelled' : ''}">${order.cancelled ? `Yes (${order.cancel_reason || 'N/A'})` : 'No'}</td>
+                    <td class="truncate-text" title="${noteText}">${noteText}</td>
+                    <td class="truncate-text" title="${tagsText}">${tagsText}</td>
                 </tr>
             `;
         });
@@ -178,12 +179,11 @@ document.addEventListener('DOMContentLoaded', () => {
         fetchAndRender();
     };
     
-    // --- Initial Load ---
     const initializeDashboard = async () => {
         try {
             const response = await fetch(API_ENDPOINTS.getStores);
             const stores = await response.json();
-            elements.filters.stores.innerHTML = ''; // Clear loading message
+            elements.filters.stores.innerHTML = '';
             stores.forEach(store => {
                 const li = document.createElement('li');
                 li.innerHTML = `<label><input type="checkbox" name="store" value="${store.id}"> ${store.name}</label>`;
@@ -193,7 +193,6 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.filters.stores.innerHTML = '<li>Could not load stores</li>';
         }
         
-        // Initial data load
         collectFiltersAndFetch();
     };
 
@@ -216,7 +215,6 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.filters.fulfillmentStatus.querySelectorAll('input')[0].checked = true;
         elements.filters.hasNote.querySelectorAll('input')[0].checked = true;
         
-        // Close all dropdowns
         document.querySelectorAll('.dropdown[open]').forEach(d => d.removeAttribute('open'));
 
         collectFiltersAndFetch();
