@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, asc
 from typing import List, Optional
 from datetime import datetime, timedelta
-
 import models
 
 def get_orders_for_dashboard(
@@ -47,7 +46,7 @@ def get_orders_for_dashboard(
         query = query.filter(models.Order.note.isnot(None) if has_note else models.Order.note.is_(None))
     if tags:
         for tag in [t.strip() for t in tags.split(',')]:
-            query = query.filter(models.Order.tags.ilike(f"%{tag}%"))
+            if tag: query = query.filter(models.Order.tags.ilike(f"%{tag}%"))
     if search:
         query = query.filter(models.Order.name.ilike(f"%{search}%"))
 
@@ -56,10 +55,15 @@ def get_orders_for_dashboard(
         func.count(models.Order.id).label("total_count"),
         func.sum(models.Order.total_price).label("total_value"),
         func.sum(models.Order.total_shipping_price).label("total_shipping"),
-        # Find the most common currency in the filtered set
         func.mode().within_group(models.Order.currency).label("currency")
     )
     aggregates = aggregates_query.first()
+    
+    # --- DEBUGGING ---
+    print("\n--- [DEBUG] AGGREGATES FROM DB ---")
+    print(f"Total Count: {aggregates.total_count}, Total Value: {aggregates.total_value}, Currency: {aggregates.currency}")
+    print("--------------------------------\n")
+
 
     # --- SORTING ---
     sort_column_map = { 'order_name': models.Order.name, 'created_at': models.Order.created_at, 'total_price': models.Order.total_price, 'store_name': 'store_name' }
@@ -72,11 +76,14 @@ def get_orders_for_dashboard(
         {**order.__dict__, "store_name": store_name, "cancelled": order.cancelled_at is not None}
         for order, store_name in results
     ]
+    
+    # --- DEBUGGING ---
+    print(f"--- [DEBUG] Returning {len(orders_list)} orders to the API ---")
 
     return {
         "total_count": aggregates.total_count or 0,
         "total_value": float(aggregates.total_value or 0),
         "total_shipping": float(aggregates.total_shipping or 0),
-        "currency": aggregates.currency or "RON", # Default to RON
+        "currency": aggregates.currency or "RON",
         "orders": orders_list
     }

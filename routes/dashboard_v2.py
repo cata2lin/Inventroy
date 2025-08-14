@@ -1,6 +1,6 @@
 # routes/dashboard_v2.py
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
@@ -15,6 +15,7 @@ router = APIRouter(
 
 @router.get("/orders/")
 def get_dashboard_orders(
+    request: Request, # ADDED Request to access URL
     skip: int = 0,
     limit: int = 50,
     store_ids: Optional[List[int]] = Query(None),
@@ -32,6 +33,12 @@ def get_dashboard_orders(
     """
     Provides data for the new dashboard with advanced filtering and sorting.
     """
+    # --- DEBUGGING ---
+    print("\n--- [DEBUG] INCOMING API REQUEST ---")
+    print(f"URL: {request.url}")
+    print(f"PARAMS: skip={skip}, limit={limit}, store_ids={store_ids}, search='{search}', sort_by='{sort_by}', sort_order='{sort_order}'")
+    print("----------------------------------\n")
+    
     return crud_dashboard.get_orders_for_dashboard(
         db=db,
         skip=skip,
