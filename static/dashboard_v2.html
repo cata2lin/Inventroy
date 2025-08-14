@@ -26,21 +26,7 @@
         </hgroup>
 
         <article class="filter-container">
-            <section id="metrics-container" class="grid">
-                <div class="metric">
-                    <h4 id="total-orders">0</h4>
-                    <p>Orders Found</p>
-                </div>
-                <div class="metric">
-                    <h4 id="total-value">$0.00</h4>
-                    <p>Total Value</p>
-                </div>
-                <div class="metric">
-                    <h4 id="total-shipping">$0.00</h4>
-                    <p>Total Shipping</p>
-                </div>
-            </section>
-            
+            <section id="metrics-container" class="grid"></section>
             <section class="controls-grid">
                 <input type="search" id="search-input" name="search" placeholder="Search Order Name...">
                 <details role="list" class="dropdown">
@@ -73,6 +59,11 @@
                         <li><label><input type="radio" name="note" value="true"> Has Note</label></li>
                         <li><label><input type="radio" name="note" value="false"> No Note</label></li>
                     </ul>
+                </details>
+                <details role="list" class="dropdown">
+                    <summary aria-haspopup="listbox">Columns</summary>
+                    <ul role="listbox" id="column-visibility-filter">
+                        </ul>
                 </details>
                 <input type="search" id="tags-input" name="tags" placeholder="Filter by tags...">
                 <input type="date" id="start-date">

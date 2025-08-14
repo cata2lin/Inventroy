@@ -3,11 +3,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     // --- Element References ---
     const elements = {
-        metrics: {
-            orders: document.getElementById('total-orders'),
-            value: document.getElementById('total-value'),
-            shipping: document.getElementById('total-shipping'),
-        },
+        metricsContainer: document.getElementById('metrics-container'),
         filters: {
             search: document.getElementById('search-input'),
             tags: document.getElementById('tags-input'),
@@ -15,6 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
             financialStatus: document.getElementById('financial-status-filter'),
             fulfillmentStatus: document.getElementById('fulfillment-status-filter'),
             hasNote: document.getElementById('has-note-filter'),
+            columns: document.getElementById('column-visibility-filter'),
             startDate: document.getElementById('start-date'),
             endDate: document.getElementById('end-date'),
             reset: document.getElementById('reset-filters'),
@@ -28,46 +25,70 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // --- State Management ---
-    const state = {
-        page: 1,
-        limit: 50,
-        totalCount: 0,
-        sortBy: 'created_at',
-        sortOrder: 'desc',
-        filters: {},
+    const allColumns = [
+        { key: 'order_name', label: 'Order' }, { key: 'store_name', label: 'Store' },
+        { key: 'created_at', label: 'Date' }, { key: 'total_price', label: 'Total' },
+        { key: 'fulfillment_status', label: 'Fulfillment' }, { key: 'cancelled', label: 'Cancelled' },
+        { key: 'note', label: 'Note' }, { key: 'tags', label: 'Tags' },
+    ];
+
+    let state = {
+        page: 1, limit: 50, totalCount: 0, sortBy: 'created_at', sortOrder: 'desc',
+        filters: { search: '', tags: '', store_ids: [], financial_status: '', fulfillment_status: '', has_note: '', start_date: '', end_date: '' },
+        hiddenColumns: []
     };
 
-    // --- Utility & Helper Functions ---
-    const debounce = (func, delay) => {
-        let timeout;
-        return (...args) => {
-            clearTimeout(timeout);
-            timeout = setTimeout(() => func.apply(this, args), delay);
+    // --- URL State Synchronization ---
+    const updateStateFromUrl = () => {
+        const params = new URLSearchParams(window.location.search);
+        state.page = parseInt(params.get('page') || '1', 10);
+        state.sortBy = params.get('sortBy') || 'created_at';
+        state.sortOrder = params.get('sortOrder') || 'desc';
+        state.hiddenColumns = params.getAll('hide') || [];
+        state.filters = {
+            search: params.get('search') || '',
+            tags: params.get('tags') || '',
+            store_ids: params.getAll('stores') || [],
+            financial_status: params.get('fs') || '',
+            fulfillment_status: params.get('ffs') || '',
+            has_note: params.get('note') || '',
+            start_date: params.get('start') || '',
+            end_date: params.get('end') || '',
         };
     };
 
-    const formatCurrency = (value, currency) => {
-        return value.toLocaleString('en-US', { style: 'currency', currency: currency || 'USD' });
+    const updateUrlFromState = () => {
+        const params = new URLSearchParams();
+        if (state.page > 1) params.set('page', state.page);
+        if (state.sortBy !== 'created_at') params.set('sortBy', state.sortBy);
+        if (state.sortOrder !== 'desc') params.set('sortOrder', state.sortOrder);
+        state.hiddenColumns.forEach(col => params.append('hide', col));
+        if (state.filters.search) params.set('search', state.filters.search);
+        if (state.filters.tags) params.set('tags', state.filters.tags);
+        state.filters.store_ids.forEach(id => params.append('stores', id));
+        if (state.filters.financial_status) params.set('fs', state.filters.financial_status);
+        if (state.filters.fulfillment_status) params.set('ffs', state.filters.fulfillment_status);
+        if (state.filters.has_note) params.set('note', state.filters.has_note);
+        if (state.filters.start_date) params.set('start', state.filters.start_date);
+        if (state.filters.end_date) params.set('end', state.filters.end_date);
+        
+        const newUrl = `${window.location.pathname}?${params.toString()}`;
+        window.history.pushState({ path: newUrl }, '', newUrl);
     };
 
-    // --- Main API & Rendering Logic ---
+    // --- API & Rendering ---
     const fetchAndRender = debounce(async () => {
         elements.tableContainer.setAttribute('aria-busy', 'true');
+        updateUrlFromState();
         
         const params = new URLSearchParams({
-            skip: (state.page - 1) * state.limit,
-            limit: state.limit,
-            sort_by: state.sortBy,
-            sort_order: state.sortOrder,
+            skip: (state.page - 1) * state.limit, limit: state.limit,
+            sort_by: state.sortBy, sort_order: state.sortOrder,
         });
-
         Object.entries(state.filters).forEach(([key, value]) => {
-            if (value !== null && value !== '' && value.length !== 0) {
-                if (Array.isArray(value)) {
-                    value.forEach(v => params.append(key, v));
-                } else {
-                    params.append(key, value);
-                }
+            if (value && value.length > 0) {
+                if (Array.isArray(value)) value.forEach(v => params.append(key, v));
+                else params.append(key, value);
             }
         });
 
@@ -75,7 +96,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch(API_ENDPOINTS.getDashboardOrders(params));
             if (!response.ok) throw new Error('Failed to fetch orders.');
             const data = await response.json();
-            
             state.totalCount = data.total_count;
             renderMetrics(data);
             renderTable(data.orders);
@@ -85,54 +105,45 @@ document.addEventListener('DOMContentLoaded', () => {
         } finally {
             elements.tableContainer.removeAttribute('aria-busy');
         }
-    }, 250);
+    }, 300);
 
     const renderMetrics = (data) => {
-        elements.metrics.orders.textContent = data.total_count.toLocaleString();
-        elements.metrics.value.textContent = formatCurrency(data.total_value);
-        elements.metrics.shipping.textContent = formatCurrency(data.total_shipping);
+        elements.metricsContainer.innerHTML = `
+            <div class="metric"><h4>${data.total_count.toLocaleString()}</h4><p>Orders Found</p></div>
+            <div class="metric"><h4>${(data.total_value || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</h4><p>Total Value</p></div>
+            <div class="metric"><h4>${(data.total_shipping || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</h4><p>Total Shipping</p></div>`;
     };
 
     const renderTable = (orders) => {
+        const visibleColumns = allColumns.filter(c => !state.hiddenColumns.includes(c.key));
         if (!orders || orders.length === 0) {
-            elements.tableContainer.innerHTML = '<p>No orders found matching your criteria.</p>';
-            return;
+            elements.tableContainer.innerHTML = '<p>No orders found matching your criteria.</p>'; return;
         }
 
-        const headers = [
-            { key: 'order_name', label: 'Order' },
-            { key: 'store_name', label: 'Store' },
-            { key: 'created_at', label: 'Date' },
-            { key: 'total_price', label: 'Total' },
-            { key: 'fulfillment_status', label: 'Fulfillment' },
-            { key: 'cancelled', label: 'Cancelled' },
-            { key: 'note', label: 'Note' },
-            { key: 'tags', label: 'Tags' },
-        ];
-        
         let tableHtml = '<div class="overflow-auto"><table><thead><tr>';
-        headers.forEach(header => {
-            const isSorted = state.sortBy === header.key;
-            const sortClass = isSorted ? `class="${state.sortOrder}"` : '';
-            tableHtml += `<th data-sort-by="${header.key}" ${sortClass} style="cursor: pointer;">${header.label}</th>`;
+        visibleColumns.forEach(header => {
+            const sortClass = state.sortBy === header.key ? `class="${state.sortOrder}"` : '';
+            tableHtml += `<th data-sort-by="${header.key}" data-column-key="${header.key}" ${sortClass}>${header.label}</th>`;
         });
         tableHtml += '</tr></thead><tbody>';
 
         orders.forEach(order => {
-            const noteText = order.note || '';
-            const tagsText = order.tags || '';
-            tableHtml += `
-                <tr>
-                    <td>${order.name}</td>
-                    <td>${order.store_name}</td>
-                    <td>${new Date(order.created_at).toLocaleDateString()}</td>
-                    <td>${formatCurrency(order.total_price, order.currency)}</td>
-                    <td><span class="status-${(order.fulfillment_status || '').toLowerCase()}">${order.fulfillment_status || 'N/A'}</span></td>
-                    <td class="${order.cancelled ? 'status-cancelled' : ''}">${order.cancelled ? `Yes (${order.cancel_reason || 'N/A'})` : 'No'}</td>
-                    <td class="truncate-text" title="${noteText}">${noteText}</td>
-                    <td class="truncate-text" title="${tagsText}">${tagsText}</td>
-                </tr>
-            `;
+            tableHtml += '<tr>';
+            visibleColumns.forEach(col => {
+                let content = '';
+                switch(col.key) {
+                    case 'order_name': content = order.name; break;
+                    case 'store_name': content = order.store_name; break;
+                    case 'created_at': content = new Date(order.created_at).toLocaleDateString(); break;
+                    case 'total_price': content = (order.total_price || 0).toLocaleString('en-US', { style: 'currency', currency: order.currency || 'USD' }); break;
+                    case 'fulfillment_status': content = `<span class="status-${(order.fulfillment_status || '').toLowerCase()}">${order.fulfillment_status || 'N/A'}</span>`; break;
+                    case 'cancelled': content = `<span class="${order.cancelled ? 'status-cancelled' : ''}">${order.cancelled ? `Yes (${order.cancel_reason || 'N/A'})` : 'No'}</span>`; break;
+                    case 'note': content = `<div class="truncate-text" title="${order.note || ''}">${order.note || ''}</div>`; break;
+                    case 'tags': content = `<div class="truncate-text" title="${order.tags || ''}">${order.tags || ''}</div>`; break;
+                }
+                tableHtml += `<td data-column-key="${col.key}">${content}</td>`;
+            });
+            tableHtml += '</tr>';
         });
 
         tableHtml += '</tbody></table></div>';
@@ -140,99 +151,82 @@ document.addEventListener('DOMContentLoaded', () => {
         addSortEventListeners();
     };
 
-    const updatePagination = () => {
-        elements.pagination.indicator.textContent = `Page ${state.page} of ${Math.ceil(state.totalCount / state.limit)}`;
-        elements.pagination.prev.disabled = state.page === 1;
-        elements.pagination.next.disabled = (state.page * state.limit) >= state.totalCount;
+    // --- UI Update & Event Listeners ---
+    const updateUiFromState = () => {
+        elements.filters.search.value = state.filters.search;
+        elements.filters.tags.value = state.filters.tags;
+        elements.filters.startDate.value = state.filters.start_date;
+        elements.filters.endDate.value = state.filters.end_date;
+        document.querySelectorAll('input[name="fs"]').forEach(r => r.checked = r.value === state.filters.financial_status);
+        document.querySelectorAll('input[name="ffs"]').forEach(r => r.checked = r.value === state.filters.fulfillment_status);
+        document.querySelectorAll('input[name="note"]').forEach(r => r.checked = r.value === state.filters.has_note);
+        elements.filters.stores.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = state.filters.store_ids.includes(cb.value));
+        allColumns.forEach(col => document.querySelector(`input[name="col-${col.key}"]`).checked = !state.hiddenColumns.includes(col.key));
     };
-    
+
     const addSortEventListeners = () => {
         document.querySelectorAll('#orders-table-container th[data-sort-by]').forEach(th => {
             th.addEventListener('click', () => {
                 const newSortBy = th.dataset.sortBy;
-                if (state.sortBy === newSortBy) {
-                    state.sortOrder = state.sortOrder === 'desc' ? 'asc' : 'desc';
-                } else {
-                    state.sortBy = newSortBy;
-                    state.sortOrder = 'desc';
-                }
+                state.sortOrder = (state.sortBy === newSortBy && state.sortOrder === 'desc') ? 'asc' : 'desc';
+                state.sortBy = newSortBy;
                 state.page = 1;
                 fetchAndRender();
             });
         });
     };
     
-    const collectFiltersAndFetch = () => {
-        const selectedStores = Array.from(elements.filters.stores.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
-        
-        state.filters = {
-            search: elements.filters.search.value.trim() || null,
-            tags: elements.filters.tags.value.trim() || null,
-            store_ids: selectedStores,
-            financial_status: elements.filters.financialStatus.querySelector('input:checked')?.value || null,
-            fulfillment_status: elements.filters.fulfillmentStatus.querySelector('input:checked')?.value || null,
-            has_note: elements.filters.hasNote.querySelector('input:checked')?.value || null,
-            start_date: elements.filters.startDate.value || null,
-            end_date: elements.filters.endDate.value || null,
-        };
-        state.page = 1;
-        fetchAndRender();
-    };
-    
     const initializeDashboard = async () => {
+        // Populate column visibility filter
+        allColumns.forEach(col => {
+            elements.filters.columns.innerHTML += `<li><label><input type="checkbox" name="col-${col.key}" value="${col.key}"> ${col.label}</label></li>`;
+        });
+        
+        // Populate stores filter
         try {
             const response = await fetch(API_ENDPOINTS.getStores);
             const stores = await response.json();
             elements.filters.stores.innerHTML = '';
-            stores.forEach(store => {
-                const li = document.createElement('li');
-                li.innerHTML = `<label><input type="checkbox" name="store" value="${store.id}"> ${store.name}</label>`;
-                elements.filters.stores.appendChild(li);
-            });
+            stores.forEach(store => elements.filters.stores.innerHTML += `<li><label><input type="checkbox" name="store" value="${store.id}"> ${store.name}</label></li>`);
         } catch (error) {
             elements.filters.stores.innerHTML = '<li>Could not load stores</li>';
         }
-        
-        collectFiltersAndFetch();
-    };
 
+        updateStateFromUrl();
+        updateUiFromState();
+        fetchAndRender();
+    };
+    
     // --- Event Listeners ---
     ['search', 'tags', 'startDate', 'endDate'].forEach(key => {
-        elements.filters[key].addEventListener('input', collectFiltersAndFetch);
+        elements.filters[key].addEventListener('input', () => { state.filters[key.replace('-', '_')] = elements.filters[key].value; state.page = 1; fetchAndRender(); });
     });
     
-    ['stores', 'financialStatus', 'fulfillmentStatus', 'hasNote'].forEach(key => {
-        elements.filters[key].addEventListener('change', collectFiltersAndFetch);
+    ['financialStatus', 'fulfillmentStatus', 'hasNote'].forEach(key => {
+        elements.filters[key].addEventListener('change', (e) => { state.filters[key.replace('Status', '_status')] = e.target.value; state.page = 1; fetchAndRender(); });
+    });
+    
+    elements.filters.stores.addEventListener('change', () => {
+        state.filters.store_ids = Array.from(elements.filters.stores.querySelectorAll('input:checked')).map(cb => cb.value);
+        state.page = 1;
+        fetchAndRender();
+    });
+
+    elements.filters.columns.addEventListener('change', () => {
+        state.hiddenColumns = allColumns.map(c => c.key).filter(key => !document.querySelector(`input[name="col-${key}"]`).checked);
+        fetchAndRender();
     });
 
     elements.filters.reset.addEventListener('click', () => {
-        elements.filters.search.value = '';
-        elements.filters.tags.value = '';
-        elements.filters.startDate.value = '';
-        elements.filters.endDate.value = '';
-        elements.filters.stores.querySelectorAll('input').forEach(i => i.checked = false);
-        elements.filters.financialStatus.querySelectorAll('input')[0].checked = true;
-        elements.filters.fulfillmentStatus.querySelectorAll('input')[0].checked = true;
-        elements.filters.hasNote.querySelectorAll('input')[0].checked = true;
-        
-        document.querySelectorAll('.dropdown[open]').forEach(d => d.removeAttribute('open'));
-
-        collectFiltersAndFetch();
+        history.pushState({}, '', window.location.pathname); // Clear URL params
+        updateStateFromUrl(); // Reset state object
+        updateUiFromState();
+        fetchAndRender();
     });
-
-    elements.pagination.prev.addEventListener('click', () => {
-        if (state.page > 1) {
-            state.page--;
-            fetchAndRender();
-        }
-    });
-
-    elements.pagination.next.addEventListener('click', () => {
-        if ((state.page * state.limit) < state.totalCount) {
-            state.page++;
-            fetchAndRender();
-        }
-    });
+    
+    elements.pagination.prev.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchAndRender(); } });
+    elements.pagination.next.addEventListener('click', () => { if ((state.page * state.limit) < state.totalCount) { state.page++; fetchAndRender(); } });
+    window.addEventListener('popstate', () => { initializeDashboard(); }); // Handle browser back/forward
 
     initializeDashboard();
 });
