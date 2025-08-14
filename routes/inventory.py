@@ -23,6 +23,8 @@ class VariantResponse(BaseModel):
     id: int
     gid: str
     product_id: str
+    # ADDED: The database ID of the product
+    product_id_db: int 
     product_title: str
     product_status: str
     title: str
@@ -68,7 +70,6 @@ def sync_inventory_task(store_id: int):
 
         service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
         
-        # CORRECTED: This now uses a single, correct query to get all data at once.
         for page_of_products in service.get_all_products_and_variants():
             if page_of_products:
                 crud_product.create_or_update_products(db=db, products_data=page_of_products, store_id=store.id)
@@ -95,6 +96,8 @@ def get_inventory_variants(store_id: int, db: Session = Depends(get_db)):
         response_data.append(
             VariantResponse(
                 id=v.id, gid=v.shopify_gid, product_id=v.product.shopify_gid,
+                # FIXED: Pass the product's database ID
+                product_id_db=v.product.id,
                 product_title=v.product.title, product_status=v.product.status,
                 title=v.title, sku=v.sku, barcode=v.barcode,
                 cost=float(v.cost) if isinstance(v.cost, decimal.Decimal) else v.cost,
