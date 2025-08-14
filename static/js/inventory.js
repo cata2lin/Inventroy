@@ -109,13 +109,11 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         tableHtml += '</tr></thead><tbody>';
         (inventory || []).forEach(item => {
-            // --- FIXED: Use the correct variables for calculation ---
             const onHand = item.on_hand || 0;
             const price = item.price || 0;
             const cost = item.cost || 0;
             const retailValue = onHand * price;
             const invValue = onHand * cost;
-
             tableHtml += `
                 <tr>
                     <td><img src="${item.image_url || 'https://via.placeholder.com/40'}" alt="${item.product_title}" style="width: 40px; border-radius: 4px;"></td>
@@ -214,8 +212,8 @@ document.addEventListener('DOMContentLoaded', () => {
             ]);
             const filterData = await filterResp.json();
             const storeData = await storeResp.json();
-            filterData.types.forEach(t => elements.filters.type.add(new Option(t, t)));
-            filterData.categories.forEach(c => elements.filters.category.add(new Option(c, c)));
+            data.types.forEach(t => elements.filters.type.add(new Option(t, t)));
+            data.categories.forEach(c => elements.filters.category.add(new Option(c, c)));
             storeData.forEach(s => elements.filters.store.add(new Option(s.name, s.id)));
         } catch (error) { console.error("Could not load filter options:", error); }
 
@@ -226,15 +224,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         elements.filters.groupToggle.checked = state.view === 'grouped';
 
-        for (const [key, el] of Object.entries(elements.filters)) {
-            if (el) { // Defensive check
+        const setupEventListeners = () => {
+            for (const [key, el] of Object.entries(elements.filters)) {
                 el.addEventListener('input', (e) => {
-                    if (key === 'groupToggle') {
-                        state.view = e.target.checked ? 'grouped' : 'individual';
-                    } else if (key === 'reset') {
-                        // This is a button, not an input, so we use 'click'
-                        return; // Handled below
-                    } else {
+                    if (key === 'groupToggle') state.view = e.target.checked ? 'grouped' : 'individual';
+                    else if (key === 'reset') return;
+                    else {
                         const filterKeyMap = {store: 'store_ids', type: 'product_type', minRetail: 'min_retail', maxRetail: 'max_retail', minInv: 'min_inventory', maxInv: 'max_inventory'};
                         const filterKey = filterKeyMap[key] || key;
                         state.filters[filterKey] = el.value;
@@ -243,11 +238,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     fetchInventory();
                 });
             }
-        }
+        };
+        setupEventListeners();
         
         elements.filters.reset.addEventListener('click', () => {
             window.history.replaceState({}, '', window.location.pathname);
-            // Full re-initialization to reset state and UI
             initialize();
         });
         
