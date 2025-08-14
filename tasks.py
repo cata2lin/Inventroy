@@ -1,1 +1,313 @@
-# tasks.pyimport loggingimport osfrom fastapi import APIRouter, BackgroundTasks, Requestfrom fastapi.responses import HTMLResponse, RedirectResponsefrom fastapi.templating import Jinja2Templatesfrom dotenv import load_dotenvfrom models import Fulfillment, InventoryItem, Order, Productfrom session import SessionLocalfrom shopify_client import run_query# --- Setup & Configuration ---# Load environment variables from a .env file for securityload_dotenv()# Set up logging to monitor the sync processlogging.basicConfig(level=logging.INFO)logger = logging.getLogger(__name__)router = APIRouter()templates = Jinja2Templates(directory="static")# Securely load configuration from environment variables# This prevents leaking sensitive API tokens in the source code.SHOP_CONFIG = {    "url": os.getenv("SHOPIFY_URL"),    "api_token": os.getenv("SHOPIFY_API_TOKEN"),}# Validate that configuration is presentif not all(SHOP_CONFIG.values()):    logger.error("Shopify URL or API Token is not configured. Please set SHOPIFY_URL and SHOPIFY_API_TOKEN in your .env file.")    # In a production app, you might raise an exception here to prevent startup.    # raise RuntimeError("Shopify configuration is missing.")# --- GraphQL Helper ---def fetch_all_paginated_data(query: str, data_path: list[str]):    """    A generator that fetches all paginated data from the Shopify GraphQL API.    This function handles the logic of checking for a "next page" and    requesting it with the correct cursor until all data is fetched.    Args:        query (str): The GraphQL query. Must include a `pageInfo` field with                     `hasNextPage` and `endCursor`. The main connection                     (e.g., `products`) must accept an `$cursor: String`                     and use `after: $cursor`.        data_path (list[str]): A list of keys to access the connection object                               (e.g., ["data", "products"]).    Yields:        dict: Each 'node' from the paginated results.    """    has_next_page = True    cursor = None        logger.info(f"Starting paginated fetch for data at path: {data_path}")        while has_next_page:        try:            variables = {"cursor": cursor}            # Assumes your run_query function is updated to accept a 'variables' dict            response = run_query(query, SHOP_CONFIG["url"], SHOP_CONFIG["api_token"], variables)            if not response or "data" not in response:                logger.error("Failed to fetch data or malformed API response: %s", response)                break            connection = response            for key in data_path:                connection = connection.get(key)                if connection is None:                    raise KeyError(f"Key '{key}' not found in response path.")            for edge in connection.get("edges", []):                yield edge["node"]                        page_info = connection.get("pageInfo", {})            has_next_page = page_info.get("hasNextPage", False)            cursor = page_info.get("endCursor")                        if has_next_page:                logger.info(f"Fetching next page with cursor: {cursor}")        except Exception as e:            logger.error(f"An error occurred during pagination for {data_path}: {e}", exc_info=True)            break                logger.info(f"Finished paginated fetch for data at path: {data_path}")# --- Sync Functions ---def sync_products(db):    """Syncs all products from Shopify to the local database."""    logger.info("Starting product sync...")    query = """    query($cursor: String) {      products(first: 50, after: $cursor) {        edges {          node {            id            title            handle            descriptionHtml            vendor            productType            tags            status            createdAt            updatedAt            variants(first: 1) {              edges {                node {                  sku                  barcode                  inventoryItem { id }                }              }            }          }        }        pageInfo { hasNextPage endCursor }      }    }    """    for p_node in fetch_all_paginated_data(query, data_path=["data", "products"]):        variant_edge = p_node.get("variants", {}).get("edges", [])        variant_node = variant_edge[0]["node"] if variant_edge else {}                product = Product(            id=p_node["id"],            title=p_node["title"],            handle=p_node["handle"],            description=p_node.get("descriptionHtml", ""),            sku=variant_node.get("sku"),            barcode=variant_node.get("barcode"),            inventory_item_id=variant_node.get("inventoryItem", {}).get("id"),            vendor=p_node.get("vendor"),            product_type=p_node.get("productType"),            tags=",".join(p_node.get("tags", [])),            status=p_node["status"],            created_at=p_node["createdAt"],            updated_at=p_node["updatedAt"],            json_data=p_node        )        db.merge(product)        db.commit()    logger.info("Product sync complete.")def sync_inventory(db):    """Syncs all inventory items from Shopify to the local database."""    logger.info("Starting inventory sync...")    query = """    query($cursor: String) {      inventoryItems(first: 100, after: $cursor) {        edges {          node {            id            sku            cost            tracked            countryCodeOfOrigin            harmonizedSystemCode            createdAt            updatedAt          }        }        pageInfo { hasNextPage endCursor }      }    }    """    for i_node in fetch_all_paginated_data(query, data_path=["data", "inventoryItems"]):        item = InventoryItem(            id=i_node["id"],            sku=i_node.get("sku"),            cost=i_node.get("cost"),            tracked=i_node.get("tracked"),            country_code_of_origin=i_node.get("countryCodeOfOrigin"),            harmonized_system_code=i_node.get("harmonizedSystemCode"),            created_at=i_node["createdAt"],            updated_at=i_node["updatedAt"],            json_data=i_node        )        db.merge(item)        db.commit()    logger.info("Inventory sync complete.")def sync_orders_and_fulfillments(db):    """    Efficiently syncs all orders and their associated fulfillments in a single pass.    """    logger.info("Starting orders and fulfillments sync...")    query = """    query($cursor: String) {      orders(first: 25, after: $cursor, sortKey: UPDATED_AT, reverse: true) {        edges {          node {            id            name            email            createdAt            totalPriceSet { shopMoney { amount currencyCode } }            financialStatus            fulfillmentStatus            customer { id }            fulfillments(first: 10) {              id              status              createdAt              trackingCompany              trackingInfo(first: 5) {                number              }            }          }        }        pageInfo { hasNextPage endCursor }      }    }    """    for o_node in fetch_all_paginated_data(query, data_path=["data", "orders"]):        order = Order(            id=o_node["id"],            name=o_node["name"],            email=o_node.get("email"),            created_at=o_node["createdAt"],            total_price=o_node["totalPriceSet"]["shopMoney"]["amount"],            currency=o_node["totalPriceSet"]["shopMoney"]["currencyCode"],            financial_status=o_node.get("financialStatus"),            fulfillment_status=o_node.get("fulfillmentStatus"),            customer_id=o_node.get("customer", {}).get("id") if o_node.get("customer") else None,            json_data=o_node        )        db.merge(order)        for f_node in o_node.get("fulfillments", []):            tracking_numbers = ",".join(                [info.get("number") for info in f_node.get("trackingInfo", []) if info.get("number")]            )            fulfillment = Fulfillment(                id=f_node["id"],                order_id=o_node["id"],                status=f_node["status"],                created_at=f_node["createdAt"],                tracking_company=f_node.get("trackingCompany"),                tracking_numbers=tracking_numbers,                json_data=f_node            )            db.merge(fulfillment)                db.commit()    logger.info("Orders and fulfillments sync complete.")def run_all_syncs():    """    A single function that runs all sync jobs. This is the target for the    background task to ensure the database session is handled correctly.    """    db = SessionLocal()    try:        logger.info("Background sync process started.")        sync_products(db)        sync_inventory(db)        sync_orders_and_fulfillments(db) # Replaces the two separate functions        logger.info("Background sync process finished successfully.")    except Exception as e:        logger.error(f"An error occurred during the background sync process: {e}", exc_info=True)    finally:        db.close()        logger.info("Database session closed for background sync.")# --- API Endpoints ---@router.get("/dashboard", response_class=HTMLResponse)def dashboard(request: Request):    db = SessionLocal()    try:        # To improve dashboard performance, we only load the 100 most recent items.        orders = db.query(Order).order_by(Order.created_at.desc()).limit(100).all()        fulfillments = db.query(Fulfillment).order_by(Fulfillment.created_at.desc()).limit(100).all()        inventory = db.query(InventoryItem).order_by(InventoryItem.updated_at.desc()).limit(100).all()        return templates.TemplateResponse("index.html", {            "request": request,            "orders": orders,            "fulfillments": fulfillments,            "inventory": inventory        })    finally:        db.close()@router.post("/sync")def manual_sync(background_tasks: BackgroundTasks):    """    Triggers a full data synchronization with Shopify in the background.    Responds immediately to the user, preventing browser timeouts.    """    logger.info("Received request to start manual sync.")    background_tasks.add_task(run_all_syncs)    # Redirect immediately, giving the user feedback that the sync has started.    return RedirectResponse(url="/dashboard?sync_started=true", status_code=303)
+# tasks.py
+# tasks.py
+import logging
+import os
+from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from dotenv import load_dotenv
+
+from models import Fulfillment, InventoryItem, Order, Product
+from session import SessionLocal
+from shopify_client import run_query
+
+# --- Setup & Configuration ---
+
+# Load environment variables from a .env file for security
+load_dotenv()
+
+# Set up logging to monitor the sync process
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+templates = Jinja2Templates(directory="static")
+
+# Securely load configuration from environment variables
+# This prevents leaking sensitive API tokens in the source code.
+SHOP_CONFIG = {
+    "url": os.getenv("SHOPIFY_URL"),
+    "api_token": os.getenv("SHOPIFY_API_TOKEN"),
+}
+
+# Validate that configuration is present
+if not all(SHOP_CONFIG.values()):
+    logger.error("Shopify URL or API Token is not configured. Please set SHOPIFY_URL and SHOPIFY_API_TOKEN in your .env file.")
+    # In a production app, you might raise an exception here to prevent startup.
+    # raise RuntimeError("Shopify configuration is missing.")
+
+
+# --- GraphQL Helper ---
+
+def fetch_all_paginated_data(query: str, data_path: list[str]):
+    """
+    A generator that fetches all paginated data from the Shopify GraphQL API.
+    This function handles the logic of checking for a "next page" and
+    requesting it with the correct cursor until all data is fetched.
+
+    Args:
+        query (str): The GraphQL query. Must include a `pageInfo` field with
+                     `hasNextPage` and `endCursor`. The main connection
+                     (e.g., `products`) must accept an `$cursor: String`
+                     and use `after: $cursor`.
+        data_path (list[str]): A list of keys to access the connection object
+                               (e.g., ["data", "products"]).
+
+    Yields:
+        dict: Each 'node' from the paginated results.
+    """
+    has_next_page = True
+    cursor = None
+    
+    logger.info(f"Starting paginated fetch for data at path: {data_path}")
+    
+    while has_next_page:
+        try:
+            variables = {"cursor": cursor}
+            # Assumes your run_query function is updated to accept a 'variables' dict
+            response = run_query(query, SHOP_CONFIG["url"], SHOP_CONFIG["api_token"], variables)
+
+            if not response or "data" not in response:
+                logger.error("Failed to fetch data or malformed API response: %s", response)
+                break
+
+            connection = response
+            for key in data_path:
+                connection = connection.get(key)
+                if connection is None:
+                    raise KeyError(f"Key '{key}' not found in response path.")
+
+            for edge in connection.get("edges", []):
+                yield edge["node"]
+            
+            page_info = connection.get("pageInfo", {})
+            has_next_page = page_info.get("hasNextPage", False)
+            cursor = page_info.get("endCursor")
+            
+            if has_next_page:
+                logger.info(f"Fetching next page with cursor: {cursor}")
+
+        except Exception as e:
+            logger.error(f"An error occurred during pagination for {data_path}: {e}", exc_info=True)
+            break
+            
+    logger.info(f"Finished paginated fetch for data at path: {data_path}")
+
+
+# --- Sync Functions ---
+
+def sync_products(db):
+    """Syncs all products from Shopify to the local database."""
+    logger.info("Starting product sync...")
+    query = """
+    query($cursor: String) {
+      products(first: 50, after: $cursor) {
+        edges {
+          node {
+            id
+            title
+            handle
+            descriptionHtml
+            vendor
+            productType
+            tags
+            status
+            createdAt
+            updatedAt
+            variants(first: 1) {
+              edges {
+                node {
+                  sku
+                  barcode
+                  inventoryItem { id }
+                }
+              }
+            }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+    """
+    for p_node in fetch_all_paginated_data(query, data_path=["data", "products"]):
+        variant_edge = p_node.get("variants", {}).get("edges", [])
+        variant_node = variant_edge[0]["node"] if variant_edge else {}
+        
+        product = Product(
+            id=p_node["id"],
+            title=p_node["title"],
+            handle=p_node["handle"],
+            description=p_node.get("descriptionHtml", ""),
+            sku=variant_node.get("sku"),
+            barcode=variant_node.get("barcode"),
+            inventory_item_id=variant_node.get("inventoryItem", {}).get("id"),
+            vendor=p_node.get("vendor"),
+            product_type=p_node.get("productType"),
+            tags=",".join(p_node.get("tags", [])),
+            status=p_node["status"],
+            created_at=p_node["createdAt"],
+            updated_at=p_node["updatedAt"],
+            json_data=p_node
+        )
+        db.merge(product)
+    
+    db.commit()
+    logger.info("Product sync complete.")
+
+
+def sync_inventory(db):
+    """Syncs all inventory items from Shopify to the local database."""
+    logger.info("Starting inventory sync...")
+    query = """
+    query($cursor: String) {
+      inventoryItems(first: 100, after: $cursor) {
+        edges {
+          node {
+            id
+            sku
+            cost
+            tracked
+            countryCodeOfOrigin
+            harmonizedSystemCode
+            createdAt
+            updatedAt
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+    """
+    for i_node in fetch_all_paginated_data(query, data_path=["data", "inventoryItems"]):
+        item = InventoryItem(
+            id=i_node["id"],
+            sku=i_node.get("sku"),
+            cost=i_node.get("cost"),
+            tracked=i_node.get("tracked"),
+            country_code_of_origin=i_node.get("countryCodeOfOrigin"),
+            harmonized_system_code=i_node.get("harmonizedSystemCode"),
+            created_at=i_node["createdAt"],
+            updated_at=i_node["updatedAt"],
+            json_data=i_node
+        )
+        db.merge(item)
+    
+    db.commit()
+    logger.info("Inventory sync complete.")
+
+
+def sync_orders_and_fulfillments(db):
+    """
+    Efficiently syncs all orders and their associated fulfillments in a single pass.
+    """
+    logger.info("Starting orders and fulfillments sync...")
+    query = """
+    query($cursor: String) {
+      orders(first: 25, after: $cursor, sortKey: UPDATED_AT, reverse: true) {
+        edges {
+          node {
+            id
+            name
+            email
+            createdAt
+            totalPriceSet { shopMoney { amount currencyCode } }
+            financialStatus
+            fulfillmentStatus
+            customer { id }
+            fulfillments(first: 10) {
+              id
+              status
+              createdAt
+              trackingCompany
+              trackingInfo(first: 5) {
+                number
+              }
+            }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+    """
+    for o_node in fetch_all_paginated_data(query, data_path=["data", "orders"]):
+        order = Order(
+            id=o_node["id"],
+            name=o_node["name"],
+            email=o_node.get("email"),
+            created_at=o_node["createdAt"],
+            total_price=o_node["totalPriceSet"]["shopMoney"]["amount"],
+            currency=o_node["totalPriceSet"]["shopMoney"]["currencyCode"],
+            financial_status=o_node.get("financialStatus"),
+            fulfillment_status=o_node.get("fulfillmentStatus"),
+            customer_id=o_node.get("customer", {}).get("id") if o_node.get("customer") else None,
+            json_data=o_node
+        )
+        db.merge(order)
+
+        for f_node in o_node.get("fulfillments", []):
+            tracking_numbers = ",".join(
+                [info.get("number") for info in f_node.get("trackingInfo", []) if info.get("number")]
+            )
+            fulfillment = Fulfillment(
+                id=f_node["id"],
+                order_id=o_node["id"],
+                status=f_node["status"],
+                created_at=f_node["createdAt"],
+                tracking_company=f_node.get("trackingCompany"),
+                tracking_numbers=tracking_numbers,
+                json_data=f_node
+            )
+            db.merge(fulfillment)
+            
+    db.commit()
+    logger.info("Orders and fulfillments sync complete.")
+
+
+def run_all_syncs():
+    """
+    A single function that runs all sync jobs. This is the target for the
+    background task to ensure the database session is handled correctly.
+    """
+    db = SessionLocal()
+    try:
+        logger.info("Background sync process started.")
+        sync_products(db)
+        sync_inventory(db)
+        sync_orders_and_fulfillments(db) # Replaces the two separate functions
+        logger.info("Background sync process finished successfully.")
+    except Exception as e:
+        logger.error(f"An error occurred during the background sync process: {e}", exc_info=True)
+    finally:
+        db.close()
+        logger.info("Database session closed for background sync.")
+
+
+# --- API Endpoints ---
+
+@router.get("/dashboard", response_class=HTMLResponse)
+def dashboard(request: Request):
+    db = SessionLocal()
+    try:
+        # To improve dashboard performance, we only load the 100 most recent items.
+        orders = db.query(Order).order_by(Order.created_at.desc()).limit(100).all()
+        fulfillments = db.query(Fulfillment).order_by(Fulfillment.created_at.desc()).limit(100).all()
+        inventory = db.query(InventoryItem).order_by(InventoryItem.updated_at.desc()).limit(100).all()
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "orders": orders,
+            "fulfillments": fulfillments,
+            "inventory": inventory
+        })
+    finally:
+        db.close()
+
+
+@router.post("/sync")
+def manual_sync(background_tasks: BackgroundTasks):
+    """
+    Triggers a full data synchronization with Shopify in the background.
+    Responds immediately to the user, preventing browser timeouts.
+    """
+    logger.info("Received request to start manual sync.")
+    background_tasks.add_task(run_all_syncs)
+    # Redirect immediately, giving the user feedback that the sync has started.
+    return RedirectResponse(url="/dashboard?sync_started=true", status_code=303)
