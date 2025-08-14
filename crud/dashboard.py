@@ -45,8 +45,8 @@ def get_orders_for_dashboard(
     if has_note is not None:
         query = query.filter(models.Order.note.isnot(None) if has_note else models.Order.note.is_(None))
     if tags:
-        for tag in [t.strip() for t in tags.split(',')]:
-            if tag: query = query.filter(models.Order.tags.ilike(f"%{tag}%"))
+        for tag in [t.strip() for t in tags.split(',') if t.strip()]:
+            query = query.filter(models.Order.tags.ilike(f"%{tag}%"))
     if search:
         query = query.filter(models.Order.name.ilike(f"%{search}%"))
 
@@ -58,15 +58,19 @@ def get_orders_for_dashboard(
         func.mode().within_group(models.Order.currency).label("currency")
     )
     aggregates = aggregates_query.first()
+
+    # --- SORTING (RESTORED FOR ALL COLUMNS) ---
+    sort_column_map = {
+        'order_name': models.Order.name,
+        'store_name': 'store_name',
+        'created_at': models.Order.created_at,
+        'total_price': models.Order.total_price,
+        'fulfillment_status': models.Order.fulfillment_status,
+        'cancelled': models.Order.cancelled_at,
+        'note': models.Order.note,
+        'tags': models.Order.tags
+    }
     
-    # --- DEBUGGING ---
-    print("\n--- [DEBUG] AGGREGATES FROM DB ---")
-    print(f"Total Count: {aggregates.total_count}, Total Value: {aggregates.total_value}, Currency: {aggregates.currency}")
-    print("--------------------------------\n")
-
-
-    # --- SORTING ---
-    sort_column_map = { 'order_name': models.Order.name, 'created_at': models.Order.created_at, 'total_price': models.Order.total_price, 'store_name': 'store_name' }
     sort_column = sort_column_map.get(sort_by, models.Order.created_at)
     order_func = asc(sort_column) if sort_order.lower() == 'asc' else desc(sort_column)
     
@@ -76,9 +80,6 @@ def get_orders_for_dashboard(
         {**order.__dict__, "store_name": store_name, "cancelled": order.cancelled_at is not None}
         for order, store_name in results
     ]
-    
-    # --- DEBUGGING ---
-    print(f"--- [DEBUG] Returning {len(orders_list)} orders to the API ---")
 
     return {
         "total_count": aggregates.total_count or 0,
