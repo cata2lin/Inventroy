@@ -35,10 +35,17 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const updateUrl = () => {
-        const params = new URLSearchParams(window.location.search);
+        const params = new URLSearchParams();
         Object.entries(state).forEach(([key, value]) => {
-            if (value) params.set(key, value);
-            else params.delete(key);
+            if (value) {
+                if (key === 'filters') {
+                    Object.entries(value).forEach(([filterKey, filterValue]) => {
+                        if (filterValue) params.set(filterKey, filterValue);
+                    });
+                } else {
+                    params.set(key, value);
+                }
+            }
         });
         window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
     };
@@ -47,13 +54,19 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.tableContainer.setAttribute('aria-busy', 'true');
         updateUrl();
         
+        // --- FIXED: Build parameters carefully to avoid sending empty strings for number fields ---
         const params = new URLSearchParams({
             skip: ((state.page || 1) - 1) * 50,
             limit: 50,
             sort_by: state.sortBy,
             sort_order: state.sortOrder,
             view: state.view,
-            ...state.filters
+        });
+
+        Object.entries(state.filters).forEach(([key, value]) => {
+            if (value !== null && value !== undefined && value !== '') {
+                params.append(key, value);
+            }
         });
 
         try {
@@ -154,7 +167,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         html += '</div>';
         elements.tableContainer.innerHTML = html;
-        // No sorting listeners for grouped view in this design
+        addSortEventListeners();
     };
     
     const updatePagination = () => {
@@ -201,13 +214,15 @@ document.addEventListener('DOMContentLoaded', () => {
             data.categories.forEach(c => elements.filters.category.add(new Option(c, c)));
         } catch (error) { console.error("Could not load filter options:", error); }
 
+        // Update UI from state
         Object.entries(state.filters).forEach(([key, value]) => {
-            const elKeyMap = {product_type: 'type', min_inventory: 'minInv', max_inventory: 'maxInv'};
-            const elKey = elKeyMap[key] || key.replace('_', '');
+            const elKeyMap = {product_type: 'type', category: 'category', min_retail: 'minRetail', max_retail: 'maxRetail', min_inventory: 'minInv', max_inventory: 'maxInv'};
+            const elKey = elKeyMap[key] || key;
             if (elements.filters[elKey]) elements.filters[elKey].value = value;
         });
         elements.filters.groupToggle.checked = state.view === 'grouped';
 
+        // Add event listeners
         Object.values(elements.filters).forEach(el => {
             el.addEventListener('input', (e) => {
                 if (e.target.id === 'group-toggle') {
@@ -217,7 +232,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     return initialize();
                 } else {
                     const filterKeyMap = {type: 'product_type', minRetail: 'min_retail', maxRetail: 'max_retail', minInv: 'min_inventory', maxInv: 'max_inventory'};
-                    const filterKey = filterKeyMap[el.id.replace('-input','')] || el.id.replace('-input','');
+                    const elId = el.id.replace('-input', '');
+                    const filterKey = filterKeyMap[elId] || elId;
                     state.filters[filterKey] = el.value;
                 }
                 state.page = 1;
