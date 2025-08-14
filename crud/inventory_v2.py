@@ -11,10 +11,11 @@ def get_inventory_report(
     skip: int, 
     limit: int, 
     view: str = 'individual',
-    store_ids: Optional[List[int]] = None, # ADDED
+    store_ids: Optional[List[int]] = None,
     search: Optional[str] = None,
     product_type: Optional[str] = None,
     category: Optional[str] = None,
+    status: Optional[str] = None, # ADDED
     min_retail: Optional[float] = None,
     max_retail: Optional[float] = None,
     min_inventory: Optional[float] = None,
@@ -37,12 +38,12 @@ def get_inventory_report(
     base_query = db.query(
         models.ProductVariant,
         models.Product,
-        models.Store.name.label("store_name"), # ADDED
+        models.Store.name.label("store_name"),
         func.coalesce(committed_sq.c.committed, 0).label("committed_qty")
     ).join(
         models.Product, models.ProductVariant.product_id == models.Product.id
     ).join(
-        models.Store, models.Product.store_id == models.Store.id # ADDED
+        models.Store, models.Product.store_id == models.Store.id
     ).outerjoin(
         committed_sq, models.ProductVariant.sku == committed_sq.c.sku
     )
@@ -57,6 +58,8 @@ def get_inventory_report(
         base_query = base_query.filter(models.Product.product_type == product_type)
     if category:
         base_query = base_query.filter(models.Product.product_category == category)
+    if status:
+        base_query = base_query.filter(models.Product.status == status)
     
     on_hand_col = func.coalesce(models.ProductVariant.inventory_quantity, 0)
     retail_value_col = on_hand_col * func.coalesce(models.ProductVariant.price, 0)
@@ -69,7 +72,6 @@ def get_inventory_report(
     ).one()
 
     if view == 'grouped':
-        # Logic for grouped view remains largely the same but now will be pre-filtered by store
         query_base = base_query.filter(models.ProductVariant.barcode.isnot(None))
         total_count = query_base.distinct(models.ProductVariant.barcode).count()
         on_hand_agg = func.max(on_hand_col).label("on_hand")
@@ -87,6 +89,7 @@ def get_inventory_report(
         order_func = asc(sort_column) if sort_order == 'asc' else desc(sort_column)
         results = agg_query.order_by(order_func.nulls_last()).offset(skip).limit(limit).all()
         inventory_list = [dict(row._mapping) for row in results]
+
     else: # Individual View
         if min_retail is not None: base_query = base_query.filter(retail_value_col >= min_retail)
         if max_retail is not None: base_query = base_query.filter(retail_value_col <= max_retail)
@@ -99,7 +102,7 @@ def get_inventory_report(
             'available': on_hand_col - func.coalesce(committed_sq.c.committed, 0), 'retail_value': retail_value_col, 'inventory_value': inventory_value_col,
             'product_title': models.Product.title, 'sku': models.ProductVariant.sku, 'barcode': models.ProductVariant.barcode,
             'type': models.Product.product_type, 'category': models.Product.product_category, 'status': models.Product.status,
-            'store_name': models.Store.name # ADDED
+            'store_name': models.Store.name
         }
         sort_column = sort_column_map.get(sort_by, on_hand_col)
         order_func = asc(sort_column) if sort_order == 'asc' else desc(sort_column)

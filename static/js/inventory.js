@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
             store: document.getElementById('store-filter'),
             type: document.getElementById('type-filter'),
             category: document.getElementById('category-filter'),
+            status: document.getElementById('status-filter'),
             minRetail: document.getElementById('min-retail-input'),
             maxRetail: document.getElementById('max-retail-input'),
             minInv: document.getElementById('min-inv-input'),
@@ -133,7 +134,31 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const renderGroupedView = (inventory) => {
-        // ... (renderGroupedView logic remains the same)
+        if (!inventory || inventory.length === 0) {
+            elements.tableContainer.innerHTML = '<p>No inventory groups found.</p>'; return;
+        }
+        let html = '<div class="grouped-inventory-grid">';
+        inventory.forEach(group => {
+            html += `
+                <article class="product-card">
+                    <img src="${group.primary_image_url || 'https://via.placeholder.com/80'}" alt="${group.primary_title}">
+                    <div>
+                        <strong>${group.primary_title}</strong><br>
+                        <small>Store: ${group.store_name}</small><br>
+                        <small>Barcode: ${group.barcode}</small>
+                        <details>
+                            <summary>${group.variants_json.length} SKU(s)</summary>
+                            <ul class="variant-list">${group.variants_json.map(v => `<li>${v.sku} (${v.title})</li>`).join('')}</ul>
+                        </details>
+                    </div>
+                    <div class="quantity-display"><h2>${group.on_hand}</h2><p>On Hand</p></div>
+                    <div class="quantity-display"><h2>${group.committed}</h2><p>Committed</p></div>
+                    <div class="quantity-display"><h2>${group.available}</h2><p>Available</p></div>
+                </article>`;
+        });
+        html += '</div>';
+        elements.tableContainer.innerHTML = html;
+        addSortEventListeners();
     };
     
     const updatePagination = () => {
@@ -167,6 +192,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 store_ids: params.get('store_ids') || '',
                 product_type: params.get('product_type') || '',
                 category: params.get('category') || '',
+                status: params.get('status') || '',
                 min_retail: params.get('min_retail') || '',
                 max_retail: params.get('max_retail') || '',
                 min_inventory: params.get('min_inventory') || '',
@@ -195,9 +221,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         for (const [key, el] of Object.entries(elements.filters)) {
             el.addEventListener('input', (e) => {
-                if (key === 'groupToggle') state.view = e.target.checked ? 'grouped' : 'individual';
-                else if (key === 'reset') return initialize(); // Re-run init on reset
-                else {
+                if (key === 'groupToggle') {
+                    state.view = e.target.checked ? 'grouped' : 'individual';
+                } else if (key === 'reset') {
+                    // This is a button, not an input, so we use 'click'
+                    return; // Handled below
+                } else {
                     const filterKeyMap = {store: 'store_ids', type: 'product_type', minRetail: 'min_retail', maxRetail: 'max_retail', minInv: 'min_inventory', maxInv: 'max_inventory'};
                     const filterKey = filterKeyMap[key] || key;
                     state.filters[filterKey] = el.value;
@@ -206,6 +235,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 fetchInventory();
             });
         }
+        
+        elements.filters.reset.addEventListener('click', () => {
+            window.history.replaceState({}, '', window.location.pathname);
+            initialize();
+        });
         
         elements.pagination.prev.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchInventory(); }});
         elements.pagination.next.addEventListener('click', () => { if ((state.page * 50) < state.totalCount) { state.page++; fetchInventory(); }});
