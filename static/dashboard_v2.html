@@ -64,11 +64,8 @@
                         <li><label><input type="radio" name="note" value="false"> No Note</label></li>
                     </ul>
                 </details>
-                <details role="list" class="dropdown">
-                    <summary aria-haspopup="listbox">Columns</summary>
-                    <ul role="listbox" id="column-visibility-filter">
-                        </ul>
-                </details>
+                <button id="column-visibility-button" class="outline">Columns</button>
+                
                 <input type="search" id="tags-input" name="tags" placeholder="Filter by tags...">
                 <input type="date" id="start-date">
                 <input type="date" id="end-date">
@@ -86,6 +83,17 @@
             <button id="next-button" class="secondary outline">Next &rarr;</button>
         </div>
     </main>
+    
+    <dialog id="column-modal">
+      <article>
+        <header>
+          <button class="close" aria-label="Close" data-target="column-modal"></button>
+          <strong>Show/Hide Columns</strong>
+        </header>
+        <div id="column-visibility-list" class="column-list">
+            </div>
+      </article>
+    </dialog>
 
     <script src="/static/js/config.js"></script>
     <script src="/static/js/dashboard_v2.js"></script>

@@ -11,10 +11,15 @@ document.addEventListener('DOMContentLoaded', () => {
             financialStatus: document.getElementById('financial-status-filter'),
             fulfillmentStatus: document.getElementById('fulfillment-status-filter'),
             hasNote: document.getElementById('has-note-filter'),
-            columns: document.getElementById('column-visibility-filter'),
+            columnsBtn: document.getElementById('column-visibility-button'),
             startDate: document.getElementById('start-date'),
             endDate: document.getElementById('end-date'),
             reset: document.getElementById('reset-filters'),
+        },
+        columnModal: {
+            dialog: document.getElementById('column-modal'),
+            list: document.getElementById('column-visibility-list'),
+            closeBtn: document.querySelector('#column-modal .close'),
         },
         tableContainer: document.getElementById('orders-table-container'),
         pagination: {
@@ -172,7 +177,7 @@ document.addEventListener('DOMContentLoaded', () => {
             state.page = 1;
             fetchOrders();
         });
-        elements.filters.columns.addEventListener('change', () => {
+        elements.columnModal.list.addEventListener('change', () => {
             state.hiddenColumns = allColumns.filter(c => !document.querySelector(`input[name="col-${c.key}"]`).checked).map(c => c.key);
             renderTable(); // Re-render from cache
             updateUrl();
@@ -183,6 +188,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         elements.pagination.prev.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchOrders(); } });
         elements.pagination.next.addEventListener('click', () => { if ((state.page * 50) < state.totalCount) { state.page++; fetchOrders(); } });
+        elements.filters.columnsBtn.addEventListener('click', () => elements.columnModal.dialog.showModal());
+        elements.columnModal.closeBtn.addEventListener('click', () => elements.columnModal.dialog.close());
     };
 
     const addSortEventListeners = () => {
@@ -201,7 +208,7 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.tableContainer.setAttribute('aria-busy', 'true');
         
         // Step 1: Populate UI shells
-        elements.filters.columns.innerHTML = allColumns.map(col => `<li><label><input type="checkbox" name="col-${col.key}" value="${col.key}"> ${col.label}</label></li>`).join('');
+        elements.columnModal.list.innerHTML = allColumns.map(col => `<div><label><input type="checkbox" name="col-${col.key}" value="${col.key}"> ${col.label}</label></div>`).join('');
         
         try {
             const response = await fetch(API_ENDPOINTS.getStores);
