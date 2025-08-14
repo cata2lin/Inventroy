@@ -16,6 +16,7 @@ router = APIRouter(
 @router.get("/report/")
 def get_inventory_report_data(
     skip: int = 0, limit: int = 50,
+    view: str = 'individual', # ADDED
     search: Optional[str] = None,
     product_type: Optional[str] = None,
     category: Optional[str] = None,
@@ -28,7 +29,7 @@ def get_inventory_report_data(
     db: Session = Depends(get_db)
 ):
     return crud_inventory.get_inventory_report(
-        db, skip=skip, limit=limit, search=search, product_type=product_type,
+        db, skip=skip, limit=limit, view=view, search=search, product_type=product_type,
         category=category, min_retail=min_retail, max_retail=max_retail,
         min_inventory=min_inventory, max_inventory=max_inventory,
         sort_by=sort_by, sort_order=sort_order

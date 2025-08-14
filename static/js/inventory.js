@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
             maxRetail: document.getElementById('max-retail-input'),
             minInv: document.getElementById('min-inv-input'),
             maxInv: document.getElementById('max-inv-input'),
+            groupToggle: document.getElementById('group-toggle'),
             reset: document.getElementById('reset-filters'),
         },
         tableContainer: document.getElementById('inventory-table-container'),
@@ -47,8 +48,11 @@ document.addEventListener('DOMContentLoaded', () => {
         updateUrl();
         
         const params = new URLSearchParams({
-            skip: ((state.page || 1) - 1) * 50, limit: 50,
-            sort_by: state.sortBy, sort_order: state.sortOrder,
+            skip: ((state.page || 1) - 1) * 50,
+            limit: 50,
+            sort_by: state.sortBy,
+            sort_order: state.sortOrder,
+            view: state.view,
             ...state.filters
         });
 
@@ -68,7 +72,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const renderAll = (data) => {
         renderMetrics(data);
-        renderTable(data.inventory);
+        if (state.view === 'grouped') {
+            renderGroupedView(data.inventory);
+        } else {
+            renderIndividualView(data.inventory);
+        }
         updatePagination();
     };
 
@@ -79,7 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="metric"><h4>${(data.total_on_hand || 0).toLocaleString()}</h4><p>Total Products On Hand</p></div>`;
     };
 
-    const renderTable = (inventory) => {
+    const renderIndividualView = (inventory) => {
         const headers = [
             { key: 'image_url', label: 'Image', sortable: false }, { key: 'product_title', label: 'Product / Variant' },
             { key: 'sku', label: 'SKU' }, { key: 'barcode', label: 'Barcode' },
@@ -115,12 +123,38 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td>${item.available}</td>
                     <td>${(item.retail_value || 0).toFixed(2)}</td>
                     <td>${(item.inventory_value || 0).toFixed(2)}</td>
-                </tr>
-            `;
+                </tr>`;
         });
         tableHtml += '</tbody></table></div>';
         elements.tableContainer.innerHTML = tableHtml;
         addSortEventListeners();
+    };
+
+    const renderGroupedView = (inventory) => {
+        if (!inventory || inventory.length === 0) {
+            elements.tableContainer.innerHTML = '<p>No inventory groups found.</p>'; return;
+        }
+        let html = '<div class="grouped-inventory-grid">';
+        inventory.forEach(group => {
+            html += `
+                <article class="product-card">
+                    <img src="${group.primary_image_url || 'https://via.placeholder.com/80'}" alt="${group.primary_title}">
+                    <div>
+                        <strong>${group.primary_title}</strong><br>
+                        <small>Barcode: ${group.barcode}</small>
+                        <details>
+                            <summary>${group.variants_json.length} SKU(s)</summary>
+                            <ul class="variant-list">${group.variants_json.map(v => `<li>${v.sku} (${v.title})</li>`).join('')}</ul>
+                        </details>
+                    </div>
+                    <div class="quantity-display"><h2>${group.on_hand}</h2><p>On Hand</p></div>
+                    <div class="quantity-display"><h2>${group.committed}</h2><p>Committed</p></div>
+                    <div class="quantity-display"><h2>${group.available}</h2><p>Available</p></div>
+                </article>`;
+        });
+        html += '</div>';
+        elements.tableContainer.innerHTML = html;
+        // No sorting listeners for grouped view in this design
     };
     
     const updatePagination = () => {
@@ -143,22 +177,12 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const initialize = async () => {
-        // Load filter options
-        try {
-            const response = await fetch(API_ENDPOINTS.getInventoryFilters);
-            const data = await response.json();
-            data.types.forEach(t => elements.filters.type.add(new Option(t, t)));
-            data.categories.forEach(c => elements.filters.category.add(new Option(c, c)));
-        } catch (error) {
-            console.error("Could not load filter options:", error);
-        }
-
-        // Initialize state from URL
         const params = new URLSearchParams(window.location.search);
         state = {
             page: parseInt(params.get('page') || '1', 10),
             sortBy: params.get('sortBy') || 'on_hand',
             sortOrder: params.get('sortOrder') || 'desc',
+            view: params.get('view') || 'individual',
             filters: {
                 search: params.get('search') || '',
                 product_type: params.get('product_type') || '',
@@ -170,28 +194,37 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
-        // Update UI from state
+        try {
+            const response = await fetch(API_ENDPOINTS.getInventoryFilters);
+            const data = await response.json();
+            data.types.forEach(t => elements.filters.type.add(new Option(t, t)));
+            data.categories.forEach(c => elements.filters.category.add(new Option(c, c)));
+        } catch (error) { console.error("Could not load filter options:", error); }
+
         Object.entries(state.filters).forEach(([key, value]) => {
-            const elKey = {product_type: 'type', category: 'category', min_retail: 'minRetail', max_retail: 'maxRetail', min_inventory: 'minInv', max_inventory: 'maxInv'}[key] || key;
+            const elKeyMap = {product_type: 'type', min_inventory: 'minInv', max_inventory: 'maxInv'};
+            const elKey = elKeyMap[key] || key.replace('_', '');
             if (elements.filters[elKey]) elements.filters[elKey].value = value;
         });
+        elements.filters.groupToggle.checked = state.view === 'grouped';
 
-        // Add event listeners
-        Object.entries(elements.filters).forEach(([key, el]) => {
-            if (key === 'reset') return;
-            el.addEventListener('input', () => {
-                const filterKey = {type: 'product_type', minRetail: 'min_retail', maxRetail: 'max_retail', minInv: 'min_inventory', maxInv: 'max_inventory'}[key] || key;
-                state.filters[filterKey] = el.value;
+        Object.values(elements.filters).forEach(el => {
+            el.addEventListener('input', (e) => {
+                if (e.target.id === 'group-toggle') {
+                    state.view = e.target.checked ? 'grouped' : 'individual';
+                } else if (e.target.id === 'reset-filters') {
+                    window.history.replaceState({}, '', window.location.pathname);
+                    return initialize();
+                } else {
+                    const filterKeyMap = {type: 'product_type', minRetail: 'min_retail', maxRetail: 'max_retail', minInv: 'min_inventory', maxInv: 'max_inventory'};
+                    const filterKey = filterKeyMap[el.id.replace('-input','')] || el.id.replace('-input','');
+                    state.filters[filterKey] = el.value;
+                }
                 state.page = 1;
                 fetchInventory();
             });
         });
         
-        elements.filters.reset.addEventListener('click', () => {
-            window.history.replaceState({}, '', window.location.pathname);
-            initialize();
-        });
-
         elements.pagination.prev.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchInventory(); }});
         elements.pagination.next.addEventListener('click', () => { if ((state.page * 50) < state.totalCount) { state.page++; fetchInventory(); }});
 
