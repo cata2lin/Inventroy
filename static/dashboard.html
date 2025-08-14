@@ -5,35 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - Inventory Intelligence</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
-    <style>
-        body { padding-bottom: 5rem; }
-        .tabs [role="tabpanel"] { display: none; }
-        .tabs [role="tabpanel"][aria-hidden="false"] { display: block; }
-        table { table-layout: auto; width: 100%; }
-        th, td { white-space: nowrap; }
-        .status-fulfilled { color: #43a047; }
-        .status-unfulfilled { color: #e53935; }
-        .status-partial { color: #f57c00; }
-        #toast {
-            position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            padding: 1rem 2rem;
-            border-radius: 0.5rem;
-            background-color: #384955;
-            color: #fff;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-            z-index: 1000;
-            opacity: 0;
-            visibility: hidden;
-            transition: opacity 0.3s, visibility 0.3s;
-        }
-        #toast.show {
-            opacity: 1;
-            visibility: visible;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
     <main class="container">
@@ -43,9 +15,8 @@
             </ul>
             <ul>
                 <li><a href="/dashboard" role="button" class="contrast">Dashboard</a></li>
-                <!-- ADDED: Button to link to the products page -->
                 <li><a href="/products">Products</a></li>
-<li><a href="/inventory">Grouped Inventory</a></li>
+                <li><a href="/inventory">Grouped Inventory</a></li>
             </ul>
         </nav>
 
@@ -54,7 +25,6 @@
             <h2>View and manage data from your connected stores.</h2>
         </hgroup>
 
-        <!-- Store Selection and Sync -->
         <article>
             <header>Store Management</header>
             <div class="grid">
@@ -71,7 +41,6 @@
             </div>
         </article>
 
-        <!-- Data Display Area -->
         <article>
             <header>
                 <nav>
@@ -83,7 +52,6 @@
                 </nav>
             </header>
             
-            <!-- Orders Panel -->
             <div id="orders-panel" role="tabpanel">
                 <h3>Orders</h3>
                 <div id="orders-content" class="overflow-auto">
@@ -91,7 +59,6 @@
                 </div>
             </div>
 
-            <!-- Fulfillments Panel -->
             <div id="fulfillments-panel" role="tabpanel" aria-hidden="true">
                 <h3>Fulfillments</h3>
                 <div id="fulfillments-content" class="overflow-auto">
@@ -99,7 +66,6 @@
                 </div>
             </div>
 
-            <!-- Inventory Panel -->
             <div id="inventory-panel" role="tabpanel" aria-hidden="true">
                 <h3>Inventory</h3>
                 <div id="inventory-content" class="overflow-auto">
@@ -107,178 +73,11 @@
                 </div>
             </div>
         </article>
-
     </main>
     
     <div id="toast"></div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            const storeSelector = document.getElementById('storeSelector');
-            const syncButton = document.getElementById('syncButton');
-            const tabs = document.querySelectorAll('[role="tab"]');
-            const tabPanels = document.querySelectorAll('[role="tabpanel"]');
-            const toast = document.getElementById('toast');
-
-            let currentStoreId = null;
-
-            // --- Utility Functions ---
-            const showToast = (message, duration = 3000) => {
-                toast.textContent = message;
-                toast.classList.add('show');
-                setTimeout(() => {
-                    toast.classList.remove('show');
-                }, duration);
-            };
-
-            const renderLoading = (element) => {
-                element.innerHTML = '<p><progress></progress><br>Loading data...</p>';
-            };
-
-            // --- Tab Management ---
-            const switchTab = (targetId) => {
-                tabPanels.forEach(panel => {
-                    panel.setAttribute('aria-hidden', panel.id !== targetId);
-                });
-                tabs.forEach(tab => {
-                    tab.classList.toggle('secondary', tab.dataset.target === targetId);
-                });
-                if (currentStoreId) {
-                    const view = targetId.split('-')[0];
-                    loadViewData(view);
-                }
-            };
-            
-            tabs.forEach(tab => {
-                tab.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    switchTab(e.target.dataset.target);
-                });
-            });
-
-            // --- Data Loading ---
-            const loadStores = async () => {
-                try {
-                    const response = await fetch('/api/dashboard/stores');
-                    if (!response.ok) throw new Error('Failed to load stores.');
-                    const stores = await response.json();
-                    storeSelector.innerHTML = '<option value="" disabled selected>Select a store</option>';
-                    stores.forEach(store => {
-                        const option = document.createElement('option');
-                        option.value = store.id;
-                        option.textContent = store.name;
-                        storeSelector.appendChild(option);
-                    });
-                } catch (error) {
-                    console.error(error);
-                    storeSelector.innerHTML = '<option value="">Could not load stores</option>';
-                }
-            };
-
-            const loadViewData = async (view) => {
-                if (!currentStoreId) return;
-                const contentEl = document.getElementById(`${view}-content`);
-                renderLoading(contentEl);
-
-                try {
-                    const response = await fetch(`/api/dashboard/${view}/${currentStoreId}`);
-                    if (!response.ok) throw new Error(`Failed to load ${view}.`);
-                    const data = await response.json();
-                    renderTable(contentEl, data, view);
-                } catch (error) {
-                    console.error(error);
-                    contentEl.innerHTML = `<p>Error loading ${view}: ${error.message}</p>`;
-                }
-            };
-
-            const renderTable = (element, data, view) => {
-                if (!data || data.length === 0) {
-                    element.innerHTML = `<p>No ${view} data found for this store.</p>`;
-                    return;
-                }
-
-                const headersMap = {
-                    orders: ['Order', 'Date', 'Customer Email', 'Total', 'Financial Status', 'Fulfillment'],
-                    fulfillments: ['Order', 'Fulfillment ID', 'Created', 'Company', 'Tracking Number', 'Status'],
-                    inventory: ['Product', 'Variant (SKU)', 'Inventory Policy', 'Available Qty', 'Location']
-                };
-
-                const headers = headersMap[view];
-                const table = document.createElement('table');
-                table.className = 'striped';
-                const thead = table.createTHead();
-                const tbody = table.createTBody();
-                const headerRow = thead.insertRow();
-                headers.forEach(h => headerRow.insertCell().textContent = h);
-
-                data.forEach(item => {
-                    const row = tbody.insertRow();
-                    if (view === 'orders') {
-                        row.innerHTML = `
-                            <td>${item.name}</td>
-                            <td>${new Date(item.created_at).toLocaleDateString()}</td>
-                            <td>${item.email || 'N/A'}</td>
-                            <td>${item.total_price} ${item.currency}</td>
-                            <td>${item.financial_status || 'N/A'}</td>
-                            <td><span class="status-${(item.fulfillment_status || 'unfulfilled').toLowerCase()}">${item.fulfillment_status || 'Unfulfilled'}</span></td>
-                        `;
-                    } else if (view === 'fulfillments') {
-                         row.innerHTML = `
-                            <td>${item.order_name}</td>
-                            <td>${item.id}</td>
-                            <td>${new Date(item.created_at).toLocaleString()}</td>
-                            <td>${item.tracking_company || 'N/A'}</td>
-                            <td>${item.tracking_number || 'N/A'}</td>
-                            <td>${item.status || 'N/A'}</td>
-                        `;
-                    } else if (view === 'inventory') {
-                         row.innerHTML = `
-                            <td>${item.product_title}</td>
-                            <td>${item.variant_title} (${item.sku || 'N/A'})</td>
-                            <td>${item.inventory_policy}</td>
-                            <td><strong>${item.available_quantity !== null ? item.available_quantity : 'N/A'}</strong></td>
-                            <td>${item.location_name}</td>
-                        `;
-                    }
-                });
-
-                element.innerHTML = '';
-                element.appendChild(table);
-            };
-
-            // --- Event Listeners ---
-            storeSelector.addEventListener('change', () => {
-                currentStoreId = storeSelector.value;
-                syncButton.disabled = !currentStoreId;
-                const activePanel = document.querySelector('[role="tabpanel"][aria-hidden="false"]');
-                const view = activePanel.id.split('-')[0];
-                loadViewData(view);
-            });
-
-            syncButton.addEventListener('click', async () => {
-                if (!currentStoreId) return;
-                syncButton.setAttribute('aria-busy', 'true');
-                syncButton.disabled = true;
-                showToast(`Starting data sync for store ID ${currentStoreId}...`);
-
-                try {
-                    const response = await fetch(`/api/orders/sync/${currentStoreId}`, { method: 'POST' });
-                    const result = await response.json();
-                    if (!response.ok) throw new Error(result.detail || 'Sync request failed.');
-                    showToast(result.message);
-                } catch (error) {
-                    console.error(error);
-                    showToast(`Error: ${error.message}`);
-                } finally {
-                    syncButton.removeAttribute('aria-busy');
-                    syncButton.disabled = false;
-                }
-            });
-
-            // --- Initial Load ---
-            loadStores();
-            switchTab('orders-panel'); // Set initial active tab
-        });
-    </script>
+    <script src="/static/js/config.js"></script>
+    <script src="/static/js/dashboard.js"></script>
 </body>
 </html>
