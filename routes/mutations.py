@@ -22,7 +22,7 @@ class ProductUpdatePayload(BaseModel):
     vendor: Optional[str] = None
     productType: Optional[str] = None
     status: Optional[str] = None
-    tags: Optional[str] = None # Sent as a comma-separated string
+    tags: Optional[str] = None # Trimis ca un șir de caractere separat prin virgulă
 
 class ProductResponse(BaseModel):
     id: int
@@ -42,7 +42,7 @@ class ProductResponse(BaseModel):
 @router.get("/product/{product_id}", response_model=ProductResponse)
 def get_product_details(product_id: int, db: Session = Depends(get_db)):
     """
-    Retrieves all editable details for a single product from the database.
+    Preia toate detaliile editabile pentru un singur produs din baza de date.
     """
     product = crud_mutations.get_product_by_id(db, product_id)
     if not product:
@@ -52,8 +52,8 @@ def get_product_details(product_id: int, db: Session = Depends(get_db)):
 @router.post("/product/{product_id}", status_code=200)
 def update_product_details(product_id: int, payload: ProductUpdatePayload, db: Session = Depends(get_db)):
     """
-    Receives product updates, sends them to the ProductService to execute
-    the Shopify mutation, and returns the result.
+    Primește actualizări ale produsului, le trimite către ProductService pentru a executa
+    mutația Shopify și returnează rezultatul.
     """
     product_db = crud_mutations.get_product_by_id(db, product_id)
     if not product_db:
@@ -65,17 +65,27 @@ def update_product_details(product_id: int, payload: ProductUpdatePayload, db: S
 
     service = ProductService(store_url=store.shopify_url, token=store.api_token)
 
-    # Prepare the input for the Shopify API
+    # Pregătește datele pentru API-ul Shopify
     update_input = payload.dict(exclude_unset=True)
-    if 'tags' in update_input and update_input['tags']:
-        update_input['tags'] = [tag.strip() for tag in update_input['tags'].split(',')]
+
+    # --- CORECTAT: Gestionare îmbunătățită a etichetelor ---
+    if 'tags' in update_input:
+        # Procesează etichetele doar dacă câmpul nu este gol
+        if update_input['tags'] and update_input['tags'].strip():
+            # Creează o listă de etichete, eliminând spațiile goale și etichetele goale
+            tags_list = [tag.strip() for tag in update_input['tags'].split(',') if tag.strip()]
+            if tags_list:
+                update_input['tags'] = tags_list
+            else:
+                # Dacă lista este goală după procesare, șterge cheia pentru a nu trimite o listă goală
+                del update_input['tags']
+        else:
+            # Dacă șirul de etichete este gol sau conține doar spații, șterge cheia
+            del update_input['tags']
 
     try:
         response = service.update_product(product_gid=product_db.shopify_gid, product_input=update_input)
         
-        # Optionally, you can trigger a background task here to re-sync this specific product
-        # to update your local database with the absolute latest from Shopify.
-
         return {"message": "Product updated successfully in Shopify.", "response": response}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
