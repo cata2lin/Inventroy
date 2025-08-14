@@ -33,18 +33,16 @@ document.addEventListener('DOMContentLoaded', () => {
             timeout = setTimeout(() => func.apply(this, args), delay);
         };
     };
-
+    
     const updateUrl = () => {
         const params = new URLSearchParams();
         Object.entries(state).forEach(([key, value]) => {
-            if (value) {
-                if (key === 'filters') {
-                    Object.entries(value).forEach(([filterKey, filterValue]) => {
-                        if (filterValue) params.set(filterKey, filterValue);
-                    });
-                } else {
-                    params.set(key, value);
-                }
+            if (key === 'filters') {
+                Object.entries(value).forEach(([filterKey, filterValue]) => {
+                    if (filterValue) params.set(filterKey, filterValue);
+                });
+            } else if (value) {
+                params.set(key, value);
             }
         });
         window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
@@ -54,7 +52,6 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.tableContainer.setAttribute('aria-busy', 'true');
         updateUrl();
         
-        // --- FIXED: Build parameters carefully to avoid sending empty strings for number fields ---
         const params = new URLSearchParams({
             skip: ((state.page || 1) - 1) * 50,
             limit: 50,
@@ -62,11 +59,8 @@ document.addEventListener('DOMContentLoaded', () => {
             sort_order: state.sortOrder,
             view: state.view,
         });
-
         Object.entries(state.filters).forEach(([key, value]) => {
-            if (value !== null && value !== undefined && value !== '') {
-                params.append(key, value);
-            }
+            if (value) params.append(key, value);
         });
 
         try {
@@ -214,7 +208,6 @@ document.addEventListener('DOMContentLoaded', () => {
             data.categories.forEach(c => elements.filters.category.add(new Option(c, c)));
         } catch (error) { console.error("Could not load filter options:", error); }
 
-        // Update UI from state
         Object.entries(state.filters).forEach(([key, value]) => {
             const elKeyMap = {product_type: 'type', category: 'category', min_retail: 'minRetail', max_retail: 'maxRetail', min_inventory: 'minInv', max_inventory: 'maxInv'};
             const elKey = elKeyMap[key] || key;
@@ -223,23 +216,23 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.filters.groupToggle.checked = state.view === 'grouped';
 
         // Add event listeners
-        Object.values(elements.filters).forEach(el => {
+        for (const [key, el] of Object.entries(elements.filters)) {
             el.addEventListener('input', (e) => {
-                if (e.target.id === 'group-toggle') {
+                if (key === 'groupToggle') {
                     state.view = e.target.checked ? 'grouped' : 'individual';
-                } else if (e.target.id === 'reset-filters') {
+                } else if (key === 'reset') {
                     window.history.replaceState({}, '', window.location.pathname);
+                    // Re-initialize to reset state and UI
                     return initialize();
                 } else {
                     const filterKeyMap = {type: 'product_type', minRetail: 'min_retail', maxRetail: 'max_retail', minInv: 'min_inventory', maxInv: 'max_inventory'};
-                    const elId = el.id.replace('-input', '');
-                    const filterKey = filterKeyMap[elId] || elId;
+                    const filterKey = filterKeyMap[key] || key;
                     state.filters[filterKey] = el.value;
                 }
                 state.page = 1;
                 fetchInventory();
             });
-        });
+        }
         
         elements.pagination.prev.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchInventory(); }});
         elements.pagination.next.addEventListener('click', () => { if ((state.page * 50) < state.totalCount) { state.page++; fetchInventory(); }});
