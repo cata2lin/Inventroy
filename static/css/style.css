@@ -41,13 +41,14 @@ main.container-fluid {
 .controls-grid input[type="date"] { padding-right: 0.2rem; }
 
 /* --- FIXED Dropdown Background --- */
-.dropdown ul {
+.dropdown[open] ul {
     font-size: 0.75rem;
     max-height: 200px;
     padding: 0.5rem;
-    background-color: var(--card-background-color); /* Makes the background solid */
+    background-color: var(--card-sectioning-background-color); /* Makes the background solid */
     border: 1px solid var(--card-border-color);
-    z-index: 10; /* Ensures it appears on top of other content */
+    z-index: 1000; /* Ensures it appears on top of other content */
+    box-shadow: var(--pico-card-box-shadow);
 }
 
 .dropdown li label { padding: 0.2rem; display: block; }
