@@ -196,7 +196,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     };
-
+    
     window.setPrimaryVariant = async (barcode, variantId) => {
         try {
             const response = await fetch(API_ENDPOINTS.setPrimaryVariant, {
