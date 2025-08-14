@@ -22,6 +22,8 @@ def get_dashboard_orders(
     end_date: Optional[str] = None,
     financial_status: Optional[str] = None,
     fulfillment_status: Optional[str] = None,
+    has_note: Optional[bool] = None, # ADDED
+    tags: Optional[str] = None, # ADDED
     search: Optional[str] = None,
     sort_by: str = 'created_at',
     sort_order: str = 'desc',
@@ -39,6 +41,8 @@ def get_dashboard_orders(
         end_date=end_date,
         financial_status=financial_status,
         fulfillment_status=fulfillment_status,
+        has_note=has_note,
+        tags=tags,
         search=search,
         sort_by=sort_by,
         sort_order=sort_order

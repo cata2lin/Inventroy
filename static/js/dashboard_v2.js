@@ -10,12 +10,13 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         filters: {
             search: document.getElementById('search-input'),
-            stores: document.getElementById('store-filter'),
+            tags: document.getElementById('tags-input'),
+            stores: document.getElementById('store-filter-list'),
             financialStatus: document.getElementById('financial-status-filter'),
             fulfillmentStatus: document.getElementById('fulfillment-status-filter'),
+            hasNote: document.getElementById('has-note-filter'),
             startDate: document.getElementById('start-date'),
             endDate: document.getElementById('end-date'),
-            apply: document.getElementById('apply-filters'),
             reset: document.getElementById('reset-filters'),
         },
         tableContainer: document.getElementById('orders-table-container'),
@@ -36,7 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
         filters: {},
     };
 
-    // --- Utility Functions ---
+    // --- Utility & Helper Functions ---
     const debounce = (func, delay) => {
         let timeout;
         return (...args) => {
@@ -45,10 +46,12 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     };
 
-    const formatCurrency = (value) => value.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+    const formatCurrency = (value, currency) => {
+        return value.toLocaleString('en-US', { style: 'currency', currency: currency || 'USD' });
+    };
 
-    // --- API & Rendering ---
-    const fetchOrders = async () => {
+    // --- Main API & Rendering Logic ---
+    const fetchAndRender = debounce(async () => {
         elements.tableContainer.setAttribute('aria-busy', 'true');
         
         const params = new URLSearchParams({
@@ -58,8 +61,9 @@ document.addEventListener('DOMContentLoaded', () => {
             sort_order: state.sortOrder,
         });
 
+        // Collect filter values from state
         Object.entries(state.filters).forEach(([key, value]) => {
-            if (value) {
+            if (value !== null && value !== '' && value.length !== 0) {
                 if (Array.isArray(value)) {
                     value.forEach(v => params.append(key, v));
                 } else {
@@ -77,13 +81,12 @@ document.addEventListener('DOMContentLoaded', () => {
             renderMetrics(data);
             renderTable(data.orders);
             updatePagination();
-
         } catch (error) {
             elements.tableContainer.innerHTML = `<p>Error: ${error.message}</p>`;
         } finally {
             elements.tableContainer.removeAttribute('aria-busy');
         }
-    };
+    }, 250);
 
     const renderMetrics = (data) => {
         elements.metrics.orders.textContent = data.total_count.toLocaleString();
@@ -101,16 +104,18 @@ document.addEventListener('DOMContentLoaded', () => {
             { key: 'order_name', label: 'Order' },
             { key: 'store_name', label: 'Store' },
             { key: 'created_at', label: 'Date' },
-            { key: 'financial_status', label: 'Financial Status' },
-            { key: 'fulfillment_status', label: 'Fulfillment Status' },
             { key: 'total_price', label: 'Total' },
+            { key: 'fulfillment_status', label: 'Fulfillment' },
+            { key: 'cancelled', label: 'Cancelled' },
+            { key: 'note', label: 'Note' },
+            { key: 'tags', label: 'Tags' },
         ];
         
-        let tableHtml = '<table><thead><tr>';
+        let tableHtml = '<div class="overflow-auto"><table><thead><tr>';
         headers.forEach(header => {
             const isSorted = state.sortBy === header.key;
-            const sortClass = isSorted ? state.sortOrder : '';
-            tableHtml += `<th data-sort-by="${header.key}" class="${sortClass}">${header.label}</th>`;
+            const sortClass = isSorted ? `class="${state.sortOrder}"` : '';
+            tableHtml += `<th data-sort-by="${header.key}" ${sortClass} style="cursor: pointer;">${header.label}</th>`;
         });
         tableHtml += '</tr></thead><tbody>';
 
@@ -120,17 +125,27 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td>${order.name}</td>
                     <td>${order.store_name}</td>
                     <td>${new Date(order.created_at).toLocaleDateString()}</td>
-                    <td><span class="status-${(order.financial_status || '').toLowerCase()}">${order.financial_status}</span></td>
-                    <td><span class="status-${(order.fulfillment_status || '').toLowerCase()}">${order.fulfillment_status}</span></td>
-                    <td>${formatCurrency(order.total_price)}</td>
+                    <td>${formatCurrency(order.total_price, order.currency)}</td>
+                    <td><span class="status-${(order.fulfillment_status || '').toLowerCase()}">${order.fulfillment_status || 'N/A'}</span></td>
+                    <td class="${order.cancelled ? 'status-unfulfilled' : ''}">${order.cancelled ? `Yes (${order.cancel_reason || 'No reason'})` : 'No'}</td>
+                    <td title="${order.note || ''}">${order.note ? 'Yes' : 'No'}</td>
+                    <td>${order.tags || ''}</td>
                 </tr>
             `;
         });
 
-        tableHtml += '</tbody></table>';
+        tableHtml += '</tbody></table></div>';
         elements.tableContainer.innerHTML = tableHtml;
+        addSortEventListeners();
+    };
 
-        // Add event listeners to new headers
+    const updatePagination = () => {
+        elements.pagination.indicator.textContent = `Page ${state.page} of ${Math.ceil(state.totalCount / state.limit)}`;
+        elements.pagination.prev.disabled = state.page === 1;
+        elements.pagination.next.disabled = (state.page * state.limit) >= state.totalCount;
+    };
+    
+    const addSortEventListeners = () => {
         document.querySelectorAll('#orders-table-container th[data-sort-by]').forEach(th => {
             th.addEventListener('click', () => {
                 const newSortBy = th.dataset.sortBy;
@@ -141,30 +156,26 @@ document.addEventListener('DOMContentLoaded', () => {
                     state.sortOrder = 'desc';
                 }
                 state.page = 1;
-                fetchOrders();
+                fetchAndRender();
             });
         });
     };
-
-    const updatePagination = () => {
-        elements.pagination.indicator.textContent = `Page ${state.page}`;
-        elements.pagination.prev.disabled = state.page === 1;
-        elements.pagination.next.disabled = (state.page * state.limit) >= state.totalCount;
-    };
-
-    const applyAllFilters = () => {
-        const selectedStores = Array.from(elements.filters.stores.selectedOptions).map(opt => opt.value);
+    
+    const collectFiltersAndFetch = () => {
+        const selectedStores = Array.from(elements.filters.stores.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
         
         state.filters = {
-            search: elements.filters.search.value || null,
-            store_ids: selectedStores.length > 0 ? selectedStores : null,
-            financial_status: elements.filters.financialStatus.value || null,
-            fulfillment_status: elements.filters.fulfillmentStatus.value || null,
+            search: elements.filters.search.value.trim() || null,
+            tags: elements.filters.tags.value.trim() || null,
+            store_ids: selectedStores,
+            financial_status: elements.filters.financialStatus.querySelector('input:checked')?.value || null,
+            fulfillment_status: elements.filters.fulfillmentStatus.querySelector('input:checked')?.value || null,
+            has_note: elements.filters.hasNote.querySelector('input:checked')?.value || null,
             start_date: elements.filters.startDate.value || null,
             end_date: elements.filters.endDate.value || null,
         };
         state.page = 1;
-        fetchOrders();
+        fetchAndRender();
     };
     
     // --- Initial Load ---
@@ -174,44 +185,54 @@ document.addEventListener('DOMContentLoaded', () => {
             const stores = await response.json();
             elements.filters.stores.innerHTML = ''; // Clear loading message
             stores.forEach(store => {
-                elements.filters.stores.add(new Option(store.name, store.id));
+                const li = document.createElement('li');
+                li.innerHTML = `<label><input type="checkbox" name="store" value="${store.id}"> ${store.name}</label>`;
+                elements.filters.stores.appendChild(li);
             });
         } catch (error) {
-            elements.filters.stores.innerHTML = '<option>Could not load stores</option>';
+            elements.filters.stores.innerHTML = '<li>Could not load stores</li>';
         }
-        await fetchOrders();
+        
+        // Initial data load
+        collectFiltersAndFetch();
     };
 
     // --- Event Listeners ---
-    elements.filters.apply.addEventListener('click', applyAllFilters);
-
-    elements.filters.search.addEventListener('input', debounce(() => {
-        state.filters.search = elements.filters.search.value || null;
-        state.page = 1;
-        fetchOrders();
-    }, 500));
+    ['search', 'tags', 'startDate', 'endDate'].forEach(key => {
+        elements.filters[key].addEventListener('input', collectFiltersAndFetch);
+    });
+    
+    ['stores', 'financialStatus', 'fulfillmentStatus', 'hasNote'].forEach(key => {
+        elements.filters[key].addEventListener('change', collectFiltersAndFetch);
+    });
 
     elements.filters.reset.addEventListener('click', () => {
         elements.filters.search.value = '';
-        elements.filters.stores.selectedIndex = -1;
-        elements.filters.financialStatus.value = '';
-        elements.filters.fulfillmentStatus.value = '';
+        elements.filters.tags.value = '';
         elements.filters.startDate.value = '';
         elements.filters.endDate.value = '';
-        applyAllFilters();
+        elements.filters.stores.querySelectorAll('input').forEach(i => i.checked = false);
+        elements.filters.financialStatus.querySelectorAll('input')[0].checked = true;
+        elements.filters.fulfillmentStatus.querySelectorAll('input')[0].checked = true;
+        elements.filters.hasNote.querySelectorAll('input')[0].checked = true;
+        
+        // Close all dropdowns
+        document.querySelectorAll('.dropdown[open]').forEach(d => d.removeAttribute('open'));
+
+        collectFiltersAndFetch();
     });
 
     elements.pagination.prev.addEventListener('click', () => {
         if (state.page > 1) {
             state.page--;
-            fetchOrders();
+            fetchAndRender();
         }
     });
 
     elements.pagination.next.addEventListener('click', () => {
         if ((state.page * state.limit) < state.totalCount) {
             state.page++;
-            fetchOrders();
+            fetchAndRender();
         }
     });
 

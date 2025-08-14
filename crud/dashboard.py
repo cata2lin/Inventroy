@@ -3,6 +3,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, asc
 from typing import List, Optional
+from datetime import datetime, timedelta
 
 import models
 
@@ -15,6 +16,8 @@ def get_orders_for_dashboard(
     end_date: Optional[str] = None,
     financial_status: Optional[str] = None,
     fulfillment_status: Optional[str] = None,
+    has_note: Optional[bool] = None, # ADDED
+    tags: Optional[str] = None, # ADDED
     search: Optional[str] = None,
     sort_by: str = 'created_at',
     sort_order: str = 'desc'
@@ -23,7 +26,6 @@ def get_orders_for_dashboard(
     Fetches a paginated and comprehensively filtered/sorted list of orders for the dashboard.
     """
     
-    # Base query joining Orders and Stores to allow sorting/filtering by store name
     query = db.query(
         models.Order,
         models.Store.name.label("store_name")
@@ -35,19 +37,30 @@ def get_orders_for_dashboard(
     if start_date:
         query = query.filter(models.Order.created_at >= start_date)
     if end_date:
-        # To make the end date inclusive, we can add a day or use '<' with the next day
-        from datetime import datetime, timedelta
         end_date_dt = datetime.fromisoformat(end_date) + timedelta(days=1)
         query = query.filter(models.Order.created_at < end_date_dt.isoformat())
     if financial_status:
         query = query.filter(models.Order.financial_status == financial_status)
     if fulfillment_status:
         query = query.filter(models.Order.fulfillment_status == fulfillment_status)
+    
+    # --- NEW FILTERS ---
+    if has_note is not None:
+        if has_note:
+            query = query.filter(models.Order.note.isnot(None))
+        else:
+            query = query.filter(models.Order.note.is_(None))
+            
+    if tags:
+        # Assumes tags are stored as a comma-separated string in the database
+        search_tags = [tag.strip() for tag in tags.split(',')]
+        for tag in search_tags:
+            query = query.filter(models.Order.tags.ilike(f"%{tag}%"))
+
     if search:
         query = query.filter(models.Order.name.ilike(f"%{search}%"))
 
     # --- AGGREGATES ---
-    # Calculate aggregates based on the *filtered* query before pagination
     aggregates_query = query.with_entities(
         func.count(models.Order.id).label("total_count"),
         func.sum(models.Order.total_price).label("total_value"),
@@ -62,24 +75,32 @@ def get_orders_for_dashboard(
         'total_price': models.Order.total_price,
         'financial_status': models.Order.financial_status,
         'fulfillment_status': models.Order.fulfillment_status,
-        'store_name': 'store_name' # Handle aliased column
+        'store_name': 'store_name',
+        'note': models.Order.note
     }
     
     sort_column = sort_column_map.get(sort_by, models.Order.created_at)
     
-    if sort_order.lower() == 'asc':
-        order_func = asc(sort_column)
-    else:
-        order_func = desc(sort_column)
+    order_func = asc(sort_column) if sort_order.lower() == 'asc' else desc(sort_column)
+    
+    results = query.order_by(order_func.nulls_last()).offset(skip).limit(limit).all()
 
-    # Apply sorting and pagination to the main query
-    results = query.order_by(order_func).offset(skip).limit(limit).all()
-
-    # The result is a list of tuples (Order, store_name), we need to combine them
     orders_list = []
     for order, store_name in results:
-        order_dict = order.__dict__
-        order_dict['store_name'] = store_name
+        order_dict = {
+            "id": order.id,
+            "name": order.name,
+            "created_at": order.created_at,
+            "financial_status": order.financial_status,
+            "fulfillment_status": order.fulfillment_status,
+            "total_price": order.total_price,
+            "currency": order.currency,
+            "store_name": store_name,
+            "cancelled": order.cancelled_at is not None, # ADDED
+            "cancel_reason": order.cancel_reason, # ADDED
+            "note": order.note, # ADDED
+            "tags": order.tags, # ADDED
+        }
         orders_list.append(order_dict)
 
     return {

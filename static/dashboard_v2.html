@@ -25,77 +25,79 @@
             <h2>A unified view of orders across all stores.</h2>
         </hgroup>
 
-        <section id="metrics-container" class="grid">
-            <article>
-                <h3 id="total-orders">0</h3>
-                <p>Orders Found</p>
-            </article>
-            <article>
-                <h3 id="total-value">0.00</h3>
-                <p>Total Value</p>
-            </article>
-            <article>
-                <h3 id="total-shipping">0.00</h3>
-                <p>Total Shipping</p>
-            </article>
-        </section>
-
-        <article id="filter-controls">
-            <div class="grid">
-                <input type="search" id="search-input" name="search" placeholder="Search by Order Name...">
-            </div>
-            <div class="grid">
-                <div>
-                    <label for="store-filter">Stores</label>
-                    <select id="store-filter" multiple>
-                        <option value="">Loading Stores...</option>
-                    </select>
+        <article class="filter-bar">
+            <div class="filter-row">
+                <div class="metric-group">
+                    <div class="metric">
+                        <h4 id="total-orders">0</h4>
+                        <p>Orders Found</p>
+                    </div>
+                    <div class="metric">
+                        <h4 id="total-value">$0.00</h4>
+                        <p>Total Value</p>
+                    </div>
+                    <div class="metric">
+                        <h4 id="total-shipping">$0.00</h4>
+                        <p>Total Shipping</p>
+                    </div>
                 </div>
-                <div>
-                    <label for="financial-status-filter">Financial Status</label>
-                    <select id="financial-status-filter">
-                        <option value="">All</option>
-                        <option value="pending">Pending</option>
-                        <option value="authorized">Authorized</option>
-                        <option value="partially_paid">Partially Paid</option>
-                        <option value="paid">Paid</option>
-                        <option value="partially_refunded">Partially Refunded</option>
-                        <option value="refunded">Refunded</option>
-                        <option value="voided">Voided</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="fulfillment-status-filter">Fulfillment Status</label>
-                    <select id="fulfillment-status-filter">
-                        <option value="">All</option>
-                        <option value="unfulfilled">Unfulfilled</option>
-                        <option value="partially_fulfilled">Partially Fulfilled</option>
-                        <option value="fulfilled">Fulfilled</option>
-                        <option value="scheduled">Scheduled</option>
-                    </select>
+                <div class="search-group">
+                    <input type="search" id="search-input" name="search" placeholder="Search by Order Name...">
                 </div>
             </div>
-            <div class="grid">
-                <div>
-                    <label for="start-date">Start Date</label>
+            <div class="filter-row">
+                <details role="list" class="dropdown">
+                    <summary aria-haspopup="listbox">Stores</summary>
+                    <ul role="listbox" id="store-filter-list">
+                        </ul>
+                </details>
+                <details role="list" class="dropdown">
+                    <summary aria-haspopup="listbox">Financial Status</summary>
+                    <ul role="listbox" id="financial-status-filter">
+                        <li><label><input type="radio" name="fs" value=""> All</label></li>
+                        <li><label><input type="radio" name="fs" value="pending"> Pending</label></li>
+                        <li><label><input type="radio" name="fs" value="paid"> Paid</label></li>
+                        <li><label><input type="radio" name="fs" value="refunded"> Refunded</label></li>
+                        <li><label><input type="radio" name="fs" value="voided"> Voided</label></li>
+                    </ul>
+                </details>
+                <details role="list" class="dropdown">
+                    <summary aria-haspopup="listbox">Fulfillment Status</summary>
+                    <ul role="listbox" id="fulfillment-status-filter">
+                        <li><label><input type="radio" name="ffs" value=""> All</label></li>
+                        <li><label><input type="radio" name="ffs" value="unfulfilled"> Unfulfilled</label></li>
+                        <li><label><input type="radio" name="ffs" value="partially_fulfilled"> Partially Fulfilled</label></li>
+                        <li><label><input type="radio" name="ffs" value="fulfilled"> Fulfilled</label></li>
+                    </ul>
+                </details>
+                <details role="list" class="dropdown">
+                    <summary aria-haspopup="listbox">Notes</summary>
+                    <ul role="listbox" id="has-note-filter">
+                        <li><label><input type="radio" name="note" value=""> All</label></li>
+                        <li><label><input type="radio" name="note" value="true"> Has Note</label></li>
+                        <li><label><input type="radio" name="note" value="false"> No Note</label></li>
+                    </ul>
+                </details>
+                 <input type="search" id="tags-input" name="tags" placeholder="Filter by tags (comma-sep)...">
+            </div>
+             <div class="filter-row">
+                 <div>
+                    <label for="start-date" class="date-label">Start Date</label>
                     <input type="date" id="start-date">
                 </div>
                 <div>
-                    <label for="end-date">End Date</label>
+                    <label for="end-date" class="date-label">End Date</label>
                     <input type="date" id="end-date">
                 </div>
-                <div>
-                    <button id="apply-filters">Apply Filters</button>
-                    <button id="reset-filters" class="secondary outline">Reset</button>
-                </div>
+                <button id="reset-filters" class="secondary outline">Reset All Filters</button>
             </div>
         </article>
-
+        
         <article id="orders-table-container" aria-busy="true">
             <p>Loading orders...</p>
         </article>
 
-        <div class="grid">
+        <div class="grid pagination-controls">
             <button id="prev-button" class="secondary outline" disabled>&larr; Previous</button>
             <span id="page-indicator">Page 1</span>
             <button id="next-button" class="secondary outline">Next &rarr;</button>
