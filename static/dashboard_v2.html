@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Inventory Intelligence</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+    <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+    <main class="container">
+        <nav>
+            <ul>
+                <li><strong>Inventory Intelligence</strong></li>
+            </ul>
+            <ul>
+                <li><a href="/dashboard-v2" role="button" class="contrast">Dashboard</a></li>
+                <li><a href="/products">Products</a></li>
+                <li><a href="/inventory">Grouped Inventory</a></li>
+            </ul>
+        </nav>
+
+        <hgroup>
+            <h1>Orders Dashboard</h1>
+            <h2>A unified view of orders across all stores.</h2>
+        </hgroup>
+
+        <section id="metrics-container" class="grid">
+            <article>
+                <h3 id="total-orders">0</h3>
+                <p>Orders Found</p>
+            </article>
+            <article>
+                <h3 id="total-value">0.00</h3>
+                <p>Total Value</p>
+            </article>
+            <article>
+                <h3 id="total-shipping">0.00</h3>
+                <p>Total Shipping</p>
+            </article>
+        </section>
+
+        <article id="filter-controls">
+            <div class="grid">
+                <input type="search" id="search-input" name="search" placeholder="Search by Order Name...">
+            </div>
+            <div class="grid">
+                <div>
+                    <label for="store-filter">Stores</label>
+                    <select id="store-filter" multiple>
+                        <option value="">Loading Stores...</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="financial-status-filter">Financial Status</label>
+                    <select id="financial-status-filter">
+                        <option value="">All</option>
+                        <option value="pending">Pending</option>
+                        <option value="authorized">Authorized</option>
+                        <option value="partially_paid">Partially Paid</option>
+                        <option value="paid">Paid</option>
+                        <option value="partially_refunded">Partially Refunded</option>
+                        <option value="refunded">Refunded</option>
+                        <option value="voided">Voided</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="fulfillment-status-filter">Fulfillment Status</label>
+                    <select id="fulfillment-status-filter">
+                        <option value="">All</option>
+                        <option value="unfulfilled">Unfulfilled</option>
+                        <option value="partially_fulfilled">Partially Fulfilled</option>
+                        <option value="fulfilled">Fulfilled</option>
+                        <option value="scheduled">Scheduled</option>
+                    </select>
+                </div>
+            </div>
+            <div class="grid">
+                <div>
+                    <label for="start-date">Start Date</label>
+                    <input type="date" id="start-date">
+                </div>
+                <div>
+                    <label for="end-date">End Date</label>
+                    <input type="date" id="end-date">
+                </div>
+                <div>
+                    <button id="apply-filters">Apply Filters</button>
+                    <button id="reset-filters" class="secondary outline">Reset</button>
+                </div>
+            </div>
+        </article>
+
+        <article id="orders-table-container" aria-busy="true">
+            <p>Loading orders...</p>
+        </article>
+
+        <div class="grid">
+            <button id="prev-button" class="secondary outline" disabled>&larr; Previous</button>
+            <span id="page-indicator">Page 1</span>
+            <button id="next-button" class="secondary outline">Next &rarr;</button>
+        </div>
+    </main>
+
+    <script src="/static/js/config.js"></script>
+    <script src="/static/js/dashboard_v2.js"></script>
+</body>
+</html>

@@ -17,7 +17,9 @@ const API_ENDPOINTS = {
     addInventoryQuantity: '/api/inventory/add_quantity',
     subtractInventoryQuantity: '/api/inventory/subtract_quantity',
 
-    // ADDED for mutations page
     getProduct: (productId) => `/api/mutations/product/${productId}`,
-    updateProduct: (productId) => `/api/mutations/product/${productId}`
+    updateProduct: (productId) => `/api/mutations/product/${productId}`,
+
+    // ADDED for new dashboard
+    getDashboardOrders: (params) => `/api/v2/dashboard/orders/?${params.toString()}`,
 };

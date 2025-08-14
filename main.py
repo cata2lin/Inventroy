@@ -13,8 +13,8 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
 from database import engine, Base
-# CORRECTED: Import all routers
-from routes import orders, dashboard, inventory, products, mutations
+# Import all routers, including the new one
+from routes import orders, dashboard, inventory, products, mutations, dashboard_v2
 
 Base.metadata.create_all(bind=engine)
 load_dotenv()
@@ -30,17 +30,19 @@ templates = Jinja2Templates(directory="static")
 
 # Include all routers
 app.include_router(orders.router, prefix="/api")
-app.include_router(dashboard.router, prefix="/api/dashboard")
+app.include_router(dashboard.router, prefix="/api/dashboard") # Old dashboard
 app.include_router(inventory.router, prefix="/api/inventory")
-app.include_router(mutations.router) # ADDED
+app.include_router(mutations.router)
+app.include_router(dashboard_v2.router) # New dashboard API
 
 @app.get("/", response_class=RedirectResponse, include_in_schema=False)
 async def read_root():
-    return RedirectResponse(url="/dashboard")
+    # Point root to the new dashboard
+    return RedirectResponse(url="/dashboard-v2")
 
-@app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
-async def get_dashboard_page(request: Request):
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+@app.get("/dashboard-v2", response_class=HTMLResponse, include_in_schema=False)
+async def get_dashboard_v2_page(request: Request):
+    return templates.TemplateResponse("dashboard_v2.html", {"request": request})
 
 @app.get("/products", response_class=HTMLResponse, include_in_schema=False)
 async def get_products_page(request: Request):
@@ -50,7 +52,6 @@ async def get_products_page(request: Request):
 async def get_inventory_page(request: Request):
     return templates.TemplateResponse("inventory.html", {"request": request})
 
-# ADDED: New route to serve the mutations.html page
 @app.get("/mutations", response_class=HTMLResponse, include_in_schema=False)
 async def get_mutations_page(request: Request):
     return templates.TemplateResponse("mutations.html", {"request": request})
