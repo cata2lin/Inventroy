@@ -142,28 +142,40 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!inventory || inventory.length === 0) {
             elements.tableContainer.innerHTML = '<p>No inventory groups found.</p>'; return;
         }
-        let html = '<div class="grouped-inventory-grid">';
+        let html = '';
         inventory.forEach(group => {
             html += `
-                <article class="product-card">
-                    <img src="${group.primary_image_url || 'https://via.placeholder.com/80'}" alt="${group.primary_title}">
-                    <div>
-                        <strong>${group.primary_title}</strong><br>
-                        <small>Store: ${group.store_name}</small><br>
-                        <small>Barcode: ${group.barcode}</small>
-                        <details>
-                            <summary>${group.variants_json.length} SKU(s)</summary>
-                            <ul class="variant-list">${group.variants_json.map(v => `<li>${v.sku} (${v.title})</li>`).join('')}</ul>
-                        </details>
+            <details class="grouped-item">
+                <summary>
+                    <div class="grid">
+                        <img src="${group.primary_image_url || 'https://via.placeholder.com/60'}" alt="${group.primary_title}">
+                        <div class="product-info">
+                            <strong>${group.primary_title}</strong>
+                            <small>Barcode: ${group.barcode} &nbsp;|&nbsp; Store: ${group.primary_store}</small>
+                        </div>
+                        <div class="quantity-display"><h2>${group.on_hand}</h2><p>On Hand</p></div>
+                        <div class="quantity-display"><h2>${group.committed}</h2><p>Committed</p></div>
+                        <div class="quantity-display"><h2>${group.available}</h2><p>Available</p></div>
                     </div>
-                    <div class="quantity-display"><h2>${group.on_hand}</h2><p>On Hand</p></div>
-                    <div class="quantity-display"><h2>${group.committed}</h2><p>Committed</p></div>
-                    <div class="quantity-display"><h2>${group.available}</h2><p>Available</p></div>
-                </article>`;
+                </summary>
+                <div class="variant-details">
+                    <table>
+                        <thead><tr><th>SKU</th><th>Store</th><th>Status</th><th>Action</th></tr></thead>
+                        <tbody>
+                            ${group.variants_json.map(v => `
+                                <tr>
+                                    <td>${v.sku}</td>
+                                    <td>${v.store_name}</td>
+                                    <td><span class="status-${(v.status || '').toLowerCase()}">${v.status}</span></td>
+                                    <td>${!v.is_primary ? `<button class="outline" onclick="setPrimaryVariant('${group.barcode}', ${v.variant_id})">Make Primary</button>` : '<strong>Primary</strong>'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </details>`;
         });
-        html += '</div>';
         elements.tableContainer.innerHTML = html;
-        addSortEventListeners();
     };
     
     const updatePagination = () => {
@@ -183,6 +195,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 fetchInventory();
             });
         });
+    };
+    
+    window.setPrimaryVariant = async (barcode, variantId) => {
+        try {
+            const response = await fetch(API_ENDPOINTS.setPrimaryVariant, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ barcode, variant_id: variantId })
+            });
+            if (!response.ok) throw new Error('Failed to set primary variant.');
+            await fetchInventory();
+        } catch (error) {
+            console.error(error);
+            alert('Error setting primary variant.');
+        }
     };
 
     const initialize = async () => {
@@ -224,7 +251,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         elements.filters.groupToggle.checked = state.view === 'grouped';
 
-        // --- FIXED: Use a more specific and robust way to add listeners ---
         const setupEventListeners = () => {
             const filterMap = {
                 search: 'search', store: 'store_ids', type: 'product_type', category: 'category',

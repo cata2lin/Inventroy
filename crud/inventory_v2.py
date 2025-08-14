@@ -82,19 +82,32 @@ def get_inventory_report(
         on_hand_agg = func.max(on_hand_col).label("on_hand")
         committed_agg = func.sum(func.coalesce(committed_sq.c.committed, 0)).label("committed")
         
-        primary_variant_sq = db.query(models.ProductVariant.barcode, func.min(models.Product.id).over(partition_by=models.ProductVariant.barcode, order_by=models.ProductVariant.is_primary_variant.desc()).label('primary_product_id')).filter(models.ProductVariant.barcode.isnot(None)).join(models.Product).distinct().subquery('primary_variant_sq')
+        primary_variant_sq = db.query(
+            models.ProductVariant.barcode,
+            func.min(models.ProductVariant.id).over(partition_by=models.ProductVariant.barcode, order_by=models.ProductVariant.is_primary_variant.desc()).label('primary_variant_id')
+        ).filter(models.ProductVariant.barcode.isnot(None)).distinct().subquery('primary_variant_sq')
+        PrimaryVariant = aliased(models.ProductVariant)
         PrimaryProduct = aliased(models.Product)
+        PrimaryStore = aliased(models.Store)
 
-        agg_query = query_base.join(primary_variant_sq, primary_variant_sq.c.barcode == models.ProductVariant.barcode).join(PrimaryProduct, PrimaryProduct.id == primary_variant_sq.c.primary_product_id)\
-            .with_entities(models.ProductVariant.barcode.label("barcode"), on_hand_agg, committed_agg, (on_hand_agg - committed_agg).label("available"), func.json_agg(func.json_build_object('sku', models.ProductVariant.sku, 'title', models.Product.title)).label("variants_json"), PrimaryProduct.title.label("primary_title"), models.Store.name.label("store_name"), PrimaryProduct.image_url.label("primary_image_url"))\
-            .group_by(models.ProductVariant.barcode, PrimaryProduct.title, models.Store.name, PrimaryProduct.image_url)
+        agg_query = query_base.join(primary_variant_sq, primary_variant_sq.c.barcode == models.ProductVariant.barcode)\
+            .join(PrimaryVariant, PrimaryVariant.id == primary_variant_sq.c.primary_variant_id)\
+            .join(PrimaryProduct, PrimaryProduct.id == PrimaryVariant.product_id)\
+            .join(PrimaryStore, PrimaryStore.id == PrimaryProduct.store_id)\
+            .with_entities(
+                models.ProductVariant.barcode.label("barcode"), on_hand_agg, committed_agg, 
+                (on_hand_agg - committed_agg).label("available"), 
+                func.json_agg(func.json_build_object('variant_id', models.ProductVariant.id, 'sku', models.ProductVariant.sku, 'store_name', models.Store.name, 'status', models.Product.status, 'is_primary', models.ProductVariant.is_primary_variant)).label("variants_json"),
+                PrimaryProduct.title.label("primary_title"), PrimaryStore.name.label("primary_store"), 
+                PrimaryProduct.image_url.label("primary_image_url")
+            ).group_by(models.ProductVariant.barcode, PrimaryProduct.title, PrimaryStore.name, PrimaryProduct.image_url)
 
         sort_column_map = {'on_hand': on_hand_agg, 'committed': committed_agg, 'available': (on_hand_agg - committed_agg), 'primary_title': "primary_title", "barcode": "barcode"}
         sort_column = sort_column_map.get(sort_by, on_hand_agg)
         order_func = asc(sort_column) if sort_order == 'asc' else desc(sort_column)
         results = agg_query.order_by(order_func.nulls_last()).offset(skip).limit(limit).all()
         inventory_list = [dict(row._mapping) for row in results]
-    else: # Individual View
+    else:
         total_count = base_query.count()
         sort_column_map = {
             'price': models.ProductVariant.price, 'cost': models.ProductVariant.cost, 'on_hand': on_hand_col, 'committed': func.coalesce(committed_sq.c.committed, 0),
@@ -126,3 +139,9 @@ def get_filter_options(db: Session):
     types = db.query(models.Product.product_type).distinct().all()
     categories = db.query(models.Product.product_category).distinct().all()
     return { "types": [t[0] for t in types if t[0]], "categories": [c[0] for c in categories if c[0]] }
+
+def set_primary_variant(db: Session, barcode: str, variant_id: int):
+    db.query(models.ProductVariant).filter(models.ProductVariant.barcode == barcode).update({"is_primary_variant": False}, synchronize_session=False)
+    db.query(models.ProductVariant).filter(models.ProductVariant.id == variant_id).update({"is_primary_variant": True}, synchronize_session=False)
+    db.commit()
+    return {"message": "Primary variant updated successfully."}

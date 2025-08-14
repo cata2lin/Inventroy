@@ -1,8 +1,9 @@
 # routes/inventory_v2.py
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional, List
+from pydantic import BaseModel
 
 from database import get_db
 from crud import inventory_v2 as crud_inventory
@@ -12,6 +13,10 @@ router = APIRouter(
     tags=["Inventory V2"],
     responses={404: {"description": "Not found"}},
 )
+
+class SetPrimaryVariantRequest(BaseModel):
+    barcode: str
+    variant_id: int
 
 @router.get("/report/")
 def get_inventory_report_data(
@@ -41,3 +46,10 @@ def get_inventory_report_data(
 @router.get("/filters/")
 def get_filter_data(db: Session = Depends(get_db)):
     return crud_inventory.get_filter_options(db)
+
+@router.post("/set-primary-variant/")
+def set_primary_variant_endpoint(request: SetPrimaryVariantRequest, db: Session = Depends(get_db)):
+    try:
+        return crud_inventory.set_primary_variant(db, barcode=request.barcode, variant_id=request.variant_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
