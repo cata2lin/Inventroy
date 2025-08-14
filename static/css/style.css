@@ -59,23 +59,30 @@ main.container-fluid {
 .dropdown input[type="radio"], .dropdown input[type="checkbox"] { margin-right: 0.5em; }
 
 /* --- Table Styling --- */
-#orders-table-container { padding: 0; }
-#orders-table-container table { width: 100%; table-layout: fixed; }
-#orders-table-container th, #orders-table-container td {
+#orders-table-container, #inventory-table-container { padding: 0; }
+#orders-table-container table, #inventory-table-container table { width: 100%; table-layout: fixed; }
+#orders-table-container th, #orders-table-container td,
+#inventory-table-container th, #inventory-table-container td {
     padding: 0.4rem 0.6rem;
     font-size: 0.7rem;
     vertical-align: middle;
 }
-#orders-table-container th { white-space: nowrap; cursor: pointer; }
+#orders-table-container th, #inventory-table-container th { white-space: nowrap; cursor: pointer; }
 
 /* --- Grouped Inventory List View Styling --- */
+.grouped-item {
+    background-color: var(--card-background-color);
+    border-radius: var(--border-radius);
+    margin-bottom: 0.5rem;
+    border: 1px solid transparent;
+}
+.grouped-item[open] {
+    border-color: var(--card-border-color);
+}
 .grouped-item summary {
     display: block;
     cursor: pointer;
-    background-color: var(--card-background-color);
-    border-radius: var(--border-radius);
     padding: 0.5rem;
-    margin-bottom: 0.5rem;
 }
 .grouped-item summary > .grid {
     align-items: center;
@@ -97,7 +104,8 @@ main.container-fluid {
 .grouped-item .variant-details {
     padding: 1rem;
     background-color: var(--card-sectioning-background-color);
-    border-radius: var(--border-radius);
+    border-bottom-left-radius: var(--border-radius);
+    border-bottom-right-radius: var(--border-radius);
     margin-top: -0.5rem;
 }
 
