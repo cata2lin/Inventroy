@@ -18,11 +18,12 @@ router = APIRouter(
 # --- Pydantic Models ---
 class ProductUpdatePayload(BaseModel):
     title: Optional[str] = None
-    bodyHtml: Optional[str] = None
+    # CORECTAT: Am schimbat 'bodyHtml' în 'descriptionHtml'
+    descriptionHtml: Optional[str] = None 
     vendor: Optional[str] = None
     productType: Optional[str] = None
     status: Optional[str] = None
-    tags: Optional[str] = None # Trimis ca un șir de caractere separat prin virgulă
+    tags: Optional[str] = None
 
 class ProductResponse(BaseModel):
     id: int
@@ -41,9 +42,6 @@ class ProductResponse(BaseModel):
 # --- API Endpoints ---
 @router.get("/product/{product_id}", response_model=ProductResponse)
 def get_product_details(product_id: int, db: Session = Depends(get_db)):
-    """
-    Preia toate detaliile editabile pentru un singur produs din baza de date.
-    """
     product = crud_mutations.get_product_by_id(db, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -51,10 +49,6 @@ def get_product_details(product_id: int, db: Session = Depends(get_db)):
 
 @router.post("/product/{product_id}", status_code=200)
 def update_product_details(product_id: int, payload: ProductUpdatePayload, db: Session = Depends(get_db)):
-    """
-    Primește actualizări ale produsului, le trimite către ProductService pentru a executa
-    mutația Shopify și returnează rezultatul.
-    """
     product_db = crud_mutations.get_product_by_id(db, product_id)
     if not product_db:
         raise HTTPException(status_code=404, detail="Product not found in local database.")
@@ -65,22 +59,16 @@ def update_product_details(product_id: int, payload: ProductUpdatePayload, db: S
 
     service = ProductService(store_url=store.shopify_url, token=store.api_token)
 
-    # Pregătește datele pentru API-ul Shopify
     update_input = payload.dict(exclude_unset=True)
 
-    # --- CORECTAT: Gestionare îmbunătățită a etichetelor ---
     if 'tags' in update_input:
-        # Procesează etichetele doar dacă câmpul nu este gol
         if update_input['tags'] and update_input['tags'].strip():
-            # Creează o listă de etichete, eliminând spațiile goale și etichetele goale
             tags_list = [tag.strip() for tag in update_input['tags'].split(',') if tag.strip()]
             if tags_list:
                 update_input['tags'] = tags_list
             else:
-                # Dacă lista este goală după procesare, șterge cheia pentru a nu trimite o listă goală
                 del update_input['tags']
         else:
-            # Dacă șirul de etichete este gol sau conține doar spații, șterge cheia
             del update_input['tags']
 
     try:

@@ -43,7 +43,8 @@ document.addEventListener('DOMContentLoaded', () => {
         productTitleHeader.textContent = `Editing: ${product.title}`;
         form.elements.title.value = product.title || '';
         form.elements.vendor.value = product.vendor || '';
-        form.elements.bodyHtml.value = product.body_html || '';
+        // CORECTAT: Populează câmpul corect (răspunsul API folosește 'body_html')
+        form.elements.descriptionHtml.value = product.body_html || '';
         form.elements.productType.value = product.product_type || '';
         form.elements.status.value = product.status || 'ACTIVE';
         form.elements.tags.value = product.tags || '';
@@ -55,10 +56,11 @@ document.addEventListener('DOMContentLoaded', () => {
         saveButton.disabled = true;
 
         const formData = new FormData(form);
+        // CORECTAT: Trimite 'descriptionHtml' în loc de 'bodyHtml'
         const payload = {
             title: formData.get('title'),
             vendor: formData.get('vendor'),
-            bodyHtml: formData.get('bodyHtml'),
+            descriptionHtml: formData.get('descriptionHtml'),
             productType: formData.get('productType'),
             status: formData.get('status'),
             tags: formData.get('tags'),
@@ -76,9 +78,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(result.detail || 'Failed to update product.');
             }
             showToast('Product updated successfully!', 'success');
-            // Update header with new title
             productTitleHeader.textContent = `Editing: ${payload.title}`;
-        } catch (error) {
+        } catch (error)
+        {
             showToast(error.message, 'error');
         } finally {
             saveButton.removeAttribute('aria-busy');
@@ -86,6 +88,5 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- Initial Load ---
     loadProductData();
 });
