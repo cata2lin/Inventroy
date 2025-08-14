@@ -1,6 +1,8 @@
 // static/js/dashboard_v2.js
 
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('[DEBUG] DOM Loaded. Initializing dashboard script.');
+
     // --- Element References ---
     const elements = {
         metricsContainer: document.getElementById('metrics-container'),
@@ -40,7 +42,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let state = {};
     let currentOrders = [];
 
-    // --- Core Functions ---
     const debounce = (func, delay) => {
         let timeout;
         return (...args) => {
@@ -65,6 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         const newUrl = `${window.location.pathname}?${params.toString()}`;
         window.history.replaceState({ path: newUrl }, '', newUrl);
+        console.log('[DEBUG] URL Updated:', newUrl);
     };
 
     const fetchOrders = debounce(async () => {
@@ -83,13 +85,17 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         try {
+            console.log('[DEBUG] Fetching orders with params:', params.toString());
             const response = await fetch(API_ENDPOINTS.getDashboardOrders(params));
+            console.log('[DEBUG] API Response Status:', response.status);
             if (!response.ok) throw new Error(`Network response was not ok: ${response.statusText}`);
             const data = await response.json();
+            console.log('[DEBUG] Data received from API:', data);
             currentOrders = data.orders;
             state.totalCount = data.total_count;
             renderAll(data);
         } catch (error) {
+            console.error('[DEBUG] Fetch Error:', error);
             elements.tableContainer.innerHTML = `<p style="color: var(--pico-color-red-500);">Error: ${error.message}</p>`;
         } finally {
             elements.tableContainer.removeAttribute('aria-busy');
@@ -121,7 +127,6 @@ document.addEventListener('DOMContentLoaded', () => {
             tableHtml += `<th data-sort-by="${header.key}" ${sortClass}>${header.label}</th>`;
         });
         tableHtml += '</tr></thead><tbody>';
-
         currentOrders.forEach(order => {
             tableHtml += '<tr>';
             visibleColumns.forEach(col => {
@@ -140,19 +145,74 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             tableHtml += '</tr>';
         });
-
         tableHtml += '</tbody></table></div>';
         elements.tableContainer.innerHTML = tableHtml;
         addSortEventListeners();
     };
 
     const updatePagination = () => {
-        elements.pagination.indicator.textContent = `Page ${state.page} of ${Math.ceil(state.totalCount / 50)}`;
+        const totalPages = Math.ceil(state.totalCount / 50);
+        elements.pagination.indicator.textContent = `Page ${state.page} of ${totalPages > 0 ? totalPages : 1}`;
         elements.pagination.prev.disabled = state.page === 1;
-        elements.pagination.next.disabled = (state.page * 50) >= state.totalCount;
+        elements.pagination.next.disabled = state.page >= totalPages;
     };
     
-    // --- Initialization and Event Listeners ---
+    const initialize = async () => {
+        try {
+            console.log('[DEBUG] Starting initialization...');
+            elements.tableContainer.setAttribute('aria-busy', 'true');
+            
+            elements.columnModal.list.innerHTML = allColumns.map(col => `<div><label><input type="checkbox" name="col-${col.key}" value="${col.key}"> ${col.label}</label></div>`).join('');
+            
+            const storeResponse = await fetch(API_ENDPOINTS.getStores);
+            if (!storeResponse.ok) throw new Error('Could not load stores');
+            const stores = await storeResponse.json();
+            elements.filters.stores.innerHTML = stores.map(store => `<li><label><input type="checkbox" name="store" value="${store.id}"> ${store.name}</label></li>`).join('');
+            console.log('[DEBUG] UI shells populated.');
+
+            const params = new URLSearchParams(window.location.search);
+            state = {
+                page: parseInt(params.get('page') || '1', 10),
+                sortBy: params.get('sortBy') || 'created_at',
+                sortOrder: params.get('sortOrder') || 'desc',
+                hiddenColumns: params.getAll('hide') || [],
+                filters: {
+                    search: params.get('search') || '',
+                    tags: params.get('tags') || '',
+                    store_ids: params.getAll('stores') || [],
+                    financial_status: params.get('fs') || '',
+                    fulfillment_status: params.get('ffs') || '',
+                    has_note: params.get('note') || '',
+                    start_date: params.get('start') || '',
+                    end_date: params.get('end') || '',
+                }
+            };
+            console.log('[DEBUG] Initial state from URL:', state);
+            
+            // Update UI controls
+            elements.filters.search.value = state.filters.search;
+            elements.filters.tags.value = state.filters.tags;
+            elements.filters.startDate.value = state.filters.start_date;
+            elements.filters.endDate.value = state.filters.end_date;
+            document.querySelector(`input[name="fs"][value="${state.filters.financial_status || ''}"]`).checked = true;
+            document.querySelector(`input[name="ffs"][value="${state.filters.fulfillment_status || ''}"]`).checked = true;
+            document.querySelector(`input[name="note"][value="${state.filters.has_note || ''}"]`).checked = true;
+            elements.filters.stores.querySelectorAll('input').forEach(cb => cb.checked = state.filters.store_ids.includes(cb.value));
+            allColumns.forEach(col => {
+                const checkbox = document.querySelector(`input[name="col-${col.key}"]`);
+                if (checkbox) checkbox.checked = !state.hiddenColumns.includes(col.key);
+            });
+            console.log('[DEBUG] UI controls synced from state.');
+
+            setupEventListeners();
+            await fetchOrders();
+        } catch (error) {
+            console.error('[DEBUG] Initialization failed:', error);
+            elements.tableContainer.innerHTML = `<p style="color: var(--pico-color-red-500);">Initialization Error: ${error.message}</p>`;
+            elements.tableContainer.removeAttribute('aria-busy');
+        }
+    };
+    
     const setupEventListeners = () => {
         elements.filters.search.addEventListener('input', debounce(() => { state.filters.search = elements.filters.search.value; state.page = 1; fetchOrders(); }, 500));
         elements.filters.tags.addEventListener('input', debounce(() => { state.filters.tags = elements.filters.tags.value; state.page = 1; fetchOrders(); }, 500));
@@ -179,7 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         elements.columnModal.list.addEventListener('change', () => {
             state.hiddenColumns = allColumns.filter(c => !document.querySelector(`input[name="col-${c.key}"]`).checked).map(c => c.key);
-            renderTable(); // Re-render from cache
+            renderTable();
             updateUrl();
         });
         elements.filters.reset.addEventListener('click', () => {
@@ -202,44 +262,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 fetchOrders();
             });
         });
-    };
-
-    const initialize = async () => {
-        elements.tableContainer.setAttribute('aria-busy', 'true');
-        
-        // Step 1: Populate UI shells
-        elements.columnModal.list.innerHTML = allColumns.map(col => `<div><label><input type="checkbox" name="col-${col.key}" value="${col.key}"> ${col.label}</label></div>`).join('');
-        
-        try {
-            const response = await fetch(API_ENDPOINTS.getStores);
-            const stores = await response.json();
-            elements.filters.stores.innerHTML = stores.map(store => `<li><label><input type="checkbox" name="store" value="${store.id}"> ${store.name}</label></li>`).join('');
-        } catch (error) {
-            elements.filters.stores.innerHTML = '<li>Could not load stores</li>';
-        }
-
-        // Step 2: Sync state from URL now that UI is built
-        updateStateFromUrl();
-
-        // Step 3: Update UI controls to match the state
-        elements.filters.search.value = state.filters.search;
-        elements.filters.tags.value = state.filters.tags;
-        elements.filters.startDate.value = state.filters.start_date;
-        elements.filters.endDate.value = state.filters.end_date;
-        document.querySelector(`input[name="fs"][value="${state.filters.financial_status || ''}"]`).checked = true;
-        document.querySelector(`input[name="ffs"][value="${state.filters.fulfillment_status || ''}"]`).checked = true;
-        document.querySelector(`input[name="note"][value="${state.filters.has_note || ''}"]`).checked = true;
-        elements.filters.stores.querySelectorAll('input').forEach(cb => cb.checked = state.filters.store_ids.includes(cb.value));
-        allColumns.forEach(col => {
-            const checkbox = document.querySelector(`input[name="col-${col.key}"]`);
-            if (checkbox) checkbox.checked = !state.hiddenColumns.includes(col.key);
-        });
-
-        // Step 4: Add event listeners
-        setupEventListeners();
-
-        // Step 5: Fetch initial data
-        await fetchOrders();
     };
 
     initialize();
