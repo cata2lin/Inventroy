@@ -32,7 +32,8 @@ document.addEventListener('DOMContentLoaded', () => {
         { key: 'note', label: 'Note' }, { key: 'tags', label: 'Tags' },
     ];
 
-    let state = {}; // Initial state is empty
+    let state = {};
+    let currentOrders = []; // Cache for re-rendering table
 
     // --- URL State Synchronization ---
     const updateStateFromUrl = () => {
@@ -64,13 +65,13 @@ document.addEventListener('DOMContentLoaded', () => {
         Object.entries(state.filters).forEach(([key, value]) => {
             const paramKeyMap = { financial_status: 'fs', fulfillment_status: 'ffs', has_note: 'note', store_ids: 'stores', start_date: 'start', end_date: 'end' };
             const paramKey = paramKeyMap[key] || key;
-            if (value) {
+            if (value && value.length > 0) {
                 if (Array.isArray(value)) value.forEach(v => params.append(paramKey, v));
                 else params.set(paramKey, value);
             }
         });
         const newUrl = `${window.location.pathname}?${params.toString()}`;
-        window.history.pushState({ path: newUrl }, '', newUrl);
+        window.history.replaceState({ path: newUrl }, '', newUrl); // Use replaceState to avoid cluttering history
     };
 
     // --- API & Rendering ---
@@ -91,14 +92,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const response = await fetch(API_ENDPOINTS.getDashboardOrders(params));
-            if (!response.ok) throw new Error('Failed to fetch orders.');
+            if (!response.ok) throw new Error(`Failed to fetch orders: ${response.statusText}`);
             const data = await response.json();
+            currentOrders = data.orders; // Cache the fetched orders
             state.totalCount = data.total_count;
             renderMetrics(data);
-            renderTable(data.orders);
+            renderTable(); // Render from the new cache
             updatePagination();
         } catch (error) {
-            elements.tableContainer.innerHTML = `<p>Error: ${error.message}</p>`;
+            elements.tableContainer.innerHTML = `<p style="color: var(--pico-color-red-500);">Error: ${error.message}</p>`;
         } finally {
             elements.tableContainer.removeAttribute('aria-busy');
         }
@@ -111,10 +113,9 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="metric"><h4>${(data.total_shipping || 0).toLocaleString('ro-RO')} ${data.currency}</h4><p>Total Shipping</p></div>`;
     };
 
-    const renderTable = (orders) => {
-        elements.tableContainer.dataset.orders = JSON.stringify(orders); // Cache data for re-renders
+    const renderTable = () => {
         const visibleColumns = allColumns.filter(c => !state.hiddenColumns.includes(c.key));
-        if (!orders || orders.length === 0) {
+        if (!currentOrders || currentOrders.length === 0) {
             elements.tableContainer.innerHTML = '<p>No orders found matching your criteria.</p>'; return;
         }
 
@@ -125,7 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         tableHtml += '</tr></thead><tbody>';
 
-        orders.forEach(order => {
+        currentOrders.forEach(order => {
             tableHtml += '<tr>';
             visibleColumns.forEach(col => {
                 let content = '';
@@ -160,6 +161,7 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.filters.tags.value = state.filters.tags;
         elements.filters.startDate.value = state.filters.start_date;
         elements.filters.endDate.value = state.filters.end_date;
+
         document.querySelector(`input[name="fs"][value="${state.filters.financial_status || ''}"]`).checked = true;
         document.querySelector(`input[name="ffs"][value="${state.filters.fulfillment_status || ''}"]`).checked = true;
         document.querySelector(`input[name="note"][value="${state.filters.has_note || ''}"]`).checked = true;
@@ -183,8 +185,6 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     
     const initializeDashboard = async () => {
-        // --- THIS IS THE CRUCIAL FIX ---
-        // 1. Populate the UI elements first
         allColumns.forEach(col => {
             elements.filters.columns.innerHTML += `<li><label><input type="checkbox" name="col-${col.key}" value="${col.key}"> ${col.label}</label></li>`;
         });
@@ -198,14 +198,9 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.filters.stores.innerHTML = '<li>Could not load stores</li>';
         }
 
-        // 2. THEN, update the state from the URL
         updateStateFromUrl();
-        
-        // 3. THEN, update the now-existing UI elements from the state
         updateUiFromState();
-        
-        // 4. FINALLY, fetch the data
-        fetchAndRender();
+        await fetchAndRender(); // Wait for the first fetch to complete
     };
     
     // --- Event Listeners ---
@@ -235,7 +230,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     elements.filters.columns.addEventListener('change', () => {
         state.hiddenColumns = allColumns.filter(c => !document.querySelector(`input[name="col-${c.key}"]`).checked).map(c => c.key);
-        renderTable(JSON.parse(elements.tableContainer.dataset.orders || '[]'));
+        renderTable(); // Re-render from cache, no API call needed
         updateUrlFromState();
     });
 
@@ -248,7 +243,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     elements.pagination.prev.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchAndRender(); } });
     elements.pagination.next.addEventListener('click', () => { if ((state.page * 50) < state.totalCount) { state.page++; fetchAndRender(); } });
-    window.addEventListener('popstate', () => initializeDashboard());
+    window.addEventListener('popstate', () => { initializeDashboard(); });
 
     initializeDashboard();
 });

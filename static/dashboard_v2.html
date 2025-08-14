@@ -26,12 +26,16 @@
         </hgroup>
 
         <article class="filter-container">
-            <section id="metrics-container" class="grid"></section>
+            <section id="metrics-container" class="grid">
+                </section>
+            
             <section class="controls-grid">
                 <input type="search" id="search-input" name="search" placeholder="Search Order Name...">
                 <details role="list" class="dropdown">
                     <summary aria-haspopup="listbox">Stores</summary>
-                    <ul role="listbox" id="store-filter-list"></ul>
+                    <ul role="listbox" id="store-filter-list">
+                        <li>Loading...</li>
+                    </ul>
                 </details>
                 <details role="list" class="dropdown">
                     <summary aria-haspopup="listbox">Financial Status</summary>
@@ -73,7 +77,7 @@
         </article>
         
         <article id="orders-table-container" aria-busy="true">
-            <p>Loading orders...</p>
+            <p>Loading...</p>
         </article>
 
         <div class="grid pagination-controls">
