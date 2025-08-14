@@ -1,0 +1,166 @@
+/* static/css/style.css */
+
+body { 
+    padding-bottom: 5rem; 
+}
+
+.tabs [role="tabpanel"] { 
+    display: none; 
+}
+
+.tabs [role="tabpanel"][aria-hidden="false"] { 
+    display: block; 
+}
+
+table { 
+    table-layout: auto; 
+    width: 100%; 
+}
+
+th, td { 
+    white-space: nowrap; 
+}
+
+.status-fulfilled, .status-active { 
+    color: #388e3c; 
+}
+
+.status-unfulfilled { 
+    color: #e53935; 
+}
+
+.status-partial, .status-draft { 
+    color: #f57c00; 
+}
+
+.status-archived {
+    color: #546e7a;
+}
+
+#toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 1rem 2rem;
+    border-radius: 0.5rem;
+    background-color: #384955;
+    color: #fff;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    z-index: 1000;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s, visibility 0.3s;
+}
+
+#toast.show {
+    opacity: 1;
+    visibility: visible;
+}
+
+#toast.error { 
+    background-color: #d32f2f; 
+}
+
+#toast.success { 
+    background-color: #388e3c; 
+}
+
+td .field-group { 
+    display: flex; 
+    align-items: center; 
+    gap: 0.5rem; 
+}
+
+td input { 
+    margin-bottom: 0; 
+    min-width: 100px; 
+}
+
+td button { 
+    margin: 0; 
+    padding: 0.3rem 0.6rem; 
+    line-height: 1; 
+    min-width: auto; 
+}
+
+.overflow-auto { 
+    max-height: 70vh; 
+}
+
+.grid { 
+    grid-template-columns: 1fr auto; 
+    gap: 1rem; 
+    align-items: end; 
+}
+
+.quantity-display { 
+    text-align: center; 
+}
+
+.quantity-display h2 { 
+    margin: 0; 
+    font-size: 2rem; 
+}
+
+.quantity-display p { 
+    margin: 0; 
+    color: #888; 
+}
+
+.product-card {
+    display: grid;
+    grid-template-columns: 80px 2fr 1fr 1fr 1fr 1fr auto;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.product-card img, table img { 
+    width: 100%; 
+    max-width: 60px; 
+    border-radius: var(--border-radius); 
+}
+
+.variant-list { 
+    list-style-type: none; 
+    padding: 0; 
+    margin: 0.5rem 0 0 0; 
+}
+
+.variant-list li { 
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center; 
+    font-size: 0.9em; 
+    margin-bottom: 0.25rem; 
+}
+
+.variant-list button { 
+    font-size: 0.7em; 
+    padding: 0.2rem 0.4rem; 
+    margin: 0; 
+}
+
+th[data-sort-by] { 
+    cursor: pointer; 
+}
+
+th[data-sort-by]::after { 
+    content: ' \2195'; 
+    opacity: 0.5; 
+}
+
+th[data-sort-by].asc::after { 
+    content: ' \2191'; 
+    opacity: 1; 
+}
+
+th[data-sort-by].desc::after { 
+    content: ' \2193'; 
+    opacity: 1; 
+}
+
+dialog article { 
+    min-width: 400px; 
+}
