@@ -40,18 +40,20 @@ main.container-fluid {
 }
 .controls-grid input[type="date"] { padding-right: 0.2rem; }
 
-/* --- FIXED Dropdown Background --- */
+/* --- DEFINITIVE FIX for Dropdown Background --- */
 .dropdown[open] > ul {
-    position: absolute; /* Allows z-index to work */
+    position: absolute; /* Lifts the element out of the normal document flow */
     width: auto;
     min-width: 200px;
     font-size: 0.75rem;
     max-height: 250px;
     overflow-y: auto;
     padding: 0.5rem;
-    background-color: var(--card-sectioning-background-color); /* Makes the background solid */
+    /* This is the key: uses a solid background color variable from PicoCSS */
+    background-color: var(--card-background-color); 
     border: 1px solid var(--card-border-color);
-    z-index: 1000; /* Ensures it appears on top of other content */
+    /* This is critical: ensures the dropdown appears above all other content */
+    z-index: 1000; 
     box-shadow: var(--pico-card-box-shadow);
     margin-top: 0.25rem;
 }
