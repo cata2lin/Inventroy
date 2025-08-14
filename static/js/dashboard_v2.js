@@ -85,10 +85,14 @@ document.addEventListener('DOMContentLoaded', () => {
             skip: (state.page - 1) * state.limit, limit: state.limit,
             sort_by: state.sortBy, sort_order: state.sortOrder,
         });
+        
         Object.entries(state.filters).forEach(([key, value]) => {
-            if (value && value.length > 0) {
-                if (Array.isArray(value)) value.forEach(v => params.append(key, v));
-                else params.append(key, value);
+            if (value !== null && value !== undefined && value !== '') {
+                if (Array.isArray(value)) {
+                    if (value.length > 0) value.forEach(v => params.append(key, v));
+                } else {
+                    params.append(key, value);
+                }
             }
         });
 
@@ -150,18 +154,37 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.tableContainer.innerHTML = tableHtml;
         addSortEventListeners();
     };
-
-    // --- UI Update & Event Listeners ---
+    
+    const updatePagination = () => {
+        elements.pagination.indicator.textContent = `Page ${state.page} of ${Math.ceil(state.totalCount / state.limit)}`;
+        elements.pagination.prev.disabled = state.page === 1;
+        elements.pagination.next.disabled = (state.page * state.limit) >= state.totalCount;
+    };
+    
+    // --- FIXED: Made this function more robust ---
     const updateUiFromState = () => {
         elements.filters.search.value = state.filters.search;
         elements.filters.tags.value = state.filters.tags;
         elements.filters.startDate.value = state.filters.start_date;
         elements.filters.endDate.value = state.filters.end_date;
-        document.querySelectorAll('input[name="fs"]').forEach(r => r.checked = r.value === state.filters.financial_status);
-        document.querySelectorAll('input[name="ffs"]').forEach(r => r.checked = r.value === state.filters.fulfillment_status);
-        document.querySelectorAll('input[name="note"]').forEach(r => r.checked = r.value === state.filters.has_note);
+        
+        const fsRadio = document.querySelector(`input[name="fs"][value="${state.filters.financial_status || ''}"]`);
+        if (fsRadio) fsRadio.checked = true;
+
+        const ffsRadio = document.querySelector(`input[name="ffs"][value="${state.filters.fulfillment_status || ''}"]`);
+        if (ffsRadio) ffsRadio.checked = true;
+
+        const noteRadio = document.querySelector(`input[name="note"][value="${state.filters.has_note || ''}"]`);
+        if (noteRadio) noteRadio.checked = true;
+
         elements.filters.stores.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = state.filters.store_ids.includes(cb.value));
-        allColumns.forEach(col => document.querySelector(`input[name="col-${col.key}"]`).checked = !state.hiddenColumns.includes(col.key));
+        
+        allColumns.forEach(col => {
+            const checkbox = document.querySelector(`input[name="col-${col.key}"]`);
+            if (checkbox) {
+                checkbox.checked = !state.hiddenColumns.includes(col.key);
+            }
+        });
     };
 
     const addSortEventListeners = () => {
@@ -177,12 +200,10 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     
     const initializeDashboard = async () => {
-        // Populate column visibility filter
         allColumns.forEach(col => {
             elements.filters.columns.innerHTML += `<li><label><input type="checkbox" name="col-${col.key}" value="${col.key}"> ${col.label}</label></li>`;
         });
         
-        // Populate stores filter
         try {
             const response = await fetch(API_ENDPOINTS.getStores);
             const stores = await response.json();
@@ -199,11 +220,22 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // --- Event Listeners ---
     ['search', 'tags', 'startDate', 'endDate'].forEach(key => {
-        elements.filters[key].addEventListener('input', () => { state.filters[key.replace('-', '_')] = elements.filters[key].value; state.page = 1; fetchAndRender(); });
+        elements.filters[key].addEventListener('input', () => {
+            const filterKeyMapping = { 'startDate': 'start_date', 'endDate': 'end_date' };
+            const filterKey = filterKeyMapping[key] || key;
+            state.filters[filterKey] = elements.filters[key].value;
+            state.page = 1;
+            fetchAndRender();
+        });
     });
     
     ['financialStatus', 'fulfillmentStatus', 'hasNote'].forEach(key => {
-        elements.filters[key].addEventListener('change', (e) => { state.filters[key.replace('Status', '_status')] = e.target.value; state.page = 1; fetchAndRender(); });
+        elements.filters[key].addEventListener('change', (e) => {
+            const filterKeyMapping = { 'financialStatus': 'financial_status', 'fulfillmentStatus': 'fulfillment_status', 'hasNote': 'has_note' };
+            state.filters[filterKeyMapping[key]] = e.target.value;
+            state.page = 1;
+            fetchAndRender();
+        });
     });
     
     elements.filters.stores.addEventListener('change', () => {
@@ -213,20 +245,25 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     elements.filters.columns.addEventListener('change', () => {
-        state.hiddenColumns = allColumns.map(c => c.key).filter(key => !document.querySelector(`input[name="col-${key}"]`).checked);
-        fetchAndRender();
+        state.hiddenColumns = allColumns.map(c => c.key).filter(key => {
+            const checkbox = document.querySelector(`input[name="col-${key}"]`);
+            return checkbox && !checkbox.checked;
+        });
+        // This only affects rendering, no need to re-fetch from API
+        renderTable(JSON.parse(elements.tableContainer.dataset.orders || '[]'));
+        updateUrlFromState();
     });
 
     elements.filters.reset.addEventListener('click', () => {
-        history.pushState({}, '', window.location.pathname); // Clear URL params
-        updateStateFromUrl(); // Reset state object
+        history.pushState({}, '', window.location.pathname);
+        updateStateFromUrl();
         updateUiFromState();
         fetchAndRender();
     });
     
     elements.pagination.prev.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchAndRender(); } });
     elements.pagination.next.addEventListener('click', () => { if ((state.page * state.limit) < state.totalCount) { state.page++; fetchAndRender(); } });
-    window.addEventListener('popstate', () => { initializeDashboard(); }); // Handle browser back/forward
+    window.addEventListener('popstate', () => { initializeDashboard(); });
 
     initializeDashboard();
 });
