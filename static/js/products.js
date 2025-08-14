@@ -53,11 +53,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 <tr>
                     <th>Product (Status)</th><th>Variant Title</th><th>SKU</th><th>Barcode</th>
                     <th>Price</th><th>Compare At</th><th>Cost</th><th>Available Qty</th><th>On Hand Qty</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
                 ${variants.map(v => `
-                    <tr data-variant-id="${v.id}">
+                    <tr data-variant-id="${v.id}" data-product-id="${v.product_id_db}">
                         <td>
                             ${v.product_title}<br>
                             <small class="status-${(v.product_status || 'unknown').toLowerCase()}">${v.product_status}</small>
@@ -70,6 +71,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${createEditableCell(v, 'cost', 'text')}
                         ${createEditableCell(v, 'available', 'number', v.inventory_management !== 'shopify', v.available_quantity)}
                         ${createEditableCell(v, 'onHand', 'number', v.inventory_management !== 'shopify', v.on_hand_quantity)}
+                        <td>
+                            <a href="/mutations?id=${v.product_id_db}" role="button" class="outline">Edit Product</a>
+                        </td>
                     </tr>
                 `).join('')}
             </tbody>`;
@@ -103,7 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const payload = {
             variant_id: parseInt(variantId, 10),
             field: field,
-            value: input.type === 'number' ? (value === '' ? null : parseInt(value, 10)) : value
+            value: input.type === 'number' ? (value === '' ? null : parseFloat(value)) : value
         };
         
         button.setAttribute('aria-busy', 'true');

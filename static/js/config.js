@@ -15,5 +15,9 @@ const API_ENDPOINTS = {
     setPrimaryVariant: '/api/inventory/set-primary-variant',
     setInventoryQuantity: '/api/inventory/set_quantity',
     addInventoryQuantity: '/api/inventory/add_quantity',
-    subtractInventoryQuantity: '/api/inventory/subtract_quantity'
+    subtractInventoryQuantity: '/api/inventory/subtract_quantity',
+
+    // ADDED for mutations page
+    getProduct: (productId) => `/api/mutations/product/${productId}`,
+    updateProduct: (productId) => `/api/mutations/product/${productId}`
 };

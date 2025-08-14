@@ -1,1 +1,56 @@
-# main.pyimport osimport sysfrom pathlib import Pathfrom fastapi import FastAPI, Requestfrom fastapi.staticfiles import StaticFilesfrom fastapi.templating import Jinja2Templatesfrom fastapi.responses import HTMLResponse, RedirectResponsefrom dotenv import load_dotenvROOT_DIR = Path(__file__).resolve().parentsys.path.append(str(ROOT_DIR))from database import engine, Base# CORRECTED: Import inventory instead of productsfrom routes import orders, dashboard, inventory, productsBase.metadata.create_all(bind=engine)load_dotenv()app = FastAPI(    title="Inventory Intelligence Platform",    description="A central hub for managing inventory and orders from multiple Shopify stores.",    version="1.0.0")app.mount("/static", StaticFiles(directory="static"), name="static")templates = Jinja2Templates(directory="static")app.include_router(orders.router, prefix="/api")app.include_router(dashboard.router, prefix="/api/dashboard")# CORRECTED: Use the new inventory routerapp.include_router(inventory.router, prefix="/api/inventory")@app.get("/", response_class=RedirectResponse, include_in_schema=False)async def read_root():    return RedirectResponse(url="/dashboard")@app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)async def get_dashboard_page(request: Request):    return templates.TemplateResponse("dashboard.html", {"request": request})@app.get("/products", response_class=HTMLResponse, include_in_schema=False)async def get_products_page(request: Request):    return templates.TemplateResponse("products.html", {"request": request})# ADDED: New route to serve the inventory.html page@app.get("/inventory", response_class=HTMLResponse, include_in_schema=False)async def get_inventory_page(request: Request):    return templates.TemplateResponse("inventory.html", {"request": request})
+# main.py
+
+import os
+import sys
+from pathlib import Path
+from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse, RedirectResponse
+from dotenv import load_dotenv
+
+ROOT_DIR = Path(__file__).resolve().parent
+sys.path.append(str(ROOT_DIR))
+
+from database import engine, Base
+# CORRECTED: Import all routers
+from routes import orders, dashboard, inventory, products, mutations
+
+Base.metadata.create_all(bind=engine)
+load_dotenv()
+
+app = FastAPI(
+    title="Inventory Intelligence Platform",
+    description="A central hub for managing inventory and orders from multiple Shopify stores.",
+    version="1.0.0"
+)
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="static")
+
+# Include all routers
+app.include_router(orders.router, prefix="/api")
+app.include_router(dashboard.router, prefix="/api/dashboard")
+app.include_router(inventory.router, prefix="/api/inventory")
+app.include_router(mutations.router) # ADDED
+
+@app.get("/", response_class=RedirectResponse, include_in_schema=False)
+async def read_root():
+    return RedirectResponse(url="/dashboard")
+
+@app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
+async def get_dashboard_page(request: Request):
+    return templates.TemplateResponse("dashboard.html", {"request": request})
+
+@app.get("/products", response_class=HTMLResponse, include_in_schema=False)
+async def get_products_page(request: Request):
+    return templates.TemplateResponse("products.html", {"request": request})
+
+@app.get("/inventory", response_class=HTMLResponse, include_in_schema=False)
+async def get_inventory_page(request: Request):
+    return templates.TemplateResponse("inventory.html", {"request": request})
+
+# ADDED: New route to serve the mutations.html page
+@app.get("/mutations", response_class=HTMLResponse, include_in_schema=False)
+async def get_mutations_page(request: Request):
+    return templates.TemplateResponse("mutations.html", {"request": request})
