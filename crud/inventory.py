@@ -188,8 +188,11 @@ def get_inventory_report(
 
         return {"total_count": total_count, "inventory": inventory_list}
 
-def get_inventory_by_store(db, store_id: int):
+def get_inventory_by_store(db: Session, store_id: int):
     """
     Returns all inventory items for a given store_id.
     """
-    return db.query(models.ProductVariant).filter(models.ProductVariant.store_id == store_id).all()
+    return db.query(models.ProductVariant)\
+        .join(models.Product, models.ProductVariant.product_id == models.Product.id)\
+        .filter(models.Product.store_id == store_id)\
+        .all()
