@@ -1,77 +1,68 @@
-/* --- New Dashboard V2 Styles --- */
-.filter-bar {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-}
-
-.filter-row {
+/* --- New Responsive Dashboard Layout --- */
+.dashboard-layout {
     display: flex;
     flex-wrap: wrap;
-    align-items: flex-end;
-    gap: 1rem;
+    gap: 1.5rem;
 }
 
-.metric-group {
-    display: flex;
-    gap: 1.5rem;
-    flex-grow: 1;
+#filter-controls-wrapper {
+    /* On large screens, this is a fixed-width sidebar */
+    flex: 0 0 350px; /* Does not grow, does not shrink, base width is 350px */
+}
+
+#orders-table-wrapper {
+    /* This takes up all remaining space */
+    flex: 1;
+    min-width: 0; /* Important for flexbox to allow shrinking */
+}
+
+.filter-bar {
+    padding: 1rem;
+    position: sticky; /* Makes the filter bar stick on scroll */
+    top: 1.5rem;
+}
+
+#metrics-container.grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
 }
 
 .metric {
-    background-color: var(--card-background-color);
-    padding: 0.5rem 1rem;
-    border-radius: var(--border-radius);
+    padding: 0.75rem;
     text-align: center;
-    border: 1px solid var(--card-border-color);
-}
-
-.metric h4, .metric p {
-    margin: 0;
-    line-height: 1.2;
 }
 
 .metric h4 {
-    font-size: 1.5rem;
+    font-size: 1.2rem;
+    margin-bottom: 0.25rem;
 }
-
-.search-group {
-    min-width: 300px;
-}
-
-.dropdown {
-    flex-grow: 1;
-}
-
-.dropdown summary {
-    background-color: var(--card-background-color);
-    border: 1px solid var(--card-border-color);
-}
-
-.dropdown ul {
-    background-color: var(--card-background-color);
-    border: 1px solid var(--card-border-color);
-    padding: 0.5rem;
-    max-height: 250px;
-    overflow-y: auto;
-}
-
-.dropdown li {
-    padding: 0.25rem;
-}
-
-.date-label {
-    font-size: 0.8em;
-    margin-bottom: 0;
+.metric p {
+    font-size: 0.8rem;
+    margin: 0;
     color: var(--muted-color);
 }
 
-.pagination-controls {
-    grid-template-columns: 1fr auto 1fr;
+.filter-bar hr {
+    margin: 1rem 0;
 }
 
-td .status-paid { color: #388e3c; }
-td .status-pending { color: #f57c00; }
-td .status-voided { color: #546e7a; }
-td .status-refunded { color: #d32f2f; }
+.dropdown ul {
+    max-height: 200px;
+}
+
+/* --- Mobile & Tablet Responsiveness --- */
+@media (max-width: 992px) {
+    .dashboard-layout {
+        /* On smaller screens, stack the columns */
+        flex-direction: column;
+    }
+    
+    #filter-controls-wrapper {
+        flex: 1 1 100%; /* Allow it to take full width */
+        position: static; /* Unstick the filter bar */
+    }
+
+    .filter-bar {
+        padding: 0;
+    }
+}
