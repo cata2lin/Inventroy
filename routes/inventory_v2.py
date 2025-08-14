@@ -21,7 +21,7 @@ def get_inventory_report_data(
     search: Optional[str] = None,
     product_type: Optional[str] = None,
     category: Optional[str] = None,
-    status: Optional[str] = None, # ADDED
+    status: Optional[str] = None,
     min_retail: Optional[float] = None,
     max_retail: Optional[float] = None,
     min_inventory: Optional[float] = None,

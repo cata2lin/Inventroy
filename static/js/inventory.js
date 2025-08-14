@@ -212,8 +212,8 @@ document.addEventListener('DOMContentLoaded', () => {
             ]);
             const filterData = await filterResp.json();
             const storeData = await storeResp.json();
-            data.types.forEach(t => elements.filters.type.add(new Option(t, t)));
-            data.categories.forEach(c => elements.filters.category.add(new Option(c, c)));
+            filterData.types.forEach(t => elements.filters.type.add(new Option(t, t)));
+            filterData.categories.forEach(c => elements.filters.category.add(new Option(c, c)));
             storeData.forEach(s => elements.filters.store.add(new Option(s.name, s.id)));
         } catch (error) { console.error("Could not load filter options:", error); }
 
@@ -224,27 +224,31 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         elements.filters.groupToggle.checked = state.view === 'grouped';
 
+        // --- FIXED: Use a more specific and robust way to add listeners ---
         const setupEventListeners = () => {
-            for (const [key, el] of Object.entries(elements.filters)) {
-                el.addEventListener('input', (e) => {
-                    if (key === 'groupToggle') state.view = e.target.checked ? 'grouped' : 'individual';
-                    else if (key === 'reset') return;
-                    else {
-                        const filterKeyMap = {store: 'store_ids', type: 'product_type', minRetail: 'min_retail', maxRetail: 'max_retail', minInv: 'min_inventory', maxInv: 'max_inventory'};
-                        const filterKey = filterKeyMap[key] || key;
-                        state.filters[filterKey] = el.value;
-                    }
+            const filterMap = {
+                search: 'search', store: 'store_ids', type: 'product_type', category: 'category',
+                status: 'status', minRetail: 'min_retail', maxRetail: 'max_retail',
+                minInv: 'min_inventory', maxInv: 'max_inventory'
+            };
+            for (const [elKey, filterKey] of Object.entries(filterMap)) {
+                elements.filters[elKey].addEventListener('input', () => {
+                    state.filters[filterKey] = elements.filters[elKey].value;
                     state.page = 1;
                     fetchInventory();
                 });
             }
+            elements.filters.groupToggle.addEventListener('change', (e) => {
+                state.view = e.target.checked ? 'grouped' : 'individual';
+                state.page = 1;
+                fetchInventory();
+            });
+            elements.filters.reset.addEventListener('click', () => {
+                window.history.replaceState({}, '', window.location.pathname);
+                initialize();
+            });
         };
         setupEventListeners();
-        
-        elements.filters.reset.addEventListener('click', () => {
-            window.history.replaceState({}, '', window.location.pathname);
-            initialize();
-        });
         
         elements.pagination.prev.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchInventory(); }});
         elements.pagination.next.addEventListener('click', () => { if ((state.page * 50) < state.totalCount) { state.page++; fetchInventory(); }});
