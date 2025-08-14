@@ -16,8 +16,8 @@ def get_orders_for_dashboard(
     end_date: Optional[str] = None,
     financial_status: Optional[str] = None,
     fulfillment_status: Optional[str] = None,
-    has_note: Optional[bool] = None, # ADDED
-    tags: Optional[str] = None, # ADDED
+    has_note: Optional[bool] = None,
+    tags: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: str = 'created_at',
     sort_order: str = 'desc'
@@ -43,20 +43,11 @@ def get_orders_for_dashboard(
         query = query.filter(models.Order.financial_status == financial_status)
     if fulfillment_status:
         query = query.filter(models.Order.fulfillment_status == fulfillment_status)
-    
-    # --- NEW FILTERS ---
     if has_note is not None:
-        if has_note:
-            query = query.filter(models.Order.note.isnot(None))
-        else:
-            query = query.filter(models.Order.note.is_(None))
-            
+        query = query.filter(models.Order.note.isnot(None) if has_note else models.Order.note.is_(None))
     if tags:
-        # Assumes tags are stored as a comma-separated string in the database
-        search_tags = [tag.strip() for tag in tags.split(',')]
-        for tag in search_tags:
+        for tag in [t.strip() for t in tags.split(',')]:
             query = query.filter(models.Order.tags.ilike(f"%{tag}%"))
-
     if search:
         query = query.filter(models.Order.name.ilike(f"%{search}%"))
 
@@ -64,48 +55,28 @@ def get_orders_for_dashboard(
     aggregates_query = query.with_entities(
         func.count(models.Order.id).label("total_count"),
         func.sum(models.Order.total_price).label("total_value"),
-        func.sum(models.Order.total_shipping_price).label("total_shipping")
+        func.sum(models.Order.total_shipping_price).label("total_shipping"),
+        # Find the most common currency in the filtered set
+        func.mode().within_group(models.Order.currency).label("currency")
     )
     aggregates = aggregates_query.first()
 
     # --- SORTING ---
-    sort_column_map = {
-        'order_name': models.Order.name,
-        'created_at': models.Order.created_at,
-        'total_price': models.Order.total_price,
-        'financial_status': models.Order.financial_status,
-        'fulfillment_status': models.Order.fulfillment_status,
-        'store_name': 'store_name',
-        'note': models.Order.note
-    }
-    
+    sort_column_map = { 'order_name': models.Order.name, 'created_at': models.Order.created_at, 'total_price': models.Order.total_price, 'store_name': 'store_name' }
     sort_column = sort_column_map.get(sort_by, models.Order.created_at)
-    
     order_func = asc(sort_column) if sort_order.lower() == 'asc' else desc(sort_column)
     
     results = query.order_by(order_func.nulls_last()).offset(skip).limit(limit).all()
 
-    orders_list = []
-    for order, store_name in results:
-        order_dict = {
-            "id": order.id,
-            "name": order.name,
-            "created_at": order.created_at,
-            "financial_status": order.financial_status,
-            "fulfillment_status": order.fulfillment_status,
-            "total_price": order.total_price,
-            "currency": order.currency,
-            "store_name": store_name,
-            "cancelled": order.cancelled_at is not None, # ADDED
-            "cancel_reason": order.cancel_reason, # ADDED
-            "note": order.note, # ADDED
-            "tags": order.tags, # ADDED
-        }
-        orders_list.append(order_dict)
+    orders_list = [
+        {**order.__dict__, "store_name": store_name, "cancelled": order.cancelled_at is not None}
+        for order, store_name in results
+    ]
 
     return {
         "total_count": aggregates.total_count or 0,
         "total_value": float(aggregates.total_value or 0),
         "total_shipping": float(aggregates.total_shipping or 0),
+        "currency": aggregates.currency or "RON", # Default to RON
         "orders": orders_list
     }
