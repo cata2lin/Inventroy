@@ -39,15 +39,16 @@ main.container-fluid {
     margin-bottom: 0;
 }
 
-/* FIXED: This rule now correctly provides a solid background for ALL dropdowns */
-.dropdown[open] > ul {
+/* FIXED: This combined rule ensures ALL dropdown panels have a solid, opaque background */
+.dropdown[open] > ul,
+.dropdown-checklist[open] > div {
     position: absolute;
     z-index: 1000;
     top: 100%;
     left: 0;
     margin-top: 0.25rem;
     padding: 0.75rem;
-    background: var(--card-background-color); /* This provides the solid color */
+    background: var(--card-background-color); /* This is the key property for the solid background */
     border: 1px solid var(--card-border-color);
     border-radius: var(--border-radius);
     box-shadow: var(--pico-box-shadow);
@@ -59,6 +60,16 @@ main.container-fluid {
 
 .dropdown li label { padding: 0.2rem; display: block; }
 .dropdown input[type="radio"], .dropdown input[type="checkbox"] { margin-right: 0.5em; }
+
+.dropdown-checklist label {
+    display: block;
+    padding: 0.2rem 0;
+    white-space: nowrap;
+}
+.dropdown-checklist input[type="checkbox"] {
+    margin-right: 0.5rem;
+}
+
 
 /* --- Table Styling --- */
 #orders-table-container, #inventory-table-container { padding: 0; }
