@@ -39,18 +39,17 @@ main.container-fluid {
     margin-bottom: 0;
 }
 
-/* FIXED: This rule ensures all dropdown panels are opaque */
-.dropdown[open] > ul,
-.dropdown-checklist[open] > div {
+/* FIXED: Unified, opaque style for all dropdowns */
+.dropdown[open] > ul {
     position: absolute;
     z-index: 1000;
     top: 100%;
     left: 0;
     margin-top: 0.25rem;
     padding: 0.75rem;
-    background: var(--pico-card-background-color); /* This provides the solid background */
-    border: 1px solid var(--pico-card-border-color);
-    border-radius: var(--pico-border-radius);
+    background: var(--card-background-color);
+    border: 1px solid var(--card-border-color);
+    border-radius: var(--border-radius);
     box-shadow: var(--pico-box-shadow);
     width: max-content;
     min-width: 200px;
@@ -60,15 +59,6 @@ main.container-fluid {
 
 .dropdown li label { padding: 0.2rem; display: block; }
 .dropdown input[type="radio"], .dropdown input[type="checkbox"] { margin-right: 0.5em; }
-
-.dropdown-checklist label {
-    display: block;
-    padding: 0.2rem 0;
-    white-space: nowrap;
-}
-.dropdown-checklist input[type="checkbox"] {
-    margin-right: 0.5rem;
-}
 
 /* --- Table Styling --- */
 #orders-table-container, #inventory-table-container { padding: 0; }
@@ -80,6 +70,28 @@ main.container-fluid {
     vertical-align: middle;
 }
 #orders-table-container th, #inventory-table-container th { white-space: nowrap; cursor: pointer; }
+
+/* ADDED: Sort indicators for table headers */
+th[data-sort-by] {
+    position: relative;
+    padding-right: 1.5em !important;
+}
+th[data-sort-by].asc::after,
+th[data-sort-by].desc::after {
+    position: absolute;
+    right: 0.5em;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 0.8em;
+    color: var(--pico-primary);
+}
+th[data-sort-by].asc::after {
+    content: '▲';
+}
+th[data-sort-by].desc::after {
+    content: '▼';
+}
+
 
 /* --- Grouped Inventory List View Styling --- */
 .grouped-item {
