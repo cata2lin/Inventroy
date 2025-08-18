@@ -1,6 +1,7 @@
 # crud/dashboard.py
 
 from sqlalchemy.orm import Session
+# MODIFIED: Imported func for SQL functions
 from sqlalchemy import func, desc, asc
 from typing import List, Optional
 from datetime import datetime, timedelta
@@ -24,11 +25,11 @@ def _get_filtered_query(db: Session, store_ids, start_date, end_date, financial_
         end_date_dt = datetime.fromisoformat(end_date) + timedelta(days=1)
         query = query.filter(models.Order.created_at < end_date_dt.isoformat())
     
-    # MODIFIED: Use the 'in_' operator for list-based filtering
+    # FIXED: Use func.lower() for case-insensitive filtering on status fields.
     if financial_status:
-        query = query.filter(models.Order.financial_status.in_(financial_status))
+        query = query.filter(func.lower(models.Order.financial_status).in_([fs.lower() for fs in financial_status]))
     if fulfillment_status:
-        query = query.filter(models.Order.fulfillment_status.in_(fulfillment_status))
+        query = query.filter(func.lower(models.Order.fulfillment_status).in_([fs.lower() for fs in fulfillment_status]))
         
     if has_note is not None:
         query = query.filter(models.Order.note.isnot(None) if has_note else models.Order.note.is_(None))
