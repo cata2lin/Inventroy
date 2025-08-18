@@ -39,7 +39,7 @@ main.container-fluid {
     margin-bottom: 0;
 }
 
-/* FIXED: Unified, opaque style for all dropdowns */
+/* FIXED: This rule now correctly provides a solid background for ALL dropdowns */
 .dropdown[open] > ul {
     position: absolute;
     z-index: 1000;
@@ -47,7 +47,7 @@ main.container-fluid {
     left: 0;
     margin-top: 0.25rem;
     padding: 0.75rem;
-    background: var(--card-background-color);
+    background: var(--card-background-color); /* This provides the solid color */
     border: 1px solid var(--card-border-color);
     border-radius: var(--border-radius);
     box-shadow: var(--pico-box-shadow);
@@ -71,7 +71,7 @@ main.container-fluid {
 }
 #orders-table-container th, #inventory-table-container th { white-space: nowrap; cursor: pointer; }
 
-/* ADDED: Sort indicators for table headers */
+/* Sort indicators for table headers */
 th[data-sort-by] {
     position: relative;
     padding-right: 1.5em !important;
