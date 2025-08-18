@@ -19,7 +19,9 @@ def get_dashboard_orders(
     skip: int = 0, limit: int = 50,
     store_ids: Optional[List[int]] = Query(None),
     start_date: Optional[str] = None, end_date: Optional[str] = None,
-    financial_status: Optional[str] = None, fulfillment_status: Optional[str] = None,
+    # MODIFIED: Changed from Optional[str] to Optional[List[str]]
+    financial_status: Optional[List[str]] = Query(None), 
+    fulfillment_status: Optional[List[str]] = Query(None),
     has_note: Optional[bool] = None, tags: Optional[str] = None, search: Optional[str] = None,
     sort_by: str = 'created_at', sort_order: str = 'desc',
     db: Session = Depends(get_db)
@@ -34,7 +36,9 @@ def get_dashboard_orders(
 def export_dashboard_orders(
     store_ids: Optional[List[int]] = Query(None),
     start_date: Optional[str] = None, end_date: Optional[str] = None,
-    financial_status: Optional[str] = None, fulfillment_status: Optional[str] = None,
+    # MODIFIED: Changed from Optional[str] to Optional[List[str]]
+    financial_status: Optional[List[str]] = Query(None), 
+    fulfillment_status: Optional[List[str]] = Query(None),
     has_note: Optional[bool] = None, tags: Optional[str] = None, search: Optional[str] = None,
     visible_columns: Optional[List[str]] = Query(None),
     db: Session = Depends(get_db)

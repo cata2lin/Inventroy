@@ -23,10 +23,13 @@ def _get_filtered_query(db: Session, store_ids, start_date, end_date, financial_
     if end_date:
         end_date_dt = datetime.fromisoformat(end_date) + timedelta(days=1)
         query = query.filter(models.Order.created_at < end_date_dt.isoformat())
+    
+    # MODIFIED: Use the 'in_' operator for list-based filtering
     if financial_status:
-        query = query.filter(models.Order.financial_status == financial_status)
+        query = query.filter(models.Order.financial_status.in_(financial_status))
     if fulfillment_status:
-        query = query.filter(models.Order.fulfillment_status == fulfillment_status)
+        query = query.filter(models.Order.fulfillment_status.in_(fulfillment_status))
+        
     if has_note is not None:
         query = query.filter(models.Order.note.isnot(None) if has_note else models.Order.note.is_(None))
     if tags:
@@ -41,7 +44,7 @@ def get_orders_for_dashboard(
     db: Session,
     skip: int = 0, limit: int = 50,
     store_ids: Optional[List[int]] = None, start_date: Optional[str] = None, end_date: Optional[str] = None,
-    financial_status: Optional[str] = None, fulfillment_status: Optional[str] = None,
+    financial_status: Optional[List[str]] = None, fulfillment_status: Optional[List[str]] = None,
     has_note: Optional[bool] = None, tags: Optional[str] = None, search: Optional[str] = None,
     sort_by: str = 'created_at', sort_order: str = 'desc'
 ):
@@ -76,7 +79,7 @@ def get_orders_for_dashboard(
 def export_orders_for_dashboard(
     db: Session,
     store_ids: Optional[List[int]] = None, start_date: Optional[str] = None, end_date: Optional[str] = None,
-    financial_status: Optional[str] = None, fulfillment_status: Optional[str] = None,
+    financial_status: Optional[List[str]] = None, fulfillment_status: Optional[List[str]] = None,
     has_note: Optional[bool] = None, tags: Optional[str] = None, search: Optional[str] = None,
     visible_columns: Optional[List[str]] = None
 ):

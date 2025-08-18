@@ -192,22 +192,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 search: params.get('search') || '',
                 tags: params.get('tags') || '',
                 store_ids: params.getAll('stores') || [],
-                financial_status: params.get('fs') || '',
-                fulfillment_status: params.get('ffs') || '',
+                // MODIFIED: Read multi-select filters from URL
+                financial_status: params.getAll('fs') || [],
+                fulfillment_status: params.getAll('ffs') || [],
                 has_note: params.get('note') || '',
                 start_date: params.get('start') || '',
                 end_date: params.get('end') || '',
             }
         };
         
+        // MODIFIED: Update form elements to reflect state
         elements.filters.search.value = state.filters.search;
         elements.filters.tags.value = state.filters.tags;
         elements.filters.startDate.value = state.filters.start_date;
         elements.filters.endDate.value = state.filters.end_date;
-        document.querySelector(`input[name="fs"][value="${state.filters.financial_status || ''}"]`).checked = true;
-        document.querySelector(`input[name="ffs"][value="${state.filters.fulfillment_status || ''}"]`).checked = true;
         document.querySelector(`input[name="note"][value="${state.filters.has_note || ''}"]`).checked = true;
+        
         elements.filters.stores.querySelectorAll('input').forEach(cb => cb.checked = state.filters.store_ids.includes(cb.value));
+        elements.filters.financialStatus.querySelectorAll('input').forEach(cb => cb.checked = state.filters.financial_status.includes(cb.value));
+        elements.filters.fulfillmentStatus.querySelectorAll('input').forEach(cb => cb.checked = state.filters.fulfillment_status.includes(cb.value));
+        
         allColumns.forEach(col => {
             const checkbox = document.querySelector(`input[name="col-${col.key}"]`);
             if (checkbox) checkbox.checked = !state.hiddenColumns.includes(col.key);
@@ -228,22 +232,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 fetchOrders();
             });
         });
-
-        // FIXED: Correctly listen for changes on the radio buttons
-        elements.filters.financialStatus.addEventListener('change', (e) => {
-            if (e.target.name === 'fs') {
-                state.filters.financial_status = e.target.value;
-                state.page = 1;
-                fetchOrders();
-            }
-        });
-        elements.filters.fulfillmentStatus.addEventListener('change', (e) => {
-            if (e.target.name === 'ffs') {
-                state.filters.fulfillment_status = e.target.value;
-                state.page = 1;
-                fetchOrders();
-            }
-        });
         elements.filters.hasNote.addEventListener('change', (e) => {
              if (e.target.name === 'note') {
                 state.filters.has_note = e.target.value;
@@ -252,11 +240,23 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        // MODIFIED: Event listeners for checkbox groups
+        elements.filters.financialStatus.addEventListener('change', () => {
+            state.filters.financial_status = Array.from(elements.filters.financialStatus.querySelectorAll('input:checked')).map(cb => cb.value);
+            state.page = 1;
+            fetchOrders();
+        });
+        elements.filters.fulfillmentStatus.addEventListener('change', () => {
+            state.filters.fulfillment_status = Array.from(elements.filters.fulfillmentStatus.querySelectorAll('input:checked')).map(cb => cb.value);
+            state.page = 1;
+            fetchOrders();
+        });
         elements.filters.stores.addEventListener('change', () => {
             state.filters.store_ids = Array.from(elements.filters.stores.querySelectorAll('input:checked')).map(cb => cb.value);
             state.page = 1;
             fetchOrders();
         });
+
         elements.columnModal.list.addEventListener('change', () => {
             state.hiddenColumns = allColumns.filter(c => !document.querySelector(`input[name="col-${c.key}"]`).checked).map(c => c.key);
             renderTable();
@@ -264,6 +264,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         elements.filters.reset.addEventListener('click', () => {
             window.history.pushState({}, '', window.location.pathname);
+            // Re-initialize to clear state and form
             initialize();
         });
         elements.filters.export.addEventListener('click', handleExport);
