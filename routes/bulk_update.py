@@ -83,7 +83,7 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 if product_changes:
                     service.update_product(product_gid=variant_db.product.shopify_gid, product_input={k: v for k, v in product_changes.items() if v is not None})
 
-                # 2. Variant and Inventory Item changes (sku, price, cost)
+                # 2. Variant and Inventory Item changes
                 variant_payload = {"id": variant_db.shopify_gid}
                 variant_fields_to_check = ["barcode", "price", "compareAtPrice", "cost"]
                 
@@ -109,9 +109,12 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                         if delta != 0:
                             service.adjust_inventory_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, available_delta=delta)
                     
-                    # FIXED: Call the correct service function to SET the on-hand quantity
+                    # FIXED: Calculate the delta for "onHand" and call the new, reliable service function
                     if 'onHand' in changes and changes['onHand'] is not None:
-                         service.set_on_hand_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, on_hand_quantity=int(changes['onHand']))
+                        current_on_hand = variant_db.inventory_levels[0].on_hand or 0
+                        on_hand_delta = int(changes['onHand']) - current_on_hand
+                        if on_hand_delta != 0:
+                            service.adjust_on_hand_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, on_hand_delta=on_hand_delta)
 
                 results["success"].append(f"Successfully updated variant ID {update_data.variant_id}")
 

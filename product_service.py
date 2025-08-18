@@ -71,35 +71,18 @@ class ProductService:
         MUTATION_UPDATE_PRODUCT = """
         mutation productUpdate($input: ProductInput!) {
           productUpdate(input: $input) {
-            product {
-              id
-              title
-              vendor
-              status
-              tags
-            }
-            userErrors {
-              field
-              message
-            }
+            product { id, title, vendor, status, tags }
+            userErrors { field, message }
           }
         }
         """
-        variables = {
-            "input": {
-                "id": product_gid,
-                **product_input
-            }
-        }
-        
+        variables = { "input": { "id": product_gid, **product_input } }
         print(f"Sending product update for {product_gid} with data: {product_input}")
         response_data = self._execute_mutation(MUTATION_UPDATE_PRODUCT, variables)
-        
         result = response_data.get("productUpdate", {})
         if result.get("userErrors"):
             error_message = ", ".join([f"{e['field']}: {e['message']}" for e in result["userErrors"]])
             raise ValueError(f"Shopify User Error: {error_message}")
-            
         return result.get("product", {})
 
     def update_variant_details(self, product_id: str, variant_updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -109,38 +92,18 @@ class ProductService:
         MUTATION_UPDATE_VARIANT = """
         mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
           productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-            productVariants {
-              id
-              title
-              sku
-              barcode
-              price
-              compareAtPrice
-              inventoryItem {
-                id
-              }
-            }
-            userErrors {
-              field
-              message
-            }
+            productVariants { id, title, sku, barcode, price, compareAtPrice, inventoryItem { id } }
+            userErrors { field, message }
           }
         }
         """
-        
-        variables = {
-            "productId": product_id,
-            "variants": [variant_updates]
-        }
-        
+        variables = { "productId": product_id, "variants": [variant_updates] }
         print(f"Sending variant update for {variant_updates.get('id')} to product {product_id} with data: {variant_updates}")
         response_data = self._execute_mutation(MUTATION_UPDATE_VARIANT, variables)
-        
         result = response_data.get("productVariantsBulkUpdate", {})
         if result.get("userErrors"):
             error_message = ", ".join([f"{e['field']}: {e['message']}" for e in result["userErrors"]])
             raise ValueError(f"Shopify User Error: {error_message}")
-            
         return result.get("productVariants", [{}])[0]
 
     def adjust_inventory_quantity(self, inventory_item_id: str, location_id: str, available_delta: int) -> Dict[str, Any]:
@@ -150,27 +113,15 @@ class ProductService:
         MUTATION_ADJUST_INVENTORY = """
         mutation inventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!) {
             inventoryAdjustQuantities(input: $input) {
-                inventoryAdjustmentGroup {
-                    id
-                    reason
-                }
-                userErrors {
-                    field
-                    message
-                }
+                inventoryAdjustmentGroup { id, reason }
+                userErrors { field, message }
             }
         }
         """
-
         variables = {
             "input": {
-                "reason": "correction",
-                "name": "available",
-                "changes": [{
-                    "inventoryItemId": inventory_item_id,
-                    "locationId": location_id,
-                    "delta": available_delta
-                }]
+                "reason": "correction", "name": "available",
+                "changes": [{"inventoryItemId": inventory_item_id, "locationId": location_id, "delta": available_delta}]
             }
         }
         print(f"Adjusting AVAILABLE inventory for item {inventory_item_id} at {location_id} by {available_delta}")
@@ -181,34 +132,32 @@ class ProductService:
             raise ValueError(f"Shopify Inventory Error: {error_message}")
         return result.get("inventoryAdjustmentGroup", {})
 
-    def set_on_hand_quantity(self, inventory_item_id: str, location_id: str, on_hand_quantity: int) -> Dict[str, Any]:
+    def adjust_on_hand_quantity(self, inventory_item_id: str, location_id: str, on_hand_delta: int) -> Dict[str, Any]:
         """
-        Sets the 'on hand' inventory quantity for an item at a location using inventorySetQuantities.
+        Adjusts the 'on hand' inventory quantity for an inventory item at a location. This is the reliable method.
         """
-        MUTATION_SET_ON_HAND = """
-        mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
-            inventorySetQuantities(input: $input) {
+        MUTATION_ADJUST_ON_HAND = """
+        mutation inventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!) {
+            inventoryAdjustQuantities(input: $input) {
                 inventoryAdjustmentGroup { id }
-                userErrors { field message }
+                userErrors { field, message }
             }
         }
         """
         variables = {
             "input": {
                 "reason": "correction",
-                "setQuantities": [{
+                "name": "on_hand",
+                "changes": [{
                     "inventoryItemId": inventory_item_id,
                     "locationId": location_id,
-                    "quantities": [{
-                        "name": "on_hand",
-                        "quantity": on_hand_quantity
-                    }]
+                    "delta": on_hand_delta
                 }]
             }
         }
-        print(f"Setting ON HAND inventory for item {inventory_item_id} at {location_id} to {on_hand_quantity}")
-        response_data = self._execute_mutation(MUTATION_SET_ON_HAND, variables)
-        result = response_data.get("inventorySetQuantities", {})
+        print(f"Adjusting ON HAND inventory for item {inventory_item_id} at {location_id} by {on_hand_delta}")
+        response_data = self._execute_mutation(MUTATION_ADJUST_ON_HAND, variables)
+        result = response_data.get("inventoryAdjustQuantities", {})
         if result.get("userErrors"):
             error_message = ", ".join([f"{e['field']}: {e['message']}" for e in result["userErrors"]])
             raise ValueError(f"Shopify Inventory Error: {error_message}")
