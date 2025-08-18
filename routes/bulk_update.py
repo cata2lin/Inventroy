@@ -109,12 +109,9 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                         if delta != 0:
                             service.adjust_inventory_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, available_delta=delta)
                     
-                    # FIXED: Now calculates the delta and calls the reliable 'adjust_on_hand_quantity'
+                    # FIXED: Now calls the correct 'set_on_hand_quantity' function
                     if 'onHand' in changes and changes['onHand'] is not None:
-                        current_on_hand = variant_db.inventory_levels[0].on_hand or 0
-                        on_hand_delta = int(changes['onHand']) - current_on_hand
-                        if on_hand_delta != 0:
-                            service.adjust_on_hand_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, on_hand_delta=on_hand_delta)
+                         service.set_on_hand_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, on_hand_quantity=int(changes['onHand']))
 
                 results["success"].append(f"Successfully updated variant ID {update_data.variant_id}")
 
