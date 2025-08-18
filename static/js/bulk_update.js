@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let allVariants = [];
     let currentView = 'individual';
-    let sortState = { key: 'product_title', order: 'asc' }; // Initial sort state
+    let sortState = { key: 'product_title', order: 'asc' };
 
     // --- Utility Functions ---
     const showToast = (message, type = 'info', duration = 5000) => {
@@ -51,39 +51,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Rendering Logic ---
     const render = () => {
-        // 1. Filtering
         const searchTerm = elements.searchInput.value.toLowerCase();
         const selectedStore = elements.storeFilter.value;
         const selectedType = elements.typeFilter.value;
 
         let filteredVariants = allVariants.filter(v => {
+            // MODIFIED: Added SKU to the search filter
             const matchesSearch = !searchTerm || 
                 v.product_title.toLowerCase().includes(searchTerm) || 
+                (v.sku && v.sku.toLowerCase().includes(searchTerm)) ||
                 (v.barcode && v.barcode.toLowerCase().includes(searchTerm));
             const matchesStore = !selectedStore || v.store_name === selectedStore;
             const matchesType = !selectedType || v.product_type === selectedType;
             return matchesSearch && matchesStore && matchesType;
         });
 
-        // 2. Sorting (only for individual view)
         if (currentView === 'individual') {
             filteredVariants.sort((a, b) => {
                 const valA = a[sortState.key];
                 const valB = b[sortState.key];
                 if (valA === null || valA === undefined) return 1;
                 if (valB === null || valB === undefined) return -1;
-
                 if (typeof valA === 'string') {
-                    return sortState.order === 'asc' 
-                        ? valA.localeCompare(valB) 
-                        : valB.localeCompare(valA);
+                    return sortState.order === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
                 } else {
                     return sortState.order === 'asc' ? valA - valB : valB - valA;
                 }
             });
         }
 
-        // 3. Displaying
         if (currentView === 'grouped') {
             renderGroupedView(filteredVariants);
         } else {
@@ -92,7 +88,9 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const renderIndividualView = (variantsToRender) => {
+        // MODIFIED: Added SKU to the table headers
         const tableHeaders = [
+            { key: 'sku', label: 'SKU' },
             { key: 'product_title', label: 'Product' },
             { key: 'barcode', label: 'Barcode' },
             { key: 'product_type', label: 'Type' },
@@ -115,7 +113,7 @@ document.addEventListener('DOMContentLoaded', () => {
                       </tr></thead><tbody>`;
 
         if (variantsToRender.length === 0) {
-            tableHtml += '<tr><td colspan="10">No products match the current filters.</td></tr>';
+            tableHtml += '<tr><td colspan="11">No products match the current filters.</td></tr>';
         } else {
             variantsToRender.forEach(v => {
                 tableHtml += `<tr data-variant-id="${v.variant_id}" data-store-id="${v.store_id}">

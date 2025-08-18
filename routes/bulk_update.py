@@ -85,7 +85,8 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
 
                 # 2. Variant and Inventory Item changes
                 variant_payload = {"id": variant_db.shopify_gid}
-                variant_fields_to_check = ["barcode", "price", "compareAtPrice", "cost"]
+                # MODIFIED: Added 'sku' back to the list of updatable fields
+                variant_fields_to_check = ["sku", "barcode", "price", "compareAtPrice", "cost"]
                 
                 for field in variant_fields_to_check:
                     if field in changes:
@@ -103,14 +104,12 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 inventory_item_gid = f"gid://shopify/InventoryItem/{variant_db.inventory_item_id}"
                 
                 if location_gid:
-                    # 'available' is adjusted directly
                     if 'available' in changes and changes['available'] is not None:
                         current_qty = variant_db.inventory_levels[0].available or 0
                         delta = int(changes['available']) - current_qty
                         if delta != 0:
                             service.adjust_inventory_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, available_delta=delta)
                     
-                    # FIXED: 'onHand' now calculates a delta and uses the reliable adjustment method
                     if 'onHand' in changes and changes['onHand'] is not None:
                         current_on_hand = variant_db.inventory_levels[0].on_hand or 0
                         on_hand_delta = int(changes['onHand']) - current_on_hand
