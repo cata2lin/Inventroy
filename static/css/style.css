@@ -88,7 +88,7 @@ main.container-fluid {
     align-items: center;
     grid-template-columns: 60px 3fr 1fr 1fr 1fr;
     gap: 1rem;
-    max-height: 50px; /* FIXED: Enforce max height */
+    max-height: 50px;
     height: 50px;
 }
 .grouped-item img {
@@ -110,14 +110,15 @@ main.container-fluid {
 }
 
 /* --- Column Width Control --- */
-[data-column-key="order_name"] { width: 10%; }
-[data-column-key="store_name"] { width: 12%; }
+[data-column-key="order_name"] { width: 9%; }
+[data-column-key="store_name"] { width: 10%; }
 [data-column-key="created_at"] { width: 8%; }
-[data-column-key="total_price"] { width: 10%; }
+[data-column-key="total_price"] { width: 9%; }
+[data-column-key="financial_status"] { width: 10%; }
 [data-column-key="fulfillment_status"] { width: 10%; }
-[data-column-key="cancelled"] { width: 15%; }
-[data-column-key="note"] { width: 17.5%; }
-[data-column-key="tags"] { width: 17.5%; }
+[data-column-key="cancelled"] { width: 12%; }
+[data-column-key="note"] { width: 16%; }
+[data-column-key="tags"] { width: 16%; }
 
 .truncate-text {
     white-space: nowrap;

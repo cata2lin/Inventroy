@@ -34,6 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const allColumns = [
         { key: 'order_name', label: 'Order' }, { key: 'store_name', label: 'Store' },
         { key: 'created_at', label: 'Date' }, { key: 'total_price', label: 'Total' },
+        { key: 'financial_status', label: 'Financial Status' },
         { key: 'fulfillment_status', label: 'Fulfillment' }, { key: 'cancelled', label: 'Cancelled' },
         { key: 'note', label: 'Note' }, { key: 'tags', label: 'Tags' },
     ];
@@ -132,6 +133,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     case 'store_name': content = order.store_name || ''; break;
                     case 'created_at': content = new Date(order.created_at).toLocaleDateString(); break;
                     case 'total_price': content = `${(order.total_price || 0).toLocaleString('ro-RO')} ${order.currency || ''}`; break;
+                    case 'financial_status': content = `<span class="status-${(order.financial_status || '').toLowerCase()}">${order.financial_status || 'N/A'}</span>`; break;
                     case 'fulfillment_status': content = `<span class="status-${(order.fulfillment_status || '').toLowerCase()}">${order.fulfillment_status || 'N/A'}</span>`; break;
                     case 'cancelled': content = `<span class="${order.cancelled ? 'status-cancelled' : ''}">${order.cancelled ? `Yes (${order.cancel_reason || 'N/A'})` : 'No'}</span>`; break;
                     case 'note': content = `<div class="truncate-text" title="${order.note || ''}">${order.note || ''}</div>`; break;
