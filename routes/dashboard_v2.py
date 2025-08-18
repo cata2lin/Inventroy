@@ -1,6 +1,6 @@
 # routes/dashboard_v2.py
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -44,13 +44,8 @@ def export_dashboard_orders(
         financial_status=financial_status, fulfillment_status=fulfillment_status,
         has_note=has_note, tags=tags, search=search, visible_columns=visible_columns
     )
-
     if excel_data is None:
-        return StreamingResponse(
-            iter([b"No data to export for the selected filters."]),
-            media_type="text/plain",
-            headers={"Content-Disposition": "attachment; filename=no_data.txt"}
-        )
+        return StreamingResponse(iter([b"No data to export."]), media_type="text/plain")
 
     return StreamingResponse(
         iter([excel_data]),

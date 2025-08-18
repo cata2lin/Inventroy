@@ -55,7 +55,12 @@ def get_orders_for_dashboard(
     )
     aggregates = aggregates_query.first()
 
-    sort_column_map = {'order_name': models.Order.name, 'created_at': models.Order.created_at, 'total_price': models.Order.total_price, 'store_name': 'store_name'}
+    sort_column_map = {
+        'order_name': models.Order.name, 'store_name': 'store_name', 'created_at': models.Order.created_at,
+        'total_price': models.Order.total_price, 'financial_status': models.Order.financial_status,
+        'fulfillment_status': models.Order.fulfillment_status, 'cancelled': models.Order.cancelled_at,
+        'note': models.Order.note, 'tags': models.Order.tags
+    }
     sort_column = sort_column_map.get(sort_by, models.Order.created_at)
     order_func = asc(sort_column) if sort_order.lower() == 'asc' else desc(sort_column)
     
@@ -81,14 +86,10 @@ def export_orders_for_dashboard(
     data_to_export = []
     for order, store_name in results:
         data_to_export.append({
-            "Order": order.name,
-            "Store": store_name,
-            "Date": order.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-            "Total": f"{order.total_price} {order.currency}",
-            "Fulfillment": order.fulfillment_status,
-            "Cancelled": f"Yes ({order.cancel_reason})" if order.cancelled_at else "No",
-            "Note": order.note,
-            "Tags": order.tags
+            "Order": order.name, "Store": store_name, "Date": order.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            "Total": f"{order.total_price} {order.currency}", "Financial Status": order.financial_status,
+            "Fulfillment": order.fulfillment_status, "Cancelled": f"Yes ({order.cancel_reason})" if order.cancelled_at else "No",
+            "Note": order.note, "Tags": order.tags
         })
 
     if not data_to_export:
@@ -98,13 +99,11 @@ def export_orders_for_dashboard(
     
     column_map = {
         'order_name': 'Order', 'store_name': 'Store', 'created_at': 'Date', 'total_price': 'Total',
-        'fulfillment_status': 'Fulfillment', 'cancelled': 'Cancelled', 'note': 'Note', 'tags': 'Tags'
+        'financial_status': 'Financial Status', 'fulfillment_status': 'Fulfillment',
+        'cancelled': 'Cancelled', 'note': 'Note', 'tags': 'Tags'
     }
     
-    # Use all columns if none are specified, otherwise use the visible ones
     df_columns = [column_map[col] for col in visible_columns if col in column_map] if visible_columns else list(column_map.values())
-    
-    # Ensure the columns exist in the DataFrame before selecting them
     df_columns_exist = [col for col in df_columns if col in df.columns]
     df = df[df_columns_exist]
 
