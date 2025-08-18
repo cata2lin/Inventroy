@@ -149,10 +149,10 @@ class ProductService:
         variables = {
             "input": {
                 "reason": "correction",
-                "quantities": [{
+                "name": "on_hand",
+                "setQuantities": [{
                     "inventoryItemId": inventory_item_id,
                     "locationId": location_id,
-                    "name": "on_hand",
                     "quantity": on_hand_quantity
                 }]
             }
