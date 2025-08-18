@@ -183,19 +183,13 @@ class ProductService:
 
     def set_on_hand_quantity(self, inventory_item_id: str, location_id: str, on_hand_quantity: int) -> Dict[str, Any]:
         """
-        Sets the 'on hand' inventory quantity for an inventory item at a location.
+        Sets the 'on hand' inventory quantity for an item at a location using inventorySetQuantities.
         """
         MUTATION_SET_ON_HAND = """
-        mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
-            inventorySetOnHandQuantities(input: $input) {
-                inventoryAdjustmentGroup {
-                    id
-                    reason
-                }
-                userErrors {
-                    field
-                    message
-                }
+        mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
+            inventorySetQuantities(input: $input) {
+                inventoryAdjustmentGroup { id }
+                userErrors { field message }
             }
         }
         """
@@ -214,7 +208,7 @@ class ProductService:
         }
         print(f"Setting ON HAND inventory for item {inventory_item_id} at {location_id} to {on_hand_quantity}")
         response_data = self._execute_mutation(MUTATION_SET_ON_HAND, variables)
-        result = response_data.get("inventorySetOnHandQuantities", {})
+        result = response_data.get("inventorySetQuantities", {})
         if result.get("userErrors"):
             error_message = ", ".join([f"{e['field']}: {e['message']}" for e in result["userErrors"]])
             raise ValueError(f"Shopify Inventory Error: {error_message}")
