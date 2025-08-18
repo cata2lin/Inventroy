@@ -40,7 +40,6 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
     """
     results = {"success": [], "errors": []}
     
-    # Group updates by store to use one service instance per store
     updates_by_store: Dict[int, List[VariantUpdatePayload]] = {}
     for update in payload.updates:
         if update.store_id not in updates_by_store:
@@ -63,23 +62,37 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 continue
 
             try:
-                # Process product-level updates (title, type)
-                product_changes = {k: v for k, v in update_data.changes.items() if k in ["title", "productType"]}
+                # FIXED: Convert numeric values from strings to the correct types
+                changes = update_data.changes
+                numeric_fields_float = ['price', 'cost', 'compareAtPrice']
+                numeric_fields_int = ['onHand', 'available']
+
+                for field in numeric_fields_float:
+                    if field in changes and changes[field] is not None:
+                        changes[field] = float(changes[field])
+                for field in numeric_fields_int:
+                    if field in changes and changes[field] is not None:
+                        changes[field] = int(changes[field])
+
+                # Process product-level updates (product_title, product_type)
+                product_changes = {}
+                if 'product_title' in changes:
+                    product_changes['title'] = changes['product_title']
+                if 'product_type' in changes:
+                    product_changes['productType'] = changes['product_type']
+                
                 if product_changes:
-                    # Rename 'title' to 'title' for product update if present
-                    if 'title' in product_changes:
-                         product_changes['title'] = product_changes.pop('title')
                     service.update_product(product_gid=variant_db.product.shopify_gid, product_input=product_changes)
 
-                # Process variant-level updates (sku, barcode, price, compareAtPrice)
-                variant_changes = {k: v for k, v in update_data.changes.items() if k in ["sku", "barcode", "price", "compareAtPrice"]}
+                # Process variant-level updates (sku, barcode, price)
+                variant_changes = {k: v for k, v in changes.items() if k in ["sku", "barcode", "price"]}
                 if variant_changes:
                     variant_updates = {"id": variant_db.shopify_gid, **variant_changes}
                     service.update_variant_details(product_id=variant_db.product.shopify_gid, variant_updates=variant_updates)
 
                 # Process inventory item updates (cost)
-                if 'cost' in update_data.changes:
-                    cost_update = {"id": variant_db.shopify_gid, "inventoryItem": {"cost": update_data.changes['cost']}}
+                if 'cost' in changes:
+                    cost_update = {"id": variant_db.shopify_gid, "inventoryItem": {"cost": changes['cost']}}
                     service.update_variant_details(product_id=variant_db.product.shopify_gid, variant_updates=cost_update)
 
                 # Process inventory level updates (available, onHand)
@@ -87,14 +100,14 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 inventory_item_gid = f"gid://shopify/InventoryItem/{variant_db.inventory_item_id}"
                 
                 if location_gid:
-                    if 'available' in update_data.changes:
+                    if 'available' in changes:
                         current_qty = variant_db.inventory_levels[0].available or 0
-                        delta = int(update_data.changes['available']) - current_qty
+                        delta = changes['available'] - current_qty
                         if delta != 0:
                             service.adjust_inventory_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, available_delta=delta)
                     
-                    if 'onHand' in update_data.changes:
-                         service.set_on_hand_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, on_hand_quantity=int(update_data.changes['onHand']))
+                    if 'onHand' in changes:
+                         service.set_on_hand_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, on_hand_quantity=changes['onHand'])
 
                 results["success"].append(f"Successfully updated variant ID {update_data.variant_id}")
 
@@ -102,7 +115,6 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 results["errors"].append(f"Failed to update variant ID {update_data.variant_id}: {str(e)}")
 
     if results["errors"]:
-        # Raise an exception if any updates failed to provide clear feedback
         raise HTTPException(status_code=400, detail={"message": "Some updates failed.", "details": results})
 
     return {"message": "Bulk update processed successfully.", "details": results}
