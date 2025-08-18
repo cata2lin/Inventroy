@@ -133,7 +133,7 @@ class ProductService:
             raise ValueError(f"Shopify Inventory Error: {error_message}")
         return result.get("inventoryAdjustmentGroup", {})
 
-    # FIXED: This function now uses the correct inventorySetQuantities mutation as required by the Shopify API.
+    # FIXED: This function now uses the correct inventorySetQuantities mutation and payload structure.
     def set_on_hand_quantity(self, inventory_item_id: str, location_id: str, on_hand_quantity: int) -> Dict[str, Any]:
         """
         Sets the 'on hand' inventory quantity for an item at a location using the correct mutation.
