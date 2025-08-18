@@ -8,7 +8,6 @@ def get_all_variants_for_bulk_edit(db: Session):
     Fetches a comprehensive list of all product variants from all stores,
     including all necessary related data for the bulk edit page.
     """
-    # FIXED: The ordering logic is now correct and compatible with SQLAlchemy.
     all_variants = db.query(models.ProductVariant).join(
         models.ProductVariant.product
     ).join(
@@ -22,7 +21,6 @@ def get_all_variants_for_bulk_edit(db: Session):
         models.ProductVariant.title
     ).all()
 
-    # Flatten the data into a list of dictionaries for easier frontend consumption
     variants_list = []
     for variant in all_variants:
         primary_inventory_level = variant.inventory_levels[0] if variant.inventory_levels else None
@@ -33,6 +31,8 @@ def get_all_variants_for_bulk_edit(db: Session):
             "store_id": variant.product.store.id,
             "store_name": variant.product.store.name,
             "product_title": variant.product.title,
+            # ADDED: Include the image URL
+            "image_url": variant.product.image_url, 
             "variant_title": variant.title,
             "sku": variant.sku,
             "barcode": variant.barcode,

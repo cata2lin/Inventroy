@@ -39,7 +39,6 @@ main.container-fluid {
     margin-bottom: 0;
 }
 
-/* FIXED: This rule FORCES a solid, opaque background on all expanded dropdowns */
 .dropdown[open] > ul {
     position: absolute;
     z-index: 1000;
@@ -47,7 +46,6 @@ main.container-fluid {
     left: 0;
     margin-top: 0.25rem;
     padding: 0.75rem;
-    /* Using a specific color and !important to override any conflicts */
     background: #28303d !important; 
     border: 1px solid var(--pico-card-border-color);
     border-radius: var(--pico-border-radius);
@@ -72,7 +70,6 @@ main.container-fluid {
 }
 #orders-table-container th, #inventory-table-container th { white-space: nowrap; cursor: pointer; }
 
-/* Sort indicators for table headers */
 th[data-sort-by] {
     position: relative;
     padding-right: 1.5em !important;
@@ -86,52 +83,72 @@ th[data-sort-by].desc::after {
     font-size: 0.8em;
     color: var(--pico-primary);
 }
-th[data-sort-by].asc::after {
-    content: '▲';
-}
-th[data-sort-by].desc::after {
-    content: '▼';
-}
+th[data-sort-by].asc::after { content: '▲'; }
+th[data-sort-by].desc::after { content: '▼'; }
 
-
-/* --- Grouped Inventory List View Styling --- */
+/* --- Grouped Inventory List View Styling (Also used by Bulk Update) --- */
 .grouped-item {
     background-color: var(--card-background-color);
     border-radius: var(--border-radius);
     margin-bottom: 0.5rem;
     border: 1px solid transparent;
 }
-.grouped-item[open] {
-    border-color: var(--card-border-color);
-}
-.grouped-item summary {
-    display: block;
-    cursor: pointer;
-    padding: 0.5rem;
-}
+.grouped-item[open] { border-color: var(--card-border-color); }
+.grouped-item summary { display: block; cursor: pointer; padding: 0.5rem; }
 .grouped-item summary > .grid {
     align-items: center;
-    grid-template-columns: 60px 3fr 1fr 1fr 1fr;
+    grid-template-columns: 60px 3fr 1fr 1fr; /* Adjusted for bulk update view */
     gap: 1rem;
-    max-height: 50px;
-    height: 50px;
+    min-height: 50px;
 }
-.grouped-item img {
-    width: 50px;
-    height: 50px;
-    object-fit: cover;
-    border-radius: var(--border-radius);
-}
-.grouped-item .product-info {
-    display: flex;
-    flex-direction: column;
-}
+.grouped-item img { width: 50px; height: 50px; object-fit: cover; border-radius: var(--border-radius); }
+.grouped-item .product-info { display: flex; flex-direction: column; }
 .grouped-item .variant-details {
     padding: 1rem;
     background-color: var(--card-sectioning-background-color);
-    border-bottom-left-radius: var(--border-radius);
-    border-bottom-right-radius: var(--border-radius);
+    border-radius: 0 0 var(--border-radius) var(--border-radius);
     margin-top: -0.5rem;
+}
+.quantity-display h2, .quantity-display p { margin: 0; text-align: center; }
+.quantity-display h2 { font-size: 1.2rem; }
+.quantity-display p { font-size: 0.7rem; color: var(--muted-color); }
+
+/* --- Bulk Update Page Specific Styles --- */
+.bulk-update-table {
+    font-size: 65%; /* 35% smaller text */
+    table-layout: auto;
+    width: 100%;
+}
+.bulk-update-table td, .bulk-update-table th {
+    height: 50px;
+    padding: 0.2rem 0.4rem;
+}
+.bulk-update-table img {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: var(--border-radius);
+}
+.bulk-update-table input[type="text"], 
+.bulk-update-table input[type="number"] {
+    width: 100%;
+    height: 100%;
+    border: 1px solid transparent;
+    background: transparent;
+    padding: 0 0.25rem;
+    font-size: 1em; /* Inherit from table */
+}
+.bulk-update-table input:focus {
+    border-color: var(--pico-primary);
+    background: var(--pico-form-element-background-color);
+}
+.bulk-update-table input.changed {
+    background-color: rgba(255, 204, 0, 0.1);
+    font-weight: bold;
+}
+#bulk-apply-row input {
+    font-size: 0.9em;
+    font-style: italic;
 }
 
 /* --- Column Width Control --- */

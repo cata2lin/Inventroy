@@ -30,10 +30,16 @@
             <div class="grid">
                 <button id="save-changes-btn" aria-busy="false">Save Changes</button>
                 <input type="search" id="search-input" placeholder="Filter products...">
+                <fieldset>
+                    <label for="group-toggle">
+                        <input type="checkbox" id="group-toggle" name="group-toggle" role="switch">
+                        Group by Barcode
+                    </label>
+                </fieldset>
             </div>
         </article>
 
-        <article id="bulk-update-container" class="overflow-auto" aria-busy="true">
+        <article id="bulk-update-container" aria-busy="true">
             <p>Loading products...</p>
         </article>
     </main>

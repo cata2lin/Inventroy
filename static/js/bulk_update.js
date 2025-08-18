@@ -6,10 +6,12 @@ document.addEventListener('DOMContentLoaded', () => {
         container: document.getElementById('bulk-update-container'),
         saveBtn: document.getElementById('save-changes-btn'),
         searchInput: document.getElementById('search-input'),
+        groupToggle: document.getElementById('group-toggle'),
         toast: document.getElementById('toast'),
     };
 
-    let allVariants = []; // To store the master list of variants
+    let allVariants = [];
+    let currentView = 'individual'; // 'individual' or 'grouped'
 
     // --- Utility Functions ---
     const showToast = (message, type = 'info', duration = 5000) => {
@@ -24,7 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch(API_ENDPOINTS.getAllVariantsForBulkEdit);
             if (!response.ok) throw new Error('Failed to fetch product variants.');
             allVariants = await response.json();
-            renderTable(allVariants);
+            render(); // Initial render
         } catch (error) {
             elements.container.innerHTML = `<p style="color: var(--pico-color-red-500);">${error.message}</p>`;
         } finally {
@@ -32,7 +34,22 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    const renderTable = (variantsToRender) => {
+    const render = () => {
+        const searchTerm = elements.searchInput.value.toLowerCase();
+        const filteredVariants = searchTerm ? allVariants.filter(v => 
+            v.product_title.toLowerCase().includes(searchTerm) ||
+            (v.sku && v.sku.toLowerCase().includes(searchTerm)) ||
+            (v.barcode && v.barcode.toLowerCase().includes(searchTerm))
+        ) : allVariants;
+
+        if (currentView === 'grouped') {
+            renderGroupedView(filteredVariants);
+        } else {
+            renderIndividualView(filteredVariants);
+        }
+    };
+
+    const renderIndividualView = (variantsToRender) => {
         const tableHeaders = [
             { key: 'product_title', label: 'Product', type: 'text' },
             { key: 'sku', label: 'SKU', type: 'text' },
@@ -45,55 +62,98 @@ document.addEventListener('DOMContentLoaded', () => {
         ];
 
         let tableHtml = `
-            <table>
+            <table class="bulk-update-table">
                 <thead>
                     <tr>
                         <th><input type="checkbox" id="select-all-checkbox"></th>
+                        <th>Image</th>
                         <th>Store</th>
                         ${tableHeaders.map(h => `<th>${h.label}</th>`).join('')}
                     </tr>
                     <tr id="bulk-apply-row">
                         <th></th>
                         <th></th>
-                        ${tableHeaders.map(h => `
-                            <td>
-                                <input type="${h.type}" placeholder="Apply to all selected..." data-bulk-apply-for="${h.key}">
-                            </td>
-                        `).join('')}
+                        <th></th>
+                        ${tableHeaders.map(h => `<td><input type="${h.type}" placeholder="Apply..." data-bulk-apply-for="${h.key}"></td>`).join('')}
                     </tr>
                 </thead>
-                <tbody>
-        `;
+                <tbody>`;
 
-        if (variantsToRender.length === 0) {
-            tableHtml += '<tr><td colspan="10">No products found.</td></tr>';
-        } else {
-            variantsToRender.forEach(v => {
-                tableHtml += `
-                    <tr data-variant-id="${v.variant_id}" data-store-id="${v.store_id}">
-                        <td><input type="checkbox" class="row-checkbox"></td>
-                        <td>${v.store_name}</td>
-                        ${tableHeaders.map(h => `
-                            <td>
-                                <input type="${h.type}" 
-                                       data-field-key="${h.key}" 
-                                       value="${v[h.key] || ''}" 
-                                       data-original-value="${v[h.key] || ''}">
-                            </td>
-                        `).join('')}
-                    </tr>
-                `;
-            });
-        }
-
+        variantsToRender.forEach(v => {
+            tableHtml += `
+                <tr data-variant-id="${v.variant_id}" data-store-id="${v.store_id}">
+                    <td><input type="checkbox" class="row-checkbox"></td>
+                    <td><img src="${v.image_url || 'https://via.placeholder.com/40'}" alt="${v.product_title}"></td>
+                    <td>${v.store_name}</td>
+                    ${tableHeaders.map(h => `
+                        <td><input type="${h.type}" data-field-key="${h.key}" value="${v[h.key] || ''}" data-original-value="${v[h.key] || ''}"></td>
+                    `).join('')}
+                </tr>`;
+        });
         tableHtml += '</tbody></table>';
         elements.container.innerHTML = tableHtml;
-        addTableEventListeners();
+        addIndividualViewEventListeners();
+    };
+    
+    const renderGroupedView = (variantsToRender) => {
+        const groups = {};
+        variantsToRender.forEach(v => {
+            if (v.barcode) {
+                if (!groups[v.barcode]) {
+                    groups[v.barcode] = {
+                        variants: [],
+                        primary_image_url: v.image_url,
+                        primary_title: v.product_title,
+                        total_on_hand: 0,
+                        total_available: 0
+                    };
+                }
+                groups[v.barcode].variants.push(v);
+                groups[v.barcode].total_on_hand += v.onHand || 0;
+                groups[v.barcode].total_available += v.available || 0;
+            }
+        });
+
+        let html = '';
+        for (const barcode in groups) {
+            const group = groups[barcode];
+            html += `
+            <details class="grouped-item">
+                <summary>
+                    <div class="grid">
+                        <img src="${group.primary_image_url || 'https://via.placeholder.com/50'}" alt="${group.primary_title}">
+                        <div class="product-info">
+                            <strong>${group.primary_title}</strong>
+                            <small>Barcode: ${barcode}</small>
+                        </div>
+                        <div class="quantity-display"><h2>${group.total_on_hand}</h2><p>Total On Hand</p></div>
+                        <div class="quantity-display"><h2>${group.total_available}</h2><p>Total Available</p></div>
+                    </div>
+                </summary>
+                <div class="variant-details">
+                    <table>
+                        <thead><tr><th>Store</th><th>SKU</th><th>Price</th><th>Cost</th><th>On Hand</th><th>Available</th></tr></thead>
+                        <tbody>
+                            ${group.variants.map(v => `
+                                <tr>
+                                    <td>${v.store_name}</td>
+                                    <td>${v.sku || ''}</td>
+                                    <td>${v.price || 'N/A'}</td>
+                                    <td>${v.cost || 'N/A'}</td>
+                                    <td>${v.onHand || 0}</td>
+                                    <td>${v.available || 0}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </details>`;
+        }
+        elements.container.innerHTML = html || '<p>No products with barcodes found to group.</p>';
     };
 
     // --- Event Handling ---
-    const addTableEventListeners = () => {
-        // Change tracking
+    const addIndividualViewEventListeners = () => {
         elements.container.querySelectorAll('input[data-field-key]').forEach(input => {
             input.addEventListener('input', () => {
                 const isChanged = input.value !== input.dataset.originalValue;
@@ -101,12 +161,10 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        // Select All functionality
         document.getElementById('select-all-checkbox').addEventListener('change', (e) => {
             document.querySelectorAll('.row-checkbox').forEach(cb => cb.checked = e.target.checked);
         });
 
-        // Bulk apply functionality
         document.querySelectorAll('input[data-bulk-apply-for]').forEach(bulkInput => {
             bulkInput.addEventListener('change', () => {
                 if (bulkInput.value === '') return;
@@ -116,16 +174,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     const targetInput = row.querySelector(`input[data-field-key="${fieldKey}"]`);
                     if (targetInput) {
                         targetInput.value = bulkInput.value;
-                        // Manually trigger input event to register the change
                         targetInput.dispatchEvent(new Event('input'));
                     }
                 });
-                bulkInput.value = ''; // Clear after applying
+                bulkInput.value = '';
             });
         });
     };
     
-    // --- Main Actions ---
     const handleSaveChanges = async () => {
         elements.saveBtn.setAttribute('aria-busy', 'true');
         const selectedRows = Array.from(document.querySelectorAll('.row-checkbox:checked')).map(cb => cb.closest('tr'));
@@ -137,7 +193,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const payload = { updates: [] };
-
         selectedRows.forEach(row => {
             const changedInputs = row.querySelectorAll('input.changed');
             if (changedInputs.length > 0) {
@@ -166,12 +221,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify(payload),
             });
             const result = await response.json();
-            if (!response.ok) {
-                throw new Error(result.detail?.message || 'An unknown error occurred.');
-            }
+            if (!response.ok) throw new Error(result.detail?.message || 'An unknown error occurred.');
             showToast(result.message, 'success');
-            // Reload data to show fresh values and clear changed state
-            loadAllVariants(); 
+            loadAllVariants();
         } catch (error) {
             showToast(`Error: ${error.message}`, 'error');
         } finally {
@@ -179,22 +231,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    const handleSearch = () => {
-        const searchTerm = elements.searchInput.value.toLowerCase();
-        if (!searchTerm) {
-            renderTable(allVariants);
-            return;
-        }
-        const filteredVariants = allVariants.filter(v => 
-            v.product_title.toLowerCase().includes(searchTerm) ||
-            (v.sku && v.sku.toLowerCase().includes(searchTerm)) ||
-            (v.barcode && v.barcode.toLowerCase().includes(searchTerm))
-        );
-        renderTable(filteredVariants);
-    };
-
     // --- Initial Setup ---
     elements.saveBtn.addEventListener('click', handleSaveChanges);
-    elements.searchInput.addEventListener('input', handleSearch);
+    elements.searchInput.addEventListener('input', render);
+    elements.groupToggle.addEventListener('change', (e) => {
+        currentView = e.target.checked ? 'grouped' : 'individual';
+        // Disable save button in grouped view as editing is not supported there
+        elements.saveBtn.disabled = currentView === 'grouped';
+        render();
+    });
+    
     loadAllVariants();
 });
