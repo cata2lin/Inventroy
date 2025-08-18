@@ -133,10 +133,10 @@ class ProductService:
             raise ValueError(f"Shopify Inventory Error: {error_message}")
         return result.get("inventoryAdjustmentGroup", {})
 
-    # FIXED: This function now builds the exact payload structure Shopify requires.
+    # FIXED: This function now builds the exact, correct payload structure that Shopify requires.
     def set_on_hand_quantity(self, inventory_item_id: str, location_id: str, on_hand_quantity: int) -> Dict[str, Any]:
         """
-        Sets the 'on hand' inventory quantity using the correct, flat payload structure.
+        Sets the 'on hand' inventory quantity using the correct inventorySetQuantities mutation.
         """
         MUTATION_SET_ON_HAND = """
         mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
@@ -149,10 +149,10 @@ class ProductService:
         variables = {
             "input": {
                 "reason": "correction",
-                "inventoryItemId": inventory_item_id,
-                "locationId": location_id,
-                "quantities": [{
-                    "name": "on_hand",
+                "name": "on_hand",
+                "setQuantities": [{
+                    "inventoryItemId": inventory_item_id,
+                    "locationId": location_id,
                     "quantity": on_hand_quantity
                 }]
             }
