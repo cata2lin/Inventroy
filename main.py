@@ -20,7 +20,8 @@ from routes import (
     products, 
     mutations, 
     dashboard_v2, 
-    inventory_v2
+    inventory_v2,
+    bulk_update # ADDED
 )
 
 Base.metadata.create_all(bind=engine)
@@ -41,6 +42,7 @@ app.include_router(dashboard.router, prefix="/api/dashboard") # Old dashboard
 app.include_router(dashboard_v2.router)
 app.include_router(mutations.router)
 app.include_router(inventory_v2.router)
+app.include_router(bulk_update.router) # ADDED
 
 # Note: The old inventory and products routers are now superseded by inventory_v2
 # but can be kept if any legacy functionality depends on them.
@@ -68,3 +70,8 @@ async def get_inventory_page(request: Request):
 @app.get("/mutations", response_class=HTMLResponse, include_in_schema=False)
 async def get_mutations_page(request: Request):
     return templates.TemplateResponse("mutations.html", {"request": request})
+
+# ADDED: Route for the new bulk update page
+@app.get("/bulk-update", response_class=HTMLResponse, include_in_schema=False)
+async def get_bulk_update_page(request: Request):
+    return templates.TemplateResponse("bulk_update.html", {"request": request})

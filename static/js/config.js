@@ -6,16 +6,20 @@ const API_ENDPOINTS = {
 
     // Dashboard V2 (Orders Report)
     getDashboardOrders: (params) => `/api/v2/dashboard/orders/?${params.toString()}`,
-    exportDashboardOrders: (params) => `/api/v2/dashboard/export/?${params.toString()}`, // ADDED
+    exportDashboardOrders: (params) => `/api/v2/dashboard/export/?${params.toString()}`,
     
     // Inventory V2 (Inventory Report)
     getInventoryReport: (params) => `/api/v2/inventory/report/?${params.toString()}`,
     getInventoryFilters: '/api/v2/inventory/filters/',
-    setPrimaryVariant: '/api/v2/inventory/set-primary-variant/', // FIXED: Added the missing endpoint
+    setPrimaryVariant: '/api/v2/inventory/set-primary-variant/',
 
     // Product Mutations Page
     getProduct: (productId) => `/api/mutations/product/${productId}`,
     updateProduct: (productId) => `/api/mutations/product/${productId}`,
+
+    // Bulk Update Page -- ADDED
+    getAllVariantsForBulkEdit: '/api/bulk-update/variants/',
+    processBulkUpdates: '/api/bulk-update/variants/',
 
     // Legacy Endpoints (can be removed if not used elsewhere)
     syncOrders: (storeId) => `/api/orders/sync/${storeId}`,
