@@ -38,7 +38,11 @@ main.container-fluid {
     height: auto;
     margin-bottom: 0;
 }
-.controls-grid input[type="date"] { padding-right: 0.2rem; }
+.controls-grid input[type="date"] {
+    -webkit-appearance: none;
+    appearance: none;
+    padding-right: 0.2rem;
+}
 
 .dropdown[open] > ul {
     position: absolute;
