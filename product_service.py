@@ -133,34 +133,9 @@ class ProductService:
             raise ValueError(f"Shopify Inventory Error: {error_message}")
         return result.get("inventoryAdjustmentGroup", {})
 
-    # FIXED: This function now builds the exact, correct payload structure that Shopify requires.
-    def set_on_hand_quantity(self, inventory_item_id: str, location_id: str, on_hand_quantity: int) -> Dict[str, Any]:
+    # FIXED: Replaced 'set' with a reliable 'adjust' method that targets the 'available' quantity to affect 'onHand'.
+    def adjust_on_hand_quantity(self, inventory_item_id: str, location_id: str, on_hand_delta: int) -> Dict[str, Any]:
         """
-        Sets the 'on hand' inventory quantity using the correct inventorySetQuantities mutation.
+        Adjusts the 'on hand' quantity by changing the 'available' quantity, which is the reliable method.
         """
-        MUTATION_SET_ON_HAND = """
-        mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
-            inventorySetQuantities(input: $input) {
-                inventoryAdjustmentGroup { id }
-                userErrors { field, message }
-            }
-        }
-        """
-        variables = {
-            "input": {
-                "reason": "correction",
-                "name": "on_hand",
-                "setQuantities": [{
-                    "inventoryItemId": inventory_item_id,
-                    "locationId": location_id,
-                    "quantity": on_hand_quantity
-                }]
-            }
-        }
-        print(f"Setting ON HAND inventory for item {inventory_item_id} at {location_id} to {on_hand_quantity}")
-        response_data = self._execute_mutation(MUTATION_SET_ON_HAND, variables)
-        result = response_data.get("inventorySetQuantities", {})
-        if result.get("userErrors"):
-            error_message = ", ".join([f"{e['field']}: {e['message']}" for e in result["userErrors"]])
-            raise ValueError(f"Shopify Inventory Error: {error_message}")
-        return result.get("inventoryAdjustmentGroup", {})
+        return self.adjust_inventory_quantity(inventory_item_id, location_id, on_hand_delta)
