@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
             startDate: document.getElementById('start-date'),
             endDate: document.getElementById('end-date'),
             reset: document.getElementById('reset-filters'),
+            export: document.getElementById('export-button'),
         },
         columnModal: {
             dialog: document.getElementById('column-modal'),
@@ -153,7 +154,67 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.pagination.next.disabled = state.page >= totalPages;
     };
     
-    // --- Initialization and Event Listeners ---
+    const handleExport = () => {
+        const params = new URLSearchParams();
+        Object.entries(state.filters).forEach(([key, value]) => {
+            if (value && value.length > 0) {
+                if (Array.isArray(value)) value.forEach(v => params.append(key, v));
+                else params.append(key, value);
+            }
+        });
+        const visibleColumns = allColumns.filter(c => !state.hiddenColumns.includes(c.key)).map(c => c.key);
+        visibleColumns.forEach(col => params.append('visible_columns', col));
+
+        const exportUrl = API_ENDPOINTS.exportDashboardOrders(params);
+        window.location.href = exportUrl;
+    };
+    
+    const initialize = async () => {
+        elements.columnModal.list.innerHTML = allColumns.map(col => `<div><label><input type="checkbox" name="col-${col.key}" value="${col.key}"> ${col.label}</label></div>`).join('');
+        
+        try {
+            const response = await fetch(API_ENDPOINTS.getStores);
+            const stores = await response.json();
+            elements.filters.stores.innerHTML = stores.map(store => `<li><label><input type="checkbox" name="store" value="${store.id}"> ${store.name}</label></li>`).join('');
+        } catch (error) {
+            elements.filters.stores.innerHTML = '<li>Could not load stores</li>';
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        state = {
+            page: parseInt(params.get('page') || '1', 10),
+            sortBy: params.get('sortBy') || 'created_at',
+            sortOrder: params.get('sortOrder') || 'desc',
+            hiddenColumns: params.getAll('hide') || [],
+            filters: {
+                search: params.get('search') || '',
+                tags: params.get('tags') || '',
+                store_ids: params.getAll('stores') || [],
+                financial_status: params.get('fs') || '',
+                fulfillment_status: params.get('ffs') || '',
+                has_note: params.get('note') || '',
+                start_date: params.get('start') || '',
+                end_date: params.get('end') || '',
+            }
+        };
+        
+        elements.filters.search.value = state.filters.search;
+        elements.filters.tags.value = state.filters.tags;
+        elements.filters.startDate.value = state.filters.start_date;
+        elements.filters.endDate.value = state.filters.end_date;
+        document.querySelector(`input[name="fs"][value="${state.filters.financial_status || ''}"]`).checked = true;
+        document.querySelector(`input[name="ffs"][value="${state.filters.fulfillment_status || ''}"]`).checked = true;
+        document.querySelector(`input[name="note"][value="${state.filters.has_note || ''}"]`).checked = true;
+        elements.filters.stores.querySelectorAll('input').forEach(cb => cb.checked = state.filters.store_ids.includes(cb.value));
+        allColumns.forEach(col => {
+            const checkbox = document.querySelector(`input[name="col-${col.key}"]`);
+            if (checkbox) checkbox.checked = !state.hiddenColumns.includes(col.key);
+        });
+
+        setupEventListeners();
+        await fetchOrders();
+    };
+    
     const setupEventListeners = () => {
         elements.filters.search.addEventListener('input', debounce(() => { state.filters.search = elements.filters.search.value; state.page = 1; fetchOrders(); }, 500));
         elements.filters.tags.addEventListener('input', debounce(() => { state.filters.tags = elements.filters.tags.value; state.page = 1; fetchOrders(); }, 500));
@@ -187,6 +248,7 @@ document.addEventListener('DOMContentLoaded', () => {
             window.history.pushState({}, '', window.location.pathname);
             initialize();
         });
+        elements.filters.export.addEventListener('click', handleExport);
         elements.pagination.prev.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchOrders(); } });
         elements.pagination.next.addEventListener('click', () => { if ((state.page * 50) < state.totalCount) { state.page++; fetchOrders(); } });
         elements.filters.columnsBtn.addEventListener('click', () => elements.columnModal.dialog.showModal());
@@ -203,60 +265,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 fetchOrders();
             });
         });
-    };
-
-    const initialize = async () => {
-        elements.tableContainer.setAttribute('aria-busy', 'true');
-        
-        // Step 1: Populate UI shells
-        elements.columnModal.list.innerHTML = allColumns.map(col => `<div><label><input type="checkbox" name="col-${col.key}" value="${col.key}"> ${col.label}</label></div>`).join('');
-        
-        try {
-            const response = await fetch(API_ENDPOINTS.getStores);
-            const stores = await response.json();
-            elements.filters.stores.innerHTML = stores.map(store => `<li><label><input type="checkbox" name="store" value="${store.id}"> ${store.name}</label></li>`).join('');
-        } catch (error) {
-            elements.filters.stores.innerHTML = '<li>Could not load stores</li>';
-        }
-
-        // Step 2: Sync state from URL now that UI is built
-        const params = new URLSearchParams(window.location.search);
-        state = {
-            page: parseInt(params.get('page') || '1', 10),
-            sortBy: params.get('sortBy') || 'created_at',
-            sortOrder: params.get('sortOrder') || 'desc',
-            hiddenColumns: params.getAll('hide') || [],
-            filters: {
-                search: params.get('search') || '',
-                tags: params.get('tags') || '',
-                store_ids: params.getAll('stores') || [],
-                financial_status: params.get('fs') || '',
-                fulfillment_status: params.get('ffs') || '',
-                has_note: params.get('note') || '',
-                start_date: params.get('start') || '',
-                end_date: params.get('end') || '',
-            }
-        };
-        
-        // Step 3: Update UI controls to match the state
-        elements.filters.search.value = state.filters.search;
-        elements.filters.tags.value = state.filters.tags;
-        elements.filters.startDate.value = state.filters.start_date;
-        elements.filters.endDate.value = state.filters.end_date;
-        document.querySelector(`input[name="fs"][value="${state.filters.financial_status || ''}"]`).checked = true;
-        document.querySelector(`input[name="ffs"][value="${state.filters.fulfillment_status || ''}"]`).checked = true;
-        document.querySelector(`input[name="note"][value="${state.filters.has_note || ''}"]`).checked = true;
-        elements.filters.stores.querySelectorAll('input').forEach(cb => cb.checked = state.filters.store_ids.includes(cb.value));
-        allColumns.forEach(col => {
-            const checkbox = document.querySelector(`input[name="col-${col.key}"]`);
-            if (checkbox) checkbox.checked = !state.hiddenColumns.includes(col.key);
-        });
-
-        // Step 4: Add event listeners
-        setupEventListeners();
-
-        // Step 5: Fetch initial data
-        await fetchOrders();
     };
 
     initialize();

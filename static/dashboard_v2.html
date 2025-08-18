@@ -16,7 +16,7 @@
             <ul>
                 <li><a href="/dashboard-v2" role="button" class="contrast">Dashboard</a></li>
                 <li><a href="/products">Products</a></li>
-                <li><a href="/inventory">Grouped Inventory</a></li>
+                <li><a href="/inventory">Inventory</a></li>
             </ul>
         </nav>
 
@@ -26,16 +26,12 @@
         </hgroup>
 
         <article class="filter-container">
-            <section id="metrics-container" class="grid">
-                </section>
-            
+            <section id="metrics-container" class="grid"></section>
             <section class="controls-grid">
                 <input type="search" id="search-input" name="search" placeholder="Search Order Name...">
                 <details role="list" class="dropdown">
                     <summary aria-haspopup="listbox">Stores</summary>
-                    <ul role="listbox" id="store-filter-list">
-                        <li>Loading...</li>
-                    </ul>
+                    <ul role="listbox" id="store-filter-list"><li>Loading...</li></ul>
                 </details>
                 <details role="list" class="dropdown">
                     <summary aria-haspopup="listbox">Financial Status</summary>
@@ -65,17 +61,15 @@
                     </ul>
                 </details>
                 <button id="column-visibility-button" class="outline">Columns</button>
-                
                 <input type="search" id="tags-input" name="tags" placeholder="Filter by tags...">
                 <input type="date" id="start-date">
                 <input type="date" id="end-date">
+                <button id="export-button">Export</button>
                 <button id="reset-filters" class="secondary outline">Reset</button>
             </section>
         </article>
         
-        <article id="orders-table-container" aria-busy="true">
-            <p>Loading...</p>
-        </article>
+        <article id="orders-table-container" aria-busy="true"><p>Loading...</p></article>
 
         <div class="grid pagination-controls">
             <button id="prev-button" class="secondary outline" disabled>&larr; Previous</button>
@@ -90,8 +84,7 @@
           <button class="close" aria-label="Close" data-target="column-modal"></button>
           <strong>Show/Hide Columns</strong>
         </header>
-        <div id="column-visibility-list" class="column-list">
-            </div>
+        <div id="column-visibility-list" class="column-list"></div>
       </article>
     </dialog>
 

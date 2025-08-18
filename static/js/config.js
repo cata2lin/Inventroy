@@ -6,7 +6,8 @@ const API_ENDPOINTS = {
 
     // Dashboard V2 (Orders Report)
     getDashboardOrders: (params) => `/api/v2/dashboard/orders/?${params.toString()}`,
-
+    exportDashboardOrders: (params) => `/api/v2/dashboard/export/?${params.toString()}`, // ADDED
+    
     // Inventory V2 (Inventory Report)
     getInventoryReport: (params) => `/api/v2/inventory/report/?${params.toString()}`,
     getInventoryFilters: '/api/v2/inventory/filters/',
