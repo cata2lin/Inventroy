@@ -228,14 +228,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 fetchOrders();
             });
         });
-        ['financialStatus', 'fulfillmentStatus', 'hasNote'].forEach(key => {
-            elements.filters[key].addEventListener('change', (e) => {
-                const filterKey = { financialStatus: 'financial_status', fulfillmentStatus: 'fulfillment_status', hasNote: 'has_note' }[key];
-                state.filters[filterKey] = e.target.value;
+
+        // FIXED: Correctly listen for changes on the radio buttons
+        elements.filters.financialStatus.addEventListener('change', (e) => {
+            if (e.target.name === 'fs') {
+                state.filters.financial_status = e.target.value;
                 state.page = 1;
                 fetchOrders();
-            });
+            }
         });
+        elements.filters.fulfillmentStatus.addEventListener('change', (e) => {
+            if (e.target.name === 'ffs') {
+                state.filters.fulfillment_status = e.target.value;
+                state.page = 1;
+                fetchOrders();
+            }
+        });
+        elements.filters.hasNote.addEventListener('change', (e) => {
+             if (e.target.name === 'note') {
+                state.filters.has_note = e.target.value;
+                state.page = 1;
+                fetchOrders();
+            }
+        });
+
         elements.filters.stores.addEventListener('change', () => {
             state.filters.store_ids = Array.from(elements.filters.stores.querySelectorAll('input:checked')).map(cb => cb.value);
             state.page = 1;
