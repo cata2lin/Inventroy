@@ -56,7 +56,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const selectedType = elements.typeFilter.value;
 
         let filteredVariants = allVariants.filter(v => {
-            // MODIFIED: Added SKU to the search filter
             const matchesSearch = !searchTerm || 
                 v.product_title.toLowerCase().includes(searchTerm) || 
                 (v.sku && v.sku.toLowerCase().includes(searchTerm)) ||
@@ -88,9 +87,8 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const renderIndividualView = (variantsToRender) => {
-        // MODIFIED: Added SKU to the table headers
+        // MODIFIED: Removed SKU from the editable headers
         const tableHeaders = [
-            { key: 'sku', label: 'SKU' },
             { key: 'product_title', label: 'Product' },
             { key: 'barcode', label: 'Barcode' },
             { key: 'product_type', label: 'Type' },
@@ -104,22 +102,24 @@ document.addEventListener('DOMContentLoaded', () => {
             <th><input type="checkbox" id="select-all-checkbox"></th>
             <th>Image</th>
             <th data-sort-key="store_name">Store</th>
+            <th data-sort-key="sku">SKU</th>
             ${tableHeaders.map(h => `<th data-sort-key="${h.key}">${h.label}</th>`).join('')}
             </tr>`;
         
         tableHtml += `<tr id="bulk-apply-row">
-                        <th></th><th></th><th></th>
+                        <th></th><th></th><th></th><th></th>
                         ${tableHeaders.map(h => `<td><input type="${h.type || 'text'}" placeholder="Apply..." data-bulk-apply-for="${h.key}"></td>`).join('')}
                       </tr></thead><tbody>`;
 
         if (variantsToRender.length === 0) {
-            tableHtml += '<tr><td colspan="11">No products match the current filters.</td></tr>';
+            tableHtml += '<tr><td colspan="12">No products match the current filters.</td></tr>';
         } else {
             variantsToRender.forEach(v => {
                 tableHtml += `<tr data-variant-id="${v.variant_id}" data-store-id="${v.store_id}">
                     <td><input type="checkbox" class="row-checkbox"></td>
-                    <td><img src="${v.image_url || 'https://via.placeholder.com/40'}" alt="${v.product_title}"></td>
+                    <td><img src="${v.image_url || 'https://via.placeholder.com/40x40.png?text=No+Image'}" alt="${v.product_title}"></td>
                     <td>${v.store_name}</td>
+                    <td>${v.sku || ''}</td>
                     ${tableHeaders.map(h => `<td><input data-field-key="${h.key}" value="${v[h.key] !== null && v[h.key] !== undefined ? v[h.key] : ''}" data-original-value="${v[h.key] !== null && v[h.key] !== undefined ? v[h.key] : ''}"></td>`).join('')}
                 </tr>`;
             });
@@ -158,7 +158,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <details class="grouped-item">
                     <summary>
                         <div class="grid">
-                            <img src="${group.primary_image_url || 'https://via.placeholder.com/50'}" alt="${group.primary_title}">
+                            <img src="${group.primary_image_url || 'https://via.placeholder.com/50x50.png?text=No+Image'}" alt="${group.primary_title}">
                             <div class="product-info">
                                 <strong>${group.primary_title}</strong>
                                 <small>Barcode: ${barcode}</small>
