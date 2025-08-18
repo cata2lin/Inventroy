@@ -62,8 +62,14 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 continue
 
             try:
-                # FIXED: Convert numeric values from strings to the correct types
+                # FIXED: Robustly clean and convert all incoming data types
                 changes = update_data.changes
+                
+                # Convert empty strings to None
+                for key, value in changes.items():
+                    if value == "":
+                        changes[key] = None
+
                 numeric_fields_float = ['price', 'cost', 'compareAtPrice']
                 numeric_fields_int = ['onHand', 'available']
 
@@ -74,7 +80,7 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                     if field in changes and changes[field] is not None:
                         changes[field] = int(changes[field])
 
-                # Process product-level updates (product_title, product_type)
+                # Process product-level updates (product_title -> title, product_type -> productType)
                 product_changes = {}
                 if 'product_title' in changes:
                     product_changes['title'] = changes['product_title']
@@ -82,31 +88,32 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                     product_changes['productType'] = changes['product_type']
                 
                 if product_changes:
-                    service.update_product(product_gid=variant_db.product.shopify_gid, product_input=product_changes)
+                    # Filter out None values before sending
+                    service.update_product(product_gid=variant_db.product.shopify_gid, product_input={k: v for k, v in product_changes.items() if v is not None})
 
-                # Process variant-level updates (sku, barcode, price)
-                variant_changes = {k: v for k, v in changes.items() if k in ["sku", "barcode", "price"]}
-                if variant_changes:
+                # Process variant-level updates
+                variant_changes = {k: v for k, v in changes.items() if k in ["sku", "barcode", "price", "compareAtPrice"]}
+                if any(k in variant_changes for k in ["sku", "barcode", "price", "compareAtPrice"]):
                     variant_updates = {"id": variant_db.shopify_gid, **variant_changes}
                     service.update_variant_details(product_id=variant_db.product.shopify_gid, variant_updates=variant_updates)
 
-                # Process inventory item updates (cost)
+                # Process inventory item updates
                 if 'cost' in changes:
                     cost_update = {"id": variant_db.shopify_gid, "inventoryItem": {"cost": changes['cost']}}
                     service.update_variant_details(product_id=variant_db.product.shopify_gid, variant_updates=cost_update)
 
-                # Process inventory level updates (available, onHand)
+                # Process inventory level updates
                 location_gid = f"gid://shopify/Location/{variant_db.inventory_levels[0].location_id}" if variant_db.inventory_levels else None
                 inventory_item_gid = f"gid://shopify/InventoryItem/{variant_db.inventory_item_id}"
                 
                 if location_gid:
-                    if 'available' in changes:
+                    if 'available' in changes and changes['available'] is not None:
                         current_qty = variant_db.inventory_levels[0].available or 0
                         delta = changes['available'] - current_qty
                         if delta != 0:
                             service.adjust_inventory_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, available_delta=delta)
                     
-                    if 'onHand' in changes:
+                    if 'onHand' in changes and changes['onHand'] is not None:
                          service.set_on_hand_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, on_hand_quantity=changes['onHand'])
 
                 results["success"].append(f"Successfully updated variant ID {update_data.variant_id}")
