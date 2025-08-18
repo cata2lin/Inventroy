@@ -62,47 +62,57 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 continue
 
             try:
-                # FIXED: Robustly clean and convert all incoming data types
+                # --- Data Cleaning and Preparation ---
                 changes = update_data.changes
                 
-                # Convert empty strings to None
+                # 1. Convert all empty strings to None
                 for key, value in changes.items():
                     if value == "":
                         changes[key] = None
 
+                # 2. Convert numeric fields, keeping None if conversion fails or is not applicable
                 numeric_fields_float = ['price', 'cost', 'compareAtPrice']
                 numeric_fields_int = ['onHand', 'available']
-
                 for field in numeric_fields_float:
                     if field in changes and changes[field] is not None:
-                        changes[field] = float(changes[field])
+                        try: changes[field] = float(changes[field])
+                        except (ValueError, TypeError): changes[field] = None
                 for field in numeric_fields_int:
                     if field in changes and changes[field] is not None:
-                        changes[field] = int(changes[field])
-
-                # Process product-level updates (product_title -> title, product_type -> productType)
+                        try: changes[field] = int(changes[field])
+                        except (ValueError, TypeError): changes[field] = None
+                
+                # --- API Call Logic ---
+                
+                # 1. Product-level changes (title, type) are handled first and separately
                 product_changes = {}
                 if 'product_title' in changes:
                     product_changes['title'] = changes['product_title']
                 if 'product_type' in changes:
                     product_changes['productType'] = changes['product_type']
-                
+
+                # Send product update only if there are changes
                 if product_changes:
-                    # Filter out None values before sending
-                    service.update_product(product_gid=variant_db.product.shopify_gid, product_input={k: v for k, v in product_changes.items() if v is not None})
+                    clean_product_input = {k: v for k, v in product_changes.items() if v is not None}
+                    if clean_product_input:
+                        service.update_product(product_gid=variant_db.product.shopify_gid, product_input=clean_product_input)
 
-                # Process variant-level updates
-                variant_changes = {k: v for k, v in changes.items() if k in ["sku", "barcode", "price", "compareAtPrice"]}
-                if any(k in variant_changes for k in ["sku", "barcode", "price", "compareAtPrice"]):
-                    variant_updates = {"id": variant_db.shopify_gid, **variant_changes}
-                    service.update_variant_details(product_id=variant_db.product.shopify_gid, variant_updates=variant_updates)
+                # 2. Variant-level changes (SKU, price, cost, etc.)
+                variant_level_changes = {k: v for k, v in changes.items() if k in ["sku", "barcode", "price", "cost"]}
+                
+                if variant_level_changes:
+                    variant_updates_payload = {"id": variant_db.shopify_gid}
+                    if 'cost' in variant_level_changes:
+                        variant_updates_payload["inventoryItem"] = {"cost": variant_level_changes.pop('cost')}
+                    
+                    variant_updates_payload.update(variant_level_changes)
+                    
+                    # Filter out None values before sending to service
+                    clean_variant_payload = {k: v for k, v in variant_updates_payload.items() if v is not None}
+                    if len(clean_variant_payload) > 1: # Ensure there's more than just the ID
+                        service.update_variant_details(product_id=variant_db.product.shopify_gid, variant_updates=clean_variant_payload)
 
-                # Process inventory item updates
-                if 'cost' in changes:
-                    cost_update = {"id": variant_db.shopify_gid, "inventoryItem": {"cost": changes['cost']}}
-                    service.update_variant_details(product_id=variant_db.product.shopify_gid, variant_updates=cost_update)
-
-                # Process inventory level updates
+                # 3. Inventory quantity changes
                 location_gid = f"gid://shopify/Location/{variant_db.inventory_levels[0].location_id}" if variant_db.inventory_levels else None
                 inventory_item_gid = f"gid://shopify/InventoryItem/{variant_db.inventory_item_id}"
                 
