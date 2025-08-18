@@ -75,7 +75,7 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 
                 # --- API Call Logic ---
 
-                # 1. Product-level changes
+                # 1. Product-level changes are handled separately
                 product_changes = {}
                 if 'product_title' in changes: product_changes['title'] = changes['product_title']
                 if 'product_type' in changes: product_changes['productType'] = changes['product_type']
@@ -83,18 +83,24 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 if product_changes:
                     service.update_product(product_gid=variant_db.product.shopify_gid, product_input={k: v for k, v in product_changes.items() if v is not None})
 
-                # 2. Standard Variant changes (sku, barcode, price) - requires a separate call
-                standard_variant_changes = {k: v for k, v in changes.items() if k in ["sku", "barcode", "price", "compareAtPrice"]}
-                if standard_variant_changes:
-                    payload = {"id": variant_db.shopify_gid, **standard_variant_changes}
-                    service.update_variant_details(product_id=variant_db.product.shopify_gid, variant_updates={k: v for k, v in payload.items() if v is not None})
-
-                # 3. Cost (Inventory Item) change - requires a separate call
-                if 'cost' in changes and changes['cost'] is not None:
-                    cost_payload = {"id": variant_db.shopify_gid, "inventoryItem": {"cost": changes['cost']}}
-                    service.update_variant_details(product_id=variant_db.product.shopify_gid, variant_updates=cost_payload)
+                # 2. Variant and Inventory Item changes are combined into a single payload
+                variant_payload = {"id": variant_db.shopify_gid}
+                variant_fields_to_check = ["sku", "barcode", "price", "compareAtPrice", "cost"]
                 
-                # 4. Inventory quantity changes
+                # Consolidate all relevant changes into one payload
+                for field in variant_fields_to_check:
+                    if field in changes:
+                        if field == 'cost':
+                            if changes[field] is not None:
+                                variant_payload["inventoryItem"] = {"cost": changes[field]}
+                        else:
+                            variant_payload[field] = changes[field]
+
+                # Send the combined variant update only if there are changes to send
+                if len(variant_payload) > 1: # More than just the ID
+                    service.update_variant_details(product_id=variant_db.product.shopify_gid, variant_updates=variant_payload)
+                
+                # 3. Inventory quantity changes use their own specific mutations
                 location_gid = f"gid://shopify/Location/{variant_db.inventory_levels[0].location_id}" if variant_db.inventory_levels else None
                 inventory_item_gid = f"gid://shopify/InventoryItem/{variant_db.inventory_item_id}"
                 
