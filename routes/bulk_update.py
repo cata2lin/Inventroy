@@ -75,7 +75,7 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 
                 # --- API Call Logic ---
 
-                # 1. Product-level changes are handled separately
+                # 1. Product-level changes
                 product_changes = {}
                 if 'product_title' in changes: product_changes['title'] = changes['product_title']
                 if 'product_type' in changes: product_changes['productType'] = changes['product_type']
@@ -83,11 +83,10 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 if product_changes:
                     service.update_product(product_gid=variant_db.product.shopify_gid, product_input={k: v for k, v in product_changes.items() if v is not None})
 
-                # 2. Variant and Inventory Item changes are combined into a single payload
+                # 2. Variant and Inventory Item changes (excluding SKU)
                 variant_payload = {"id": variant_db.shopify_gid}
-                variant_fields_to_check = ["sku", "barcode", "price", "compareAtPrice", "cost"]
+                variant_fields_to_check = ["barcode", "price", "compareAtPrice", "cost"]
                 
-                # Consolidate all relevant changes into one payload
                 for field in variant_fields_to_check:
                     if field in changes:
                         if field == 'cost':
@@ -96,11 +95,10 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                         else:
                             variant_payload[field] = changes[field]
 
-                # Send the combined variant update only if there are changes to send
-                if len(variant_payload) > 1: # More than just the ID
+                if len(variant_payload) > 1:
                     service.update_variant_details(product_id=variant_db.product.shopify_gid, variant_updates=variant_payload)
                 
-                # 3. Inventory quantity changes use their own specific mutations
+                # 3. Inventory quantity changes
                 location_gid = f"gid://shopify/Location/{variant_db.inventory_levels[0].location_id}" if variant_db.inventory_levels else None
                 inventory_item_gid = f"gid://shopify/InventoryItem/{variant_db.inventory_item_id}"
                 
@@ -111,6 +109,7 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                         if delta != 0:
                             service.adjust_inventory_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, available_delta=delta)
                     
+                    # FIXED: Correctly call the service to set the absolute on-hand quantity
                     if 'onHand' in changes and changes['onHand'] is not None:
                          service.set_on_hand_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, on_hand_quantity=int(changes['onHand']))
 
