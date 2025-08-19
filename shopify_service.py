@@ -15,7 +15,7 @@ def gid_to_id(gid: Optional[str]) -> Optional[int]:
     try: return int(str(gid).split('/')[-1])
     except (IndexError, ValueError): return None
 
-# --- GraphQL Fragments (FINAL & CORRECTED) ---
+# --- GraphQL Fragments ---
 MONEY_FRAGMENT = "fragment MoneyFragment on MoneyV2 { amount currencyCode }"
 LOCATION_FRAGMENT = "fragment LocationFragment on Location { id legacyResourceId name }"
 INVENTORY_LEVEL_FRAGMENT = """
@@ -65,8 +65,10 @@ fragment FulfillmentFragment on Fulfillment {
   events(first: 20) { edges { node { ...FulfillmentEventFragment } } }
 }
 """
+TRANSACTION_FRAGMENT = "fragment TransactionFragment on OrderTransaction { id gateway }"
 
-# --- GraphQL Queries (FINAL & CORRECTED) ---
+
+# --- GraphQL Queries ---
 GET_ALL_ORDERS_QUERY = f"""
 {MONEY_FRAGMENT}
 {LOCATION_FRAGMENT}
@@ -77,13 +79,15 @@ GET_ALL_ORDERS_QUERY = f"""
 {LINE_ITEM_FRAGMENT}
 {FULFILLMENT_EVENT_FRAGMENT}
 {FULFILLMENT_FRAGMENT}
+{TRANSACTION_FRAGMENT}
 query GetAllData($cursor: String) {{
   orders(first: 5, after: $cursor, sortKey: UPDATED_AT, reverse: false) {{
     pageInfo {{ hasNextPage endCursor }}
     edges {{
       node {{
         id legacyResourceId name createdAt updatedAt cancelledAt cancelReason closedAt processedAt
-        displayFinancialStatus displayFulfillmentStatus currencyCode note tags gateway
+        displayFinancialStatus displayFulfillmentStatus currencyCode note tags
+        transactions(first: 5) {{ ...TransactionFragment }}
         totalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
         subtotalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
         totalTaxSet {{ shopMoney {{ ...MoneyFragment }} }}
@@ -123,24 +127,19 @@ query GetAllProducts($cursor: String) {{
 }}
 """
 
-# This query is for the second "enrichment" stage of the sync
 GET_INVENTORY_DETAILS_QUERY = """
 query GetInventoryDetails($cursor: String) {
   inventoryItems(first: 100, after: $cursor) {
-    pageInfo {
-      hasNextPage
-      endCursor
-    }
-    edges {
-      node {
-        legacyResourceId
-        tracked
-        unitCost {
-          amount
-        }
-      }
-    }
+    pageInfo { hasNextPage, endCursor }
+    edges { node { legacyResourceId, tracked, unitCost { amount } } }
   }
+}
+"""
+
+GET_COUNTS_QUERY = """
+query GetCounts {
+  ordersCount { count }
+  productsCount { count }
 }
 """
 
@@ -182,6 +181,18 @@ class ShopifyService:
         if not data or "edges" not in data: return []
         return [edge["node"] for edge in data["edges"]]
 
+    def get_total_counts(self) -> dict:
+        """Fetches total counts for orders and products."""
+        try:
+            data = self._execute_query(GET_COUNTS_QUERY)
+            return {
+                "orders": data.get("ordersCount", {}).get("count", 0),
+                "products": data.get("productsCount", {}).get("count", 0)
+            }
+        except Exception as e:
+            print(f"Could not fetch total counts: {e}")
+            return {"orders": 0, "products": 0}
+
     def get_all_orders_and_related_data(self) -> Generator[List[schemas.ShopifyOrder], None, None]:
         has_next_page = True
         cursor = None
@@ -198,6 +209,9 @@ class ShopifyService:
                 cursor = page_info.get("endCursor")
                 orders_on_page = []
                 for order_node in self._flatten_edges(order_connection):
+                    transactions = self._flatten_edges(order_node.pop("transactions", {}))
+                    order_node["gateway"] = transactions[0].get("gateway") if transactions else None
+                    
                     order_node["lineItems"] = self._flatten_edges(order_node.get("lineItems"))
                     for item in order_node["lineItems"]:
                         if item.get("variant") and item["variant"].get("inventoryItem"):
@@ -253,11 +267,7 @@ class ShopifyService:
                 return
         print("Finished fetching all product pages from Shopify.")
 
-    # RESTORED: This function is necessary for the 2-stage sync to get details.
     def get_all_inventory_details(self) -> Generator[List[Dict[str, Any]], None, None]:
-        """
-        Paginates through all inventory items to fetch their details like cost and tracked status.
-        """
         has_next_page = True
         cursor = None
         print(f"Starting inventory details fetch from {self.api_endpoint}...")
