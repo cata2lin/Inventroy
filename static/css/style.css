@@ -222,7 +222,7 @@ body {
 
 .app-layout {
     display: grid;
-    grid-template-columns: 168px 1fr; /* MODIFIED: Was 240px */
+    grid-template-columns: 168px 1fr;
     min-height: 100vh;
 }
 
@@ -237,6 +237,7 @@ body {
     border-radius: var(--border-radius);
     margin-bottom: 0.5rem;
     font-weight: 500;
+    font-size: 0.75em; /* 25% smaller font */
 }
 
 .sidebar nav a.contrast {
