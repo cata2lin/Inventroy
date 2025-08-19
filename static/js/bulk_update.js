@@ -168,7 +168,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const group = groups[barcode];
                 const imageTag = group.primary_image_url 
                     ? `<img src="${group.primary_image_url}" alt="${group.primary_title}">` 
-                    : ''; // Render nothing if no image
+                    : '';
 
                 html += `
                 <details class="grouped-item">
