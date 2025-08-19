@@ -115,14 +115,12 @@ th[data-sort-by].desc::after { content: '▼'; }
 
 /* --- Bulk Update Page Specific Styles --- */
 
-/* MODIFIED: Top controls ("Green Area") are now 50% smaller */
 .bulk-update-controls .compact-controls > * {
     font-size: 0.5rem;
     padding: 0.2rem 0.4rem;
     height: auto;
 }
 
-/* MODIFIED: Import controls are styled to match the smaller size */
 .import-controls {
     display: grid;
     grid-template-columns: auto auto;
@@ -142,7 +140,7 @@ th[data-sort-by].desc::after { content: '▼'; }
     width: auto;
 }
 
-/* MODIFIED: Table text and height ("Yellow Area") are now smaller */
+/* MODIFIED: Table text and height adjusted */
 .bulk-update-table {
     font-size: 0.75em; /* 25% smaller text */
 }
@@ -153,16 +151,14 @@ th[data-sort-by].desc::after { content: '▼'; }
     vertical-align: middle;
 }
 
-/* Column width adjustments */
-.bulk-update-table th:nth-child(2), .bulk-update-table td:nth-child(2) { width: 30px; }
-.bulk-update-table th:nth-child(4), .bulk-update-table td:nth-child(4) { width: 150px; }
-
+/* MODIFIED: Image size is now 50px */
 .bulk-update-table img {
-    width: 20px;
-    height: 20px;
+    width: 50px;
+    height: 50px;
     object-fit: cover;
     border-radius: var(--border-radius);
 }
+
 .bulk-update-table input[type="text"], 
 .bulk-update-table input[type="number"] {
     width: 100%;
