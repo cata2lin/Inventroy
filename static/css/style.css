@@ -127,8 +127,8 @@ th[data-sort-by].desc::after { content: '▼'; }
 }
 /* MODIFIED: Enforced max-height and vertical alignment */
 .bulk-update-table td, .bulk-update-table th {
-    height: 50px;
-    max-height: 50px;
+    height: 30px;
+    max-height: 30px;
     padding: 0.2rem 0.4rem;
     vertical-align: middle;
 }
