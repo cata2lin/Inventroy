@@ -141,17 +141,26 @@ th[data-sort-by].desc::after { content: '▼'; }
 }
 
 .bulk-update-table {
-    table-layout: fixed; /* Use fixed layout for predictable column widths */
+    table-layout: fixed;
     width: 100%;
 }
-.bulk-update-table td, .bulk-update-table th {
+.bulk-update-table td {
     height: 28px;
     max-height: 28px;
     padding: 0.1rem 0.4rem;
     vertical-align: middle;
 }
+/* MODIFIED: Header (th) styles are now separate for font-size control */
+.bulk-update-table th {
+    height: 28px;
+    max-height: 28px;
+    padding: 0.1rem 0.4rem;
+    vertical-align: middle;
+    font-size: 0.8em; /* 20% smaller font size for headers */
+}
 
-/* MODIFIED: Column width adjustments for a more compact layout */
+
+/* Column width adjustments for a more compact layout */
 .bulk-update-table th:nth-child(2), .bulk-update-table td:nth-child(2) { width: 60px; } /* Image */
 .bulk-update-table th:nth-child(5), .bulk-update-table td:nth-child(5) { width: 25%; } /* Product Title */
 .bulk-update-table th:nth-child(6), .bulk-update-table td:nth-child(6) { width: 15%; } /* Barcode */
@@ -167,15 +176,15 @@ th[data-sort-by].desc::after { content: '▼'; }
     border-radius: var(--border-radius);
 }
 
-/* MODIFIED: Font and height of editable inputs */
+/* MODIFIED: Font size for editable inputs is now 20% smaller */
 .bulk-update-table input[type="text"], 
 .bulk-update-table input[type="number"] {
     width: 100%;
-    height: 70%; /* 30% smaller height inside the cell */
+    height: 70%;
     border: 1px solid transparent;
     background: transparent;
     padding: 0 0.25rem;
-    font-size: 0.75em; /* 25% smaller font */
+    font-size: 0.8em; /* 20% smaller font size for inputs */
     box-sizing: border-box;
 }
 .bulk-update-table input:focus {
@@ -237,7 +246,7 @@ body {
     border-radius: var(--border-radius);
     margin-bottom: 0.5rem;
     font-weight: 500;
-    font-size: 0.75em; /* 25% smaller font */
+    font-size: 0.75em;
 }
 
 .sidebar nav a.contrast {
@@ -253,7 +262,7 @@ body {
 /* Mobile responsive layout */
 @media (max-width: 992px) {
     .app-layout {
-        grid-template-columns: 1fr; /* Stack sidebar on top */
+        grid-template-columns: 1fr;
     }
     .sidebar {
         border-right: none;

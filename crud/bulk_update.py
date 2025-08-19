@@ -5,7 +5,6 @@ from sqlalchemy import or_
 from typing import List, Optional
 import models
 
-# MODIFIED: Function signature and query logic updated to handle advanced filtering.
 def get_all_variants_for_bulk_edit(
     db: Session,
     search: Optional[str] = None,
@@ -43,8 +42,9 @@ def get_all_variants_for_bulk_edit(
     if product_types:
         query = query.filter(models.Product.product_type.in_(product_types))
 
+    # MODIFIED: This now checks for both NULL and empty strings for a more reliable filter.
     if has_no_barcode:
-        query = query.filter(models.ProductVariant.barcode.is_(None))
+        query = query.filter(or_(models.ProductVariant.barcode.is_(None), models.ProductVariant.barcode == ''))
 
     all_variants = query.order_by(
         models.Store.name,
@@ -84,7 +84,6 @@ def get_variant_for_update(db: Session, variant_id: int):
         joinedload(models.ProductVariant.inventory_levels)
     ).first()
 
-# --- ADDED: Function to save updates to the local database ---
 def update_local_variant(db: Session, variant_id: int, changes: dict):
     """
     Updates a single variant record and its related product in the local database.
@@ -95,7 +94,6 @@ def update_local_variant(db: Session, variant_id: int, changes: dict):
         print(f"Warning: Could not find variant with ID {variant_id} in local DB to update.")
         return
 
-    # Update related Product fields if they exist in changes
     if 'product_title' in changes or 'product_type' in changes:
         db_product = db.query(models.Product).filter(models.Product.id == db_variant.product_id).first()
         if db_product:
@@ -104,13 +102,10 @@ def update_local_variant(db: Session, variant_id: int, changes: dict):
             if 'product_type' in changes:
                 db_product.product_type = changes['product_type']
 
-    # Update ProductVariant fields
     for key, value in changes.items():
         if hasattr(db_variant, key):
             setattr(db_variant, key, value)
     
-    # Note: Inventory levels are managed by Shopify's response during a full sync.
-    # We update the direct fields here that were part of the bulk edit.
     db.commit()
 
 def get_variants_by_skus(db: Session, skus: list[str]):

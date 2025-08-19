@@ -1,81 +1,61 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bulk Product Update - Inventory Intelligence</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
-    <link rel="stylesheet" href="/static/css/style.css" />
-</head>
-<body>
-    <main class="container-fluid">
-        <nav>
-            <ul>
-                <li><strong>Inventory Intelligence</strong></li>
-            </ul>
-            <ul>
-                <li><a href="/dashboard-v2">Dashboard</a></li>
-                <li><a href="/inventory">Grouped Inventory</a></li>
-                <li><a href="/bulk-update" role="button" class="contrast">Bulk Update</a></li>
-                <li><a href="/sync-control">Sync Control</a></li>
-            </ul>
-        </nav>
+{% extends "base.html" %}
 
-        <hgroup>
-            <h1>Bulk Product Update</h1>
-            <h2>Edit product variants across all stores and save changes in one go.</h2>
-        </hgroup>
+{% block content %}
+<div class="container-fluid">
+    <hgroup>
+        <h1>Bulk Product Update</h1>
+        <h2>Edit product variants across all stores and save changes in one go.</h2>
+    </hgroup>
 
-        <article class="bulk-update-controls">
-            <div class="grid compact-controls">
-                <button id="save-changes-btn" class="bulk-update-action-btn" aria-busy="false">Save Changes</button>
-                <input type="search" id="search-input" placeholder="Filter by SKU, Name (use commas for multiple)...">
-                
-                <details role="list" class="dropdown">
-                    <summary>Stores</summary>
-                    <ul role="listbox" id="store-filter-list"><li>Loading...</li></ul>
-                </details>
-                
-                <details role="list" class="dropdown">
-                    <summary>Types</summary>
-                    <ul role="listbox" id="type-filter-list"><li>Loading...</li></ul>
-                </details>
+    <article class="bulk-update-controls">
+        <div class="grid compact-controls">
+            <button id="save-changes-btn" class="bulk-update-action-btn" aria-busy="false">Save Changes</button>
+            <input type="search" id="search-input" placeholder="Filter by SKU, Name (use commas for multiple)...">
+            
+            <details role="list" class="dropdown">
+                <summary>Stores</summary>
+                <ul role="listbox" id="store-filter-list"><li>Loading...</li></ul>
+            </details>
+            
+            <details role="list" class="dropdown">
+                <summary>Types</summary>
+                <ul role="listbox" id="type-filter-list"><li>Loading...</li></ul>
+            </details>
 
-                <details role="list" class="dropdown">
-                    <summary>Barcode Actions</summary>
-                    <ul role="listbox">
-                        <li><a href="#" id="generate-unique-barcode-btn">Generate Unique for Selected</a></li>
-                        <li><a href="#" id="generate-same-barcode-btn">Generate Same for Selected</a></li>
-                    </ul>
-                </details>
+            <details role="list" class="dropdown">
+                <summary>Barcode Actions</summary>
+                <ul role="listbox">
+                    <li><a href="#" id="generate-unique-barcode-btn">Generate Unique for Selected</a></li>
+                    <li><a href="#" id="generate-same-barcode-btn">Generate Same for Selected</a></li>
+                </ul>
+            </details>
 
-                <fieldset>
-                    <label for="no-barcode-filter">
-                        <input type="checkbox" id="no-barcode-filter" name="no-barcode-filter">
-                        No Barcode
-                    </label>
-                </fieldset>
-                <fieldset>
-                    <label for="group-toggle">
-                        <input type="checkbox" id="group-toggle" name="group-toggle" role="switch">
-                        Group by Barcode
-                    </label>
-                </fieldset>
-            </div>
-            <div class="import-controls">
-                <input type="file" id="excel-file-input" accept=".xlsx">
-                <button id="import-excel-btn" class="bulk-update-action-btn">Import from Excel</button>
-            </div>
-        </article>
+            <fieldset>
+                <label for="no-barcode-filter">
+                    <input type="checkbox" id="no-barcode-filter" name="no-barcode-filter">
+                    No Barcode
+                </label>
+            </fieldset>
+            <fieldset>
+                <label for="group-toggle">
+                    <input type="checkbox" id="group-toggle" name="group-toggle" role="switch">
+                    Group by Barcode
+                </label>
+            </fieldset>
+        </div>
+        <div class="import-controls">
+            <input type="file" id="excel-file-input" accept=".xlsx">
+            <button id="import-excel-btn" class="bulk-update-action-btn">Import from Excel</button>
+        </div>
+    </article>
 
-        <article id="bulk-update-container" class="overflow-auto" aria-busy="true">
-            <p>Loading products...</p>
-        </article>
-    </main>
-    
-    <div id="toast"></div>
+    <article id="bulk-update-container" class="overflow-auto" aria-busy="true">
+        <p>Loading products...</p>
+    </article>
+</div>
+{% endblock %}
 
-    <script src="/static/js/config.js"></script>
-    <script src="/static/js/bulk_update.js"></script>
-</body>
-</html>
+{% block scripts %}
+<script src="/static/js/config.js"></script>
+<script src="/static/js/bulk_update.js"></script>
+{% endblock %}
