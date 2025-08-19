@@ -35,14 +35,14 @@ class Product(Base):
     body_html = Column(Text)
     vendor = Column(String(255))
     product_type = Column(String(255))
-    product_category = Column(String(255)) # ADDED
+    product_category = Column(String(255))
     created_at = Column(DateTime(timezone=True))
     handle = Column(String(255), index=True)
     updated_at = Column(DateTime(timezone=True))
     published_at = Column(DateTime(timezone=True))
     status = Column(String(50))
     tags = Column(Text)
-    image_url = Column(String(2048)) # ADDED
+    image_url = Column(String(2048))
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     store = relationship("Store", back_populates="products")
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
@@ -62,8 +62,8 @@ class ProductVariant(Base):
     cost = Column(NUMERIC(10, 2))
     fulfillment_service = Column(String(255))
     inventory_management = Column(String(255))
-    barcode = Column(String(255), index=True) # Added index for performance
-    is_primary_variant = Column(BOOLEAN, default=False, nullable=False) # ADDED
+    barcode = Column(String(255), index=True)
+    is_primary_variant = Column(BOOLEAN, default=False, nullable=False)
     grams = Column(BIGINT)
     weight = Column(NUMERIC(10, 2))
     weight_unit = Column(String(10))
@@ -105,6 +105,7 @@ class Order(Base):
     financial_status = Column(String(50))
     fulfillment_status = Column(String(50))
     currency = Column(String(10))
+    payment_gateway_names = Column(Text) # <-- FIXED: Added the new column
     total_price = Column(NUMERIC(10, 2))
     subtotal_price = Column(NUMERIC(10, 2))
     total_tax = Column(NUMERIC(10, 2))
@@ -112,8 +113,6 @@ class Order(Base):
     total_shipping_price = Column(NUMERIC(10, 2))
     note = Column(Text)
     tags = Column(Text)
-    # ADDED: New column for the payment gateway
-    payment_gateway = Column(String(255), nullable=True)
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     store = relationship("Store", back_populates="orders")
     line_items = relationship("LineItem", back_populates="order", cascade="all, delete-orphan")

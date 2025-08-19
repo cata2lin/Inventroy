@@ -27,7 +27,7 @@ class InventoryItem(BaseModel):
     legacy_resource_id: int = Field(..., alias="legacyResourceId")
     sku: Optional[str] = None
     unit_cost: Optional[UnitCost] = Field(None, alias="unitCost")
-    tracked: Optional[bool] = None  # ADDED: This field was missing and caused the error
+    tracked: Optional[bool] = None
     inventory_levels: List[InventoryLevel] = Field([], alias="inventoryLevels")
 
 class ProductCategory(BaseModel):
@@ -48,7 +48,7 @@ class Product(BaseModel):
     handle: str
     updated_at: datetime = Field(..., alias="updatedAt")
     published_at: Optional[datetime] = Field(None, alias="publishedAt")
-    status: str # ADDED
+    status: str
     tags: List[str]
     featured_image: Optional[FeaturedImage] = Field(None, alias="featuredImage")
 
@@ -113,6 +113,7 @@ class ShopifyOrder(BaseModel):
     financial_status: Optional[str] = Field(None, alias="displayFinancialStatus")
     fulfillment_status: str = Field(..., alias="displayFulfillmentStatus")
     currency: str = Field(..., alias="currencyCode")
+    paymentGatewayNames: Optional[List[str]] = [] # <-- FIXED: Added the missing field
     total_price: MoneySet = Field(..., alias="totalPriceSet")
     subtotal_price: Optional[MoneySet] = Field(None, alias="subtotalPriceSet")
     total_tax: Optional[MoneySet] = Field(None, alias="totalTaxSet")
@@ -120,8 +121,6 @@ class ShopifyOrder(BaseModel):
     total_shipping_price: MoneySet = Field(..., alias="totalShippingPriceSet")
     note: Optional[str] = None
     tags: List[str]
-    # ADDED: New field for the payment gateway
-    gateway: Optional[str] = None
     line_items: List[LineItem] = Field(..., alias="lineItems")
     fulfillments: List[Fulfillment] = []
 

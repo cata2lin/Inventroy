@@ -84,7 +84,7 @@ query GetAllData($cursor: String) {{
       node {{
         id legacyResourceId name createdAt updatedAt cancelledAt cancelReason closedAt processedAt
         displayFinancialStatus displayFulfillmentStatus currencyCode note tags
-        paymentGatewayNames
+        paymentGatewayNames # <-- FIXED: Added the missing field
         totalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
         subtotalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
         totalTaxSet {{ shopMoney {{ ...MoneyFragment }} }}
