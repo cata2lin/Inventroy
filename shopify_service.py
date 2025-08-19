@@ -20,10 +20,7 @@ MONEY_FRAGMENT = "fragment MoneyFragment on MoneyV2 { amount currencyCode }"
 LOCATION_FRAGMENT = "fragment LocationFragment on Location { id legacyResourceId name }"
 INVENTORY_LEVEL_FRAGMENT = """
 fragment InventoryLevelFragment on InventoryLevel {
-  quantities(names: ["available", "on_hand"]) {
-    name
-    quantity
-  }
+  quantities(names: ["available", "on_hand"]) { name quantity }
   updatedAt
   location { ...LocationFragment }
 }
@@ -77,14 +74,14 @@ GET_ALL_ORDERS_QUERY = f"""
 {LINE_ITEM_FRAGMENT}
 {FULFILLMENT_EVENT_FRAGMENT}
 {FULFILLMENT_FRAGMENT}
-query GetAllData($cursor: String) {{
-  orders(first: 5, after: $cursor, sortKey: UPDATED_AT, reverse: false) {{
+query GetAllData($cursor: String, $query: String) {{
+  orders(first: 5, after: $cursor, sortKey: UPDATED_AT, reverse: false, query: $query) {{
     pageInfo {{ hasNextPage endCursor }}
     edges {{
       node {{
         id legacyResourceId name createdAt updatedAt cancelledAt cancelReason closedAt processedAt
         displayFinancialStatus displayFulfillmentStatus currencyCode note tags
-        paymentGatewayNames # <-- FIXED: Added the missing field
+        paymentGatewayNames
         totalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
         subtotalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
         totalTaxSet {{ shopMoney {{ ...MoneyFragment }} }}
@@ -127,19 +124,8 @@ query GetAllProducts($cursor: String) {{
 GET_INVENTORY_DETAILS_QUERY = """
 query GetInventoryDetails($cursor: String) {
   inventoryItems(first: 100, after: $cursor) {
-    pageInfo {
-      hasNextPage
-      endCursor
-    }
-    edges {
-      node {
-        legacyResourceId
-        tracked
-        unitCost {
-          amount
-        }
-      }
-    }
+    pageInfo { hasNextPage endCursor }
+    edges { node { legacyResourceId tracked unitCost { amount } } }
   }
 }
 """
@@ -152,21 +138,29 @@ class ShopifyService:
         self.rest_api_endpoint = f"https://{store_url}/admin/api/{api_version}"
         self.headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": token}
         self.rest_headers = {"X-Shopify-Access-Token": token}
-        self.api_version = api_version
 
-    def get_total_counts(self) -> Dict[str, int]:
-        """
-        Fetches the total count of orders using the Shopify REST API.
-        """
+    def get_total_counts(self, created_at_min: Optional[str] = None, created_at_max: Optional[str] = None) -> Dict[str, int]:
         try:
-            count_url = f"{self.rest_api_endpoint}/orders/count.json"
-            response = requests.get(count_url, headers=self.rest_headers, timeout=10)
-            response.raise_for_status()
-            count_data = response.json()
-            return {"orders": count_data.get("count", 0)}
+            params = {"status": "any"}
+            if created_at_min: params["created_at_min"] = created_at_min
+            if created_at_max: params["created_at_max"] = created_at_max
+            
+            order_count_url = f"{self.rest_api_endpoint}/orders/count.json"
+            product_count_url = f"{self.rest_api_endpoint}/products/count.json"
+            
+            order_response = requests.get(order_count_url, headers=self.rest_headers, params=params, timeout=10)
+            order_response.raise_for_status()
+            
+            product_response = requests.get(product_count_url, headers=self.rest_headers, timeout=10)
+            product_response.raise_for_status()
+
+            return {
+                "orders": order_response.json().get("count", 0),
+                "products": product_response.json().get("count", 0)
+            }
         except requests.exceptions.RequestException as e:
-            print(f"An error occurred while fetching order count via REST API: {e}")
-            return {"orders": 0}
+            print(f"An error occurred while fetching counts via REST API: {e}")
+            return {"orders": 0, "products": 0}
 
     def _execute_query(self, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = {"query": query, "variables": variables or {}}
@@ -199,13 +193,20 @@ class ShopifyService:
         if not data or "edges" not in data: return []
         return [edge["node"] for edge in data["edges"]]
 
-    def get_all_orders_and_related_data(self) -> Generator[List[schemas.ShopifyOrder], None, None]:
+    def get_all_orders_and_related_data(self, created_at_min: Optional[str] = None, created_at_max: Optional[str] = None) -> Generator[List[schemas.ShopifyOrder], None, None]:
         has_next_page = True
         cursor = None
-        print(f"Starting order data fetch from {self.api_endpoint}...")
+        
+        query_parts = []
+        if created_at_min: query_parts.append(f"created_at:>{created_at_min}")
+        if created_at_max: query_parts.append(f"created_at:<{created_at_max}")
+        query_string = " AND ".join(query_parts) if query_parts else None
+
+        print(f"Starting order data fetch from {self.api_endpoint} with query: {query_string}...")
         while has_next_page:
             try:
-                data = self._execute_query(GET_ALL_ORDERS_QUERY, {"cursor": cursor})
+                variables = {"cursor": cursor, "query": query_string}
+                data = self._execute_query(GET_ALL_ORDERS_QUERY, variables)
                 if not data or "orders" not in data:
                     print("Received no data or malformed orders data from API. Stopping.")
                     return
