@@ -273,6 +273,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.history.replaceState({}, '', window.location.pathname);
                 initialize();
             });
+
+            // MODIFIED: Added this block for the accordion behavior
+            elements.tableContainer.addEventListener('toggle', (event) => {
+                if (event.target.tagName === 'DETAILS' && event.target.open) {
+                    elements.tableContainer.querySelectorAll('details[open]').forEach((details) => {
+                        if (details !== event.target) {
+                            details.removeAttribute('open');
+                        }
+                    });
+                }
+            }, true);
         };
         setupEventListeners();
         
