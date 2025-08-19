@@ -115,51 +115,62 @@ th[data-sort-by].desc::after { content: '▼'; }
 
 /* --- Bulk Update Page Specific Styles --- */
 
+/* MODIFIED: Control filters are now 25% smaller */
 .bulk-update-controls .grid > * {
-    font-size: 0.7rem;
+    font-size: 0.75rem; /* Approx 25% smaller than base */
 }
 
-/* ADDED: Specific styling for main action buttons to make them smaller */
+/* MODIFIED: Main action buttons are now 50% smaller */
 .bulk-update-controls .bulk-update-action-btn {
-    font-size: 0.7rem;
-    padding: 0.25rem 0.5rem;
+    font-size: 0.5rem; /* Approx 50% smaller */
+    padding: 0.2rem 0.4rem;
     height: auto;
 }
 
-/* ADDED: Style file input to behave more like a button */
-.bulk-update-controls input[type="file"] {
-    font-size: 0.7rem;
+/* MODIFIED: Grouping and styling for the import controls */
+.import-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    align-items: center;
+}
+.import-controls input[type="file"] {
+    font-size: 0.5rem; /* Match button size */
     padding: 0;
 }
-.bulk-update-controls input[type="file"]::file-selector-button {
+.import-controls input[type="file"]::file-selector-button {
     font-size: 1em;
-    padding: 0.25rem 0.5rem;
+    padding: 0.2rem 0.4rem;
     border-radius: var(--border-radius);
     border: 1px solid var(--pico-form-element-border-color);
     background-color: var(--pico-form-element-background-color);
     color: var(--pico-color);
     cursor: pointer;
+    margin-right: 10px;
 }
 
+/* MODIFIED: Table text is now 30% smaller */
 .bulk-update-table {
-    font-size: 65%;
+    font-size: 70%;
     table-layout: auto;
     width: 100%;
 }
 .bulk-update-table td, .bulk-update-table th {
-    /* MODIFIED: Set height to max 35px */
+    /* MODIFIED: Row height is now max 35px */
     height: 35px;
     max-height: 35px;
     padding: 0.1rem 0.4rem;
     vertical-align: middle;
 }
-/* ADDED: Specific column width adjustments */
-.bulk-update-table th:nth-child(2), .bulk-update-table td:nth-child(2) { width: 40px; } /* Image column */
-.bulk-update-table th:nth-child(4), .bulk-update-table td:nth-child(4) { width: 125px; } /* SKU column */
+
+/* MODIFIED: Column width adjustments */
+.bulk-update-table th:nth-child(2), .bulk-update-table td:nth-child(2) { width: 30px; } /* Image column */
+.bulk-update-table th:nth-child(4), .bulk-update-table td:nth-child(4) { width: 150px; } /* SKU column */
 
 .bulk-update-table img {
-    width: 30px;
-    height: 30px;
+    width: 25px;
+    height: 25px;
     object-fit: cover;
     border-radius: var(--border-radius);
 }
