@@ -1,6 +1,7 @@
 // static/js/bulk_update.js
 
 document.addEventListener('DOMContentLoaded', () => {
+    // --- Element References ---
     const elements = {
         container: document.getElementById('bulk-update-container'),
         saveBtn: document.getElementById('save-changes-btn'),
@@ -21,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentView = 'individual';
     let sortState = { key: 'product_title', order: 'asc' };
 
+    // --- Utility Functions ---
     const showToast = (message, type = 'info', duration = 5000) => {
         elements.toast.textContent = message;
         elements.toast.className = `show ${type}`;
@@ -35,6 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     };
 
+    // --- Data Fetching and Population ---
     const loadAllVariants = async () => {
         try {
             elements.container.setAttribute('aria-busy', 'true');
@@ -81,6 +84,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
 
+    // --- Rendering Logic ---
     const render = () => {
         let variantsToRender = [...allVariants];
 
@@ -113,7 +117,6 @@ document.addEventListener('DOMContentLoaded', () => {
             { key: 'product_title', label: 'Product' },
             { key: 'barcode', label: 'Barcode', sortable: true },
             { key: 'product_type', label: 'Type' },
-            // ADDED: Header for the new Status column
             { key: 'status', label: 'Status' },
             { key: 'price', label: 'Price' },
             { key: 'cost', label: 'Cost' },
@@ -130,7 +133,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </tr>`;
         
         tableHtml += `<tr id="bulk-apply-row">
-                        <th></th><th></th><th></th><th></th>
+                        <th></th><th></th><th></th><th></th><th></th>
                         ${tableHeaders.map(h => `<td><input type="${h.key.includes('price') || h.key.includes('cost') || h.key.includes('Hand') || h.key.includes('available') ? 'number' : 'text'}" placeholder="Apply..." data-bulk-apply-for="${h.key}"></td>`).join('')}
                       </tr></thead><tbody>`;
 
@@ -142,7 +145,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     ? `<td><img src="${v.image_url}" alt="${v.product_title}"></td>` 
                     : '<td></td>';
 
-                // MODIFIED: This block now renders a dropdown for the status field.
                 const renderField = (h) => {
                     if (h.key === 'status') {
                         return `<td>
@@ -235,6 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.container.innerHTML = html;
     };
 
+    // --- Event Handling ---
     const addIndividualViewEventListeners = () => {
         const currentTh = document.querySelector(`th[data-sort-key="${sortState.key}"]`);
         if (currentTh) currentTh.classList.add(sortState.order);
@@ -252,7 +255,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        // MODIFIED: This now handles both inputs and select dropdowns.
         elements.container.querySelectorAll('input[data-field-key], select[data-field-key]').forEach(field => {
             field.addEventListener('input', () => {
                 const isChanged = field.value !== field.dataset.originalValue;
@@ -281,7 +283,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
     
-    // MODIFIED: This function now correctly collects changes from both inputs and selects.
     const handleSaveChanges = async () => {
         elements.saveBtn.setAttribute('aria-busy', 'true');
         const selectedRows = Array.from(document.querySelectorAll('.row-checkbox:checked')).map(cb => cb.closest('tr'));
@@ -324,7 +325,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const result = await response.json();
             if (!response.ok) throw new Error(result.detail?.message || 'An unknown error occurred.');
             showToast(result.message, 'success');
-            loadAllVariants();
+            // MODIFIED: Added 'await' to prevent the race condition.
+            await loadAllVariants();
         } catch (error) {
             showToast(`Error: ${error.message}`, 'error');
         } finally {
@@ -390,7 +392,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(result.detail?.message || result.detail || 'An unknown error occurred during import.');
             }
             showToast(result.message || 'Excel import processed successfully.', 'success');
-            loadAllVariants();
+            await loadAllVariants();
         } catch (error) {
             showToast(`Error: ${error.message}`, 'error');
         } finally {
