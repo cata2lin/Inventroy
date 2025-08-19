@@ -1,81 +1,53 @@
 # services/sync_service.py
 
 from sqlalchemy.orm import Session
-from typing import List, Optional
-
-from database import SessionLocal
-from crud import store as crud_store, product as crud_product, order as crud_order
+from tqdm import tqdm
+from . import sync_tracker
 from shopify_service import ShopifyService
+from crud import store as crud_store, order as crud_order
 
-SYNC_STATUS = {}
+def run_full_order_sync(db: Session, store_id: int, task_id: str):
+    """Fetches and saves all orders for a store, with progress tracking."""
+    store = crud_store.get_store(db, store_id=store_id)
+    if not store:
+        sync_tracker.fail_task(task_id, f"Store with ID {store_id} not found.")
+        return
 
-def get_sync_status(task_id: str):
-    return SYNC_STATUS.get(task_id, {"status": "not_found"})
-
-def update_sync_progress(task_id, store_name, progress, total, status="running"):
-    if task_id not in SYNC_STATUS:
-        SYNC_STATUS[task_id] = {}
-    SYNC_STATUS[task_id][store_name] = {"progress": progress, "total": total, "status": status}
-
-def run_full_product_sync(db: Session, task_id: str, store_ids: Optional[List[int]] = None):
-    stores_to_sync = []
-    if store_ids:
-        for store_id in store_ids:
-            store = crud_store.get_store(db, store_id)
-            if store:
-                stores_to_sync.append(store)
-    else:
-        stores_to_sync = crud_store.get_stores(db)
-
-    for store in stores_to_sync:
-        print(f"Starting full product sync for store: {store.name}")
-        service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
-        total_products = service.get_total_counts()["products"]
-        processed_count = 0
-        update_sync_progress(task_id, store.name, 0, total_products)
-        
-        for page_of_products in service.get_all_products_and_variants():
-            if page_of_products:
-                crud_product.create_or_update_products(db=db, products_data=page_of_products, store_id=store.id)
-                processed_count += len(page_of_products)
-                update_sync_progress(task_id, store.name, processed_count, total_products)
-        
-        for details_batch in service.get_all_inventory_details():
-            if details_batch:
-                crud_product.update_inventory_details(db, details_batch)
-        print(f"Finished product sync for store: {store.name}")
+    service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
     
-    update_sync_progress(task_id, "overall", 100, 100, status="completed")
-
-def run_full_order_sync(db: Session, task_id: str, store_ids: Optional[List[int]] = None, start_date: Optional[str] = None, end_date: Optional[str] = None):
-    stores_to_sync = []
-    if store_ids:
-        for store_id in store_ids:
-            store = crud_store.get_store(db, store_id)
-            if store:
-                stores_to_sync.append(store)
-    else:
-        stores_to_sync = crud_store.get_stores(db)
-
-    for store in stores_to_sync:
-        print(f"Starting order sync for store: {store.name}")
-        service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+    try:
         total_orders = service.get_total_counts()["orders"]
-        processed_count = 0
-        update_sync_progress(task_id, store.name, 0, total_orders)
-        
+        if total_orders == 0:
+            sync_tracker.complete_task(task_id, "No orders found to sync.")
+            return
+
+        processed_orders = 0
+        sync_tracker.update_task_progress(task_id, 0, total_orders, "Starting order fetch...")
+
         for page_of_orders in service.get_all_orders_and_related_data():
             if page_of_orders:
                 crud_order.create_or_update_orders(db=db, orders_data=page_of_orders, store_id=store.id)
-                processed_count += len(page_of_orders)
-                update_sync_progress(task_id, store.name, processed_count, total_orders)
-        print(f"Finished order sync for store: {store.name}")
-    
-    update_sync_progress(task_id, "overall", 100, 100, status="completed")
+                processed_orders += len(page_of_orders)
+                progress_percent = (processed_orders / total_orders) * 100
+                sync_tracker.update_task_progress(
+                    task_id, 
+                    processed_orders, 
+                    total_orders, 
+                    f"Processing {processed_orders} of {total_orders} orders..."
+                )
+        
+        sync_tracker.complete_task(task_id, f"Successfully synced {processed_orders} orders.")
+    except Exception as e:
+        sync_tracker.fail_task(task_id, f"An error occurred: {str(e)}")
 
-def run_sync_in_background(target_function, **kwargs):
-    db = SessionLocal()
+
+def run_sync_in_background(target_function, db: Session, **kwargs):
+    """
+    Wrapper to run a sync function. This is the entry point for the background task.
+    """
     try:
         target_function(db=db, **kwargs)
-    finally:
-        db.close()
+    except Exception as e:
+        task_id = kwargs.get("task_id")
+        if task_id:
+            sync_tracker.fail_task(task_id, f"A critical error occurred: {str(e)}")

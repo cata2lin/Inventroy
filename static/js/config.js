@@ -23,9 +23,9 @@ const API_ENDPOINTS = {
     generateBarcodes: '/api/bulk-update/generate-barcode/',
     uploadExcel: '/api/bulk-update/upload-excel/',
 
-    // Sync Control Page -- ADDED
-    syncProducts: '/api/sync-control/products',
-    syncOrders: '/api/sync-control/orders',
+    // Sync Control
+    syncAllOrders: '/api/sync-control/orders',
+    getSyncStatus: '/api/sync-control/status',
 
     // Legacy Endpoints
     syncInventory: (storeId) => `/api/inventory/sync/${storeId}`,

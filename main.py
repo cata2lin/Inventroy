@@ -20,11 +20,8 @@ from routes import (
     mutations, 
     dashboard_v2, 
     inventory_v2,
-    bulk_update,
-    sync_control
+    sync_control # ADDED
 )
-# Assuming sync_status is in routes
-# from routes import sync_status
 
 Base.metadata.create_all(bind=engine)
 load_dotenv()
@@ -38,18 +35,15 @@ app = FastAPI(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="static")
 
-# --- Include all API Routers ---
+# Include all API routers
 app.include_router(orders.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api/dashboard")
 app.include_router(dashboard_v2.router)
 app.include_router(mutations.router)
 app.include_router(inventory_v2.router)
-app.include_router(bulk_update.router)
-app.include_router(sync_control.router)
-# app.include_router(sync_status.router)
+app.include_router(sync_control.router) # ADDED
 
 # --- HTML Page Routes ---
-
 @app.get("/", response_class=RedirectResponse, include_in_schema=False)
 async def read_root():
     return RedirectResponse(url="/dashboard-v2")
@@ -58,18 +52,18 @@ async def read_root():
 async def get_dashboard_v2_page(request: Request):
     return templates.TemplateResponse("dashboard_v2.html", {"request": request})
 
+@app.get("/products", response_class=HTMLResponse, include_in_schema=False)
+async def get_products_page(request: Request):
+    return templates.TemplateResponse("products.html", {"request": request})
+
 @app.get("/inventory", response_class=HTMLResponse, include_in_schema=False)
 async def get_inventory_page(request: Request):
     return templates.TemplateResponse("inventory.html", {"request": request})
 
-@app.get("/bulk-update", response_class=HTMLResponse, include_in_schema=False)
-async def get_bulk_update_page(request: Request):
-    return templates.TemplateResponse("bulk_update.html", {"request": request})
+@app.get("/mutations", response_class=HTMLResponse, include_in_schema=False)
+async def get_mutations_page(request: Request):
+    return templates.TemplateResponse("mutations.html", {"request": request})
 
 @app.get("/sync-control", response_class=HTMLResponse, include_in_schema=False)
 async def get_sync_control_page(request: Request):
     return templates.TemplateResponse("sync_control.html", {"request": request})
-
-# REMOVED old/unused page routes
-# @app.get("/products", ...)
-# @app.get("/mutations", ...)
