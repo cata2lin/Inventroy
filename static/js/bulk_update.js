@@ -10,6 +10,8 @@ document.addEventListener('DOMContentLoaded', () => {
         typeFilter: document.getElementById('type-filter'),
         groupToggle: document.getElementById('group-toggle'),
         toast: document.getElementById('toast'),
+        generateUniqueBtn: document.getElementById('generate-unique-barcode-btn'),
+        generateSameBtn: document.getElementById('generate-same-barcode-btn'),
     };
 
     let allVariants = [];
@@ -87,7 +89,6 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const renderIndividualView = (variantsToRender) => {
-        // MODIFIED: Removed SKU from the editable headers
         const tableHeaders = [
             { key: 'product_title', label: 'Product' },
             { key: 'barcode', label: 'Barcode' },
@@ -284,6 +285,43 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.saveBtn.removeAttribute('aria-busy');
         }
     };
+    
+    const handleGenerateBarcodes = async (mode) => {
+        const selectedRows = Array.from(document.querySelectorAll('.row-checkbox:checked')).map(cb => cb.closest('tr'));
+        if (selectedRows.length === 0) {
+            showToast('No products selected.', 'error');
+            return;
+        }
+
+        const variantIds = selectedRows.map(row => parseInt(row.dataset.variantId, 10));
+
+        try {
+            const response = await fetch(API_ENDPOINTS.generateBarcodes, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ variant_ids: variantIds, mode: mode }),
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result.detail || 'Failed to generate barcodes.');
+            }
+
+            selectedRows.forEach(row => {
+                const variantId = row.dataset.variantId;
+                if (result[variantId]) {
+                    const barcodeInput = row.querySelector('input[data-field-key="barcode"]');
+                    if (barcodeInput) {
+                        barcodeInput.value = result[variantId];
+                        barcodeInput.dispatchEvent(new Event('input'));
+                    }
+                }
+            });
+            showToast('Barcodes generated successfully. Click "Save Changes" to apply.', 'success');
+
+        } catch (error) {
+            showToast(`Error: ${error.message}`, 'error');
+        }
+    };
 
     // --- Initial Setup ---
     elements.saveBtn.addEventListener('click', handleSaveChanges);
@@ -294,6 +332,15 @@ document.addEventListener('DOMContentLoaded', () => {
         currentView = e.target.checked ? 'grouped' : 'individual';
         elements.saveBtn.disabled = currentView === 'grouped';
         render();
+    });
+    
+    elements.generateUniqueBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        handleGenerateBarcodes('unique');
+    });
+    elements.generateSameBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        handleGenerateBarcodes('same');
     });
     
     loadAllVariants();

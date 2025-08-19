@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 from database import get_db
 from crud import bulk_update as crud_bulk_update, store as crud_store
 from product_service import ProductService
+from utils import generate_ean13
 
 router = APIRouter(
     prefix="/api/bulk-update",
@@ -24,6 +25,10 @@ class VariantUpdatePayload(BaseModel):
 class BulkUpdatePayload(BaseModel):
     updates: List[VariantUpdatePayload]
 
+class BarcodeGenerationRequest(BaseModel):
+    variant_ids: List[int]
+    mode: str # 'unique' or 'same'
+
 # --- API Endpoints ---
 @router.get("/variants/")
 def get_all_variants_for_bulk_edit(db: Session = Depends(get_db)):
@@ -32,6 +37,29 @@ def get_all_variants_for_bulk_edit(db: Session = Depends(get_db)):
     optimized for the bulk editing page.
     """
     return crud_bulk_update.get_all_variants_for_bulk_edit(db)
+
+@router.post("/generate-barcode/")
+def generate_barcodes_endpoint(request: BarcodeGenerationRequest, db: Session = Depends(get_db)):
+    """
+    Generates EAN-13 compliant barcodes for a list of variant IDs.
+    - 'unique': Generates a new unique barcode for each selected variant.
+    - 'same': Generates one unique barcode and applies it to all selected variants.
+    """
+    try:
+        if request.mode == 'unique':
+            barcodes = {variant_id: generate_ean13(db) for variant_id in request.variant_ids}
+            return barcodes
+        elif request.mode == 'same':
+            if not request.variant_ids:
+                return {}
+            barcode = generate_ean13(db)
+            barcodes = {variant_id: barcode for variant_id in request.variant_ids}
+            return barcodes
+        else:
+            raise HTTPException(status_code=400, detail="Invalid generation mode. Use 'unique' or 'same'.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred during barcode generation: {str(e)}")
+
 
 @router.post("/variants/", status_code=200)
 def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_db)):
@@ -85,8 +113,7 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
 
                 # 2. Variant and Inventory Item changes
                 variant_payload = {"id": variant_db.shopify_gid}
-                # MODIFIED: Added 'sku' back to the list of updatable fields
-                variant_fields_to_check = ["sku", "barcode", "price", "compareAtPrice", "cost"]
+                variant_fields_to_check = ["barcode", "price", "compareAtPrice", "cost"]
                 
                 for field in variant_fields_to_check:
                     if field in changes:
@@ -115,6 +142,9 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                         on_hand_delta = int(changes['onHand']) - current_on_hand
                         if on_hand_delta != 0:
                             service.adjust_on_hand_quantity(inventory_item_id=inventory_item_gid, location_id=location_gid, on_hand_delta=on_hand_delta)
+                
+                # After successful Shopify update, save changes to the local database
+                crud_bulk_update.update_local_variant(db, update_data.variant_id, changes)
 
                 results["success"].append(f"Successfully updated variant ID {update_data.variant_id}")
 

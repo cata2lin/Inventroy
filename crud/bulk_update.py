@@ -31,7 +31,6 @@ def get_all_variants_for_bulk_edit(db: Session):
             "store_id": variant.product.store.id,
             "store_name": variant.product.store.name,
             "product_title": variant.product.title,
-            # ADDED: Include the image URL
             "image_url": variant.product.image_url, 
             "variant_title": variant.title,
             "sku": variant.sku,
@@ -53,3 +52,32 @@ def get_variant_for_update(db: Session, variant_id: int):
         joinedload(models.ProductVariant.product),
         joinedload(models.ProductVariant.inventory_levels)
     ).first()
+
+# --- ADDED: Function to save updates to the local database ---
+def update_local_variant(db: Session, variant_id: int, changes: dict):
+    """
+    Updates a single variant record and its related product in the local database.
+    This should be called AFTER a successful Shopify update to ensure data consistency.
+    """
+    db_variant = db.query(models.ProductVariant).filter(models.ProductVariant.id == variant_id).first()
+    if not db_variant:
+        print(f"Warning: Could not find variant with ID {variant_id} in local DB to update.")
+        return
+
+    # Update related Product fields if they exist in changes
+    if 'product_title' in changes or 'product_type' in changes:
+        db_product = db.query(models.Product).filter(models.Product.id == db_variant.product_id).first()
+        if db_product:
+            if 'product_title' in changes:
+                db_product.title = changes['product_title']
+            if 'product_type' in changes:
+                db_product.product_type = changes['product_type']
+
+    # Update ProductVariant fields
+    for key, value in changes.items():
+        if hasattr(db_variant, key):
+            setattr(db_variant, key, value)
+    
+    # Note: Inventory levels are managed by Shopify's response during a full sync.
+    # We update the direct fields here that were part of the bulk edit.
+    db.commit()
