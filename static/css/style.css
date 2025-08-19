@@ -122,7 +122,7 @@ th[data-sort-by].desc::after { content: '▼'; }
     height: auto;
 }
 
-/* MODIFIED: Import controls are now styled to match the smaller size */
+/* MODIFIED: Import controls are styled to match the smaller size */
 .import-controls {
     display: grid;
     grid-template-columns: auto auto;
@@ -142,13 +142,13 @@ th[data-sort-by].desc::after { content: '▼'; }
     width: auto;
 }
 
-/* MODIFIED: Table text and height ("Yellow Area") are now 30% smaller */
+/* MODIFIED: Table text and height ("Yellow Area") are now smaller */
 .bulk-update-table {
-    font-size: 0.7em; /* Approx 30% smaller text */
+    font-size: 0.75em; /* 25% smaller text */
 }
 .bulk-update-table td, .bulk-update-table th {
-    height: 25px; /* Approx 30% smaller height */
-    max-height: 25px;
+    height: 28px; /* Approx 30% smaller than 40px */
+    max-height: 28px;
     padding: 0.1rem 0.4rem;
     vertical-align: middle;
 }
