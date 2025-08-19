@@ -17,15 +17,17 @@ const API_ENDPOINTS = {
     getProduct: (productId) => `/api/mutations/product/${productId}`,
     updateProduct: (productId) => `/api/mutations/product/${productId}`,
 
-    // Bulk Update Page -- ADDED
+    // Bulk Update Page
     getAllVariantsForBulkEdit: '/api/bulk-update/variants/',
     processBulkUpdates: '/api/bulk-update/variants/',
-    generateBarcodes: '/api/bulk-update/generate-barcode/', // ADDED
-    uploadExcel: '/api/bulk-update/upload-excel/', // ADDED
+    generateBarcodes: '/api/bulk-update/generate-barcode/',
+    uploadExcel: '/api/bulk-update/upload-excel/',
 
-    // Legacy Endpoints (can be removed if not used elsewhere)
-    syncOrders: (storeId) => `/api/orders/sync/${storeId}`,
-    getVariants: (storeId) => `/api/inventory/variants/${storeId}`,
+    // Sync Control Page -- ADDED
+    syncProducts: '/api/sync-control/products',
+    syncOrders: '/api/sync-control/orders',
+
+    // Legacy Endpoints
     syncInventory: (storeId) => `/api/inventory/sync/${storeId}`,
     updateVariantField: (storeId) => `/api/inventory/variants/update-field/${storeId}`,
 };

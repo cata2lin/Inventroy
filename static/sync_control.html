@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sync Control - Inventory Intelligence</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+    <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+    <main class="container">
+        <nav>
+            <ul>
+                <li><strong>Inventory Intelligence</strong></li>
+            </ul>
+            <ul>
+                <li><a href="/dashboard-v2">Dashboard</a></li>
+                <li><a href="/products">Products</a></li>
+                <li><a href="/inventory">Inventory</a></li>
+                <li><a href="/bulk-update">Bulk Update</a></li>
+                <li><a href="/sync-control" role="button" class="contrast">Sync Control</a></li>
+            </ul>
+        </nav>
+
+        <hgroup>
+            <h1>Synchronization Control</h1>
+            <h2>Manually trigger and manage data syncs across your stores.</h2>
+        </hgroup>
+
+        <div class="grid">
+            <article>
+                <header>Global Sync Actions (All Stores)</header>
+                <button id="sync-all-products-btn">Sync All Products</button>
+                <button id="sync-all-orders-btn">Sync All Orders</button>
+                <footer>
+                    <small>Triggers a full data sync for the selected category across every configured store.</small>
+                </footer>
+            </article>
+
+            <article>
+                <header>Targeted Sync Actions</header>
+                
+                <label for="store-selector">Select Stores (optional, defaults to all)</label>
+                <select id="store-selector" multiple>
+                    <option>Loading stores...</option>
+                </select>
+
+                <button id="sync-selected-products-btn">Sync Products for Selected</button>
+                <hr>
+                
+                <label for="start-date">Date Range for Order Sync</label>
+                <div class="grid">
+                    <input type="date" id="start-date" placeholder="Start Date">
+                    <input type="date" id="end-date" placeholder="End Date">
+                </div>
+                <button id="sync-selected-orders-btn">Sync Orders for Selected</button>
+                
+                <footer>
+                    <small>Run sync operations only on the stores you select above.</small>
+                </footer>
+            </article>
+        </div>
+    </main>
+    
+    <div id="toast"></div>
+
+    <script src="/static/js/config.js"></script>
+    <script src="/static/js/sync_control.js"></script>
+</body>
+</html>
