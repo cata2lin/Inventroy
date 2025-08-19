@@ -87,21 +87,21 @@ def update_local_variant(db: Session, variant_id: int, changes: dict):
         print(f"Warning: Could not find variant with ID {variant_id} in local DB to update.")
         return
 
-    # MODIFIED: This block now correctly handles all product-level fields.
     product_fields_to_update = ['product_title', 'product_type', 'status', 'title']
     if any(field in changes for field in product_fields_to_update):
         db_product = db.query(models.Product).filter(models.Product.id == db_variant.product_id).first()
         if db_product:
             if 'product_title' in changes: db_product.title = changes['product_title']
-            if 'title' in changes: db_product.title = changes['title'] # Handle alias from Shopify payload
+            if 'title' in changes: db_product.title = changes['title']
             if 'product_type' in changes: db_product.product_type = changes['product_type']
             if 'status' in changes: db_product.status = changes['status']
 
-    # MODIFIED: Logic to update inventory level fields.
-    if 'onHand' in changes and db_variant.inventory_levels:
-        db_variant.inventory_levels[0].on_hand = changes['onHand']
-    if 'available' in changes and db_variant.inventory_levels:
-        db_variant.inventory_levels[0].available = changes['available']
+    # MODIFIED: This block now correctly updates inventory levels from the changes dictionary.
+    if db_variant.inventory_levels:
+        if 'onHand' in changes:
+            db_variant.inventory_levels[0].on_hand = int(changes['onHand'])
+        if 'available' in changes:
+            db_variant.inventory_levels[0].available = int(changes['available'])
         
     for key, value in changes.items():
         if hasattr(db_variant, key):

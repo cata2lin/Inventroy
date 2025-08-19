@@ -151,7 +151,6 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 variant_changes = {"id": variant_db.shopify_gid}
                 inventory_changes = {}
 
-                # MODIFIED: This block now correctly separates changes into product, variant, and inventory categories.
                 if 'status' in changes:
                     product_changes['status'] = changes.pop('status')
                 if 'product_title' in changes:
@@ -176,12 +175,20 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 if len(variant_changes) > 1:
                     service.update_variant_details(variant_db.product.shopify_gid, variant_changes)
 
-                if inventory_changes:
+                # MODIFIED: This block now correctly handles both 'available' and 'onHand' inventory changes.
+                if inventory_changes and variant_db.inventory_levels:
                     location_gid = f"gid://shopify/Location/{variant_db.inventory_levels[0].location_id}"
                     inventory_item_gid = f"gid://shopify/InventoryItem/{variant_db.inventory_item_id}"
+                    
                     if 'available' in inventory_changes:
                         current_qty = variant_db.inventory_levels[0].available or 0
                         delta = int(inventory_changes['available']) - current_qty
+                        if delta != 0:
+                            service.adjust_inventory_quantity(inventory_item_gid, location_gid, delta)
+                    
+                    if 'onHand' in inventory_changes:
+                        current_on_hand = variant_db.inventory_levels[0].on_hand or 0
+                        delta = int(inventory_changes['onHand']) - current_on_hand
                         if delta != 0:
                             service.adjust_inventory_quantity(inventory_item_gid, location_gid, delta)
                 
