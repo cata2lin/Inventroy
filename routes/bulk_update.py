@@ -118,7 +118,6 @@ async def upload_excel_for_bulk_update(db: Session = Depends(get_db), file: Uplo
         raise HTTPException(status_code=500, detail=f"An error occurred processing the file: {str(e)}")
 
 
-# MODIFIED: This function now contains the logic to push changes to Shopify.
 @router.post("/variants/", status_code=200)
 def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_db)):
     results = {"success": [], "errors": []}
@@ -156,9 +155,12 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
 
                 if product_changes:
                     service.update_product(variant_db.product.shopify_gid, product_changes)
-
+                
+                # MODIFIED: This loop now correctly handles the 'cost' field.
                 for key, value in changes.items():
-                    if key in ["price", "cost", "barcode"]: # Add other variant-specific fields here
+                    if key == 'cost':
+                        variant_changes['inventoryItem'] = {'cost': value}
+                    elif key in ["price", "barcode"]:
                         variant_changes[key] = value
 
                 if len(variant_changes) > 1:

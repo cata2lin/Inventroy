@@ -86,6 +86,7 @@ class ProductService:
             raise ValueError(f"Shopify User Error: {error_message}")
         return result.get("product", {})
 
+    # MODIFIED: The GraphQL query now includes 'cost' in the response.
     def update_variant_details(self, product_id: str, variant_updates: Dict[str, Any]) -> Dict[str, Any]:
         """
         Updates a single product variant's details using the productVariantsBulkUpdate mutation.
@@ -93,7 +94,10 @@ class ProductService:
         MUTATION_UPDATE_VARIANT = """
         mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
           productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-            productVariants { id, title, sku, barcode, price, compareAtPrice, inventoryItem { id } }
+            productVariants { 
+              id, title, sku, barcode, price, compareAtPrice, 
+              inventoryItem { id, unitCost { amount } } 
+            }
             userErrors { field, message }
           }
         }
