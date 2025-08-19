@@ -21,6 +21,7 @@ router = APIRouter(
 class VariantUpdatePayload(BaseModel):
     variant_id: int
     store_id: int
+    product_id: int
     changes: Dict[str, Any]
 
 class BulkUpdatePayload(BaseModel):
@@ -31,7 +32,6 @@ class BarcodeGenerationRequest(BaseModel):
     mode: str
 
 # --- API Endpoints ---
-# MODIFIED: Endpoint updated to accept the new 'statuses' filter parameter.
 @router.get("/variants/")
 def get_all_variants_for_bulk_edit(
     db: Session = Depends(get_db),
@@ -104,6 +104,7 @@ async def upload_excel_for_bulk_update(db: Session = Depends(get_db), file: Uplo
                     VariantUpdatePayload(
                         variant_id=variant.id,
                         store_id=variant.product.store_id,
+                        product_id=variant.product.id,
                         changes=changes
                     )
                 )
@@ -117,6 +118,7 @@ async def upload_excel_for_bulk_update(db: Session = Depends(get_db), file: Uplo
         raise HTTPException(status_code=500, detail=f"An error occurred processing the file: {str(e)}")
 
 
+# MODIFIED: This function now contains the logic to push changes to Shopify.
 @router.post("/variants/", status_code=200)
 def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_db)):
     results = {"success": [], "errors": []}
@@ -145,15 +147,25 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
             try:
                 changes = {k: (v if v != "" else None) for k, v in update_data.changes.items()}
                 
-                numeric_fields = ['price', 'cost', 'compareAtPrice', 'onHand', 'available']
-                for field in numeric_fields:
-                    if field in changes and changes[field] is not None:
-                        try:
-                            changes[field] = float(changes[field]) if '.' in str(changes[field]) else int(changes[field])
-                        except (ValueError, TypeError):
-                            changes[field] = None
+                # --- Shopify Update Logic ---
+                product_changes = {}
+                variant_changes = {"id": variant_db.shopify_gid}
                 
-                crud_bulk_update.update_local_variant(db, update_data.variant_id, changes)
+                if 'status' in changes:
+                    product_changes['status'] = changes.pop('status')
+
+                if product_changes:
+                    service.update_product(variant_db.product.shopify_gid, product_changes)
+
+                for key, value in changes.items():
+                    if key in ["price", "cost", "barcode"]: # Add other variant-specific fields here
+                        variant_changes[key] = value
+
+                if len(variant_changes) > 1:
+                    service.update_variant_details(variant_db.product.shopify_gid, variant_changes)
+                
+                # --- Local Database Update ---
+                crud_bulk_update.update_local_variant(db, update_data.variant_id, {**product_changes, **changes})
                 results["success"].append(f"Successfully updated variant ID {update_data.variant_id}")
 
             except Exception as e:
