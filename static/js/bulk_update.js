@@ -6,7 +6,6 @@ document.addEventListener('DOMContentLoaded', () => {
         container: document.getElementById('bulk-update-container'),
         saveBtn: document.getElementById('save-changes-btn'),
         searchInput: document.getElementById('search-input'),
-        // MODIFIED: Updated to support multi-select lists
         storeFilterList: document.getElementById('store-filter-list'),
         typeFilterList: document.getElementById('type-filter-list'),
         noBarcodeFilter: document.getElementById('no-barcode-filter'),
@@ -29,11 +28,19 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => { elements.toast.className = ''; }, duration);
     };
 
+    // MODIFIED: Added a debounce utility for the auto-search feature
+    const debounce = (func, delay) => {
+        let timeout;
+        return (...args) => {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(this, args), delay);
+        };
+    };
+
     // --- Data Fetching and Population ---
     const loadAllVariants = async () => {
         try {
             elements.container.setAttribute('aria-busy', 'true');
-            // MODIFIED: Fetch call now sends filter parameters
             const params = new URLSearchParams();
             const search = elements.searchInput.value;
             const store_ids = Array.from(elements.storeFilterList.querySelectorAll('input:checked')).map(cb => cb.value);
@@ -49,7 +56,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) throw new Error('Failed to fetch product variants.');
             allVariants = await response.json();
             
-            // Populate filters only once on the first load
             if (elements.storeFilterList.children.length <= 1) {
                 populateFilters(allVariants);
             }
@@ -61,7 +67,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
     
-    // MODIFIED: Populates filter lists with checkboxes for multi-select
     const populateFilters = (variants) => {
         const stores = [...new Map(variants.map(v => [v.store_id, v.store_name])).entries()];
         const types = [...new Set(variants.map(v => v.product_type).filter(Boolean))];
@@ -79,7 +84,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Rendering Logic ---
     const render = () => {
-        // MODIFIED: Filtering is now handled by the backend, so we just sort the results.
         let variantsToRender = [...allVariants];
 
         if (currentView === 'individual') {
@@ -109,7 +113,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const renderIndividualView = (variantsToRender) => {
         const tableHeaders = [
             { key: 'product_title', label: 'Product' },
-            // MODIFIED: Barcode header is now sortable
             { key: 'barcode', label: 'Barcode', sortable: true },
             { key: 'product_type', label: 'Type' },
             { key: 'price', label: 'Price' },
@@ -382,8 +385,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Initial Setup ---
     elements.saveBtn.addEventListener('click', handleSaveChanges);
-    // MODIFIED: Event listeners now trigger a reload of data
-    elements.searchInput.addEventListener('change', loadAllVariants);
+    // MODIFIED: Search input now uses 'input' event with debounce for auto-searching
+    elements.searchInput.addEventListener('input', debounce(loadAllVariants, 400));
     elements.storeFilterList.addEventListener('change', loadAllVariants);
     elements.typeFilterList.addEventListener('change', loadAllVariants);
     elements.noBarcodeFilter.addEventListener('change', loadAllVariants);
