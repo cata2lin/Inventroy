@@ -115,54 +115,40 @@ th[data-sort-by].desc::after { content: '▼'; }
 
 /* --- Bulk Update Page Specific Styles --- */
 
-/* MODIFIED: Top controls are now 50% smaller */
+/* MODIFIED: Top controls ("Green Area") are now 50% smaller */
 .bulk-update-controls .compact-controls > * {
-    font-size: 0.5rem; /* Approx 50% smaller */
-    padding: 0.2rem 0.4rem;
-    height: auto;
-}
-
-/* MODIFIED: Main action buttons are also 50% smaller */
-.bulk-update-controls .bulk-update-action-btn {
     font-size: 0.5rem;
     padding: 0.2rem 0.4rem;
     height: auto;
 }
 
-/* MODIFIED: Grouping and styling for the import controls */
+/* MODIFIED: Import controls are now styled to match the smaller size */
 .import-controls {
     display: grid;
-    grid-template-columns: auto auto; /* Aligns button next to file input */
+    grid-template-columns: auto auto;
     gap: 0.5rem;
     margin-top: 1rem;
     align-items: center;
-    justify-content: start; /* Prevents stretching */
+    justify-content: start;
+}
+.import-controls .bulk-update-action-btn,
+.import-controls input[type="file"]::file-selector-button {
+    font-size: 0.5rem;
+    padding: 0.2rem 0.4rem;
 }
 .import-controls input[type="file"] {
     font-size: 0.5rem;
     padding: 0;
-    width: auto; /* Shrinks to content */
-}
-.import-controls input[type="file"]::file-selector-button {
-    font-size: 1em;
-    padding: 0.2rem 0.4rem;
-    border-radius: var(--border-radius);
-    border: 1px solid var(--pico-form-element-border-color);
-    background-color: var(--pico-form-element-background-color);
-    color: var(--pico-color);
-    cursor: pointer;
-    margin-right: 10px;
+    width: auto;
 }
 
-/* MODIFIED: Table text and height are now 30% smaller */
+/* MODIFIED: Table text and height ("Yellow Area") are now 30% smaller */
 .bulk-update-table {
-    font-size: 70%;
-    table-layout: auto;
-    width: 100%;
+    font-size: 0.7em; /* Approx 30% smaller text */
 }
 .bulk-update-table td, .bulk-update-table th {
-    height: 35px;
-    max-height: 35px;
+    height: 25px; /* Approx 30% smaller height */
+    max-height: 25px;
     padding: 0.1rem 0.4rem;
     vertical-align: middle;
 }
@@ -172,8 +158,8 @@ th[data-sort-by].desc::after { content: '▼'; }
 .bulk-update-table th:nth-child(4), .bulk-update-table td:nth-child(4) { width: 150px; }
 
 .bulk-update-table img {
-    width: 25px;
-    height: 25px;
+    width: 20px;
+    height: 20px;
     object-fit: cover;
     border-radius: var(--border-radius);
 }
