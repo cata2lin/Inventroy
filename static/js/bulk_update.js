@@ -6,8 +6,10 @@ document.addEventListener('DOMContentLoaded', () => {
         container: document.getElementById('bulk-update-container'),
         saveBtn: document.getElementById('save-changes-btn'),
         searchInput: document.getElementById('search-input'),
-        storeFilter: document.getElementById('store-filter'),
-        typeFilter: document.getElementById('type-filter'),
+        // MODIFIED: Updated to support multi-select lists
+        storeFilterList: document.getElementById('store-filter-list'),
+        typeFilterList: document.getElementById('type-filter-list'),
+        noBarcodeFilter: document.getElementById('no-barcode-filter'),
         groupToggle: document.getElementById('group-toggle'),
         toast: document.getElementById('toast'),
         generateUniqueBtn: document.getElementById('generate-unique-barcode-btn'),
@@ -31,10 +33,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const loadAllVariants = async () => {
         try {
             elements.container.setAttribute('aria-busy', 'true');
-            const response = await fetch(API_ENDPOINTS.getAllVariantsForBulkEdit);
+            // MODIFIED: Fetch call now sends filter parameters
+            const params = new URLSearchParams();
+            const search = elements.searchInput.value;
+            const store_ids = Array.from(elements.storeFilterList.querySelectorAll('input:checked')).map(cb => cb.value);
+            const product_types = Array.from(elements.typeFilterList.querySelectorAll('input:checked')).map(cb => cb.value);
+            const has_no_barcode = elements.noBarcodeFilter.checked;
+
+            if (search) params.set('search', search);
+            if (has_no_barcode) params.set('has_no_barcode', true);
+            store_ids.forEach(id => params.append('store_ids', id));
+            product_types.forEach(type => params.append('product_types', type));
+            
+            const response = await fetch(`${API_ENDPOINTS.getAllVariantsForBulkEdit}?${params.toString()}`);
             if (!response.ok) throw new Error('Failed to fetch product variants.');
             allVariants = await response.json();
-            populateFilters();
+            
+            // Populate filters only once on the first load
+            if (elements.storeFilterList.children.length <= 1) {
+                populateFilters(allVariants);
+            }
             render();
         } catch (error) {
             elements.container.innerHTML = `<p style="color: var(--pico-color-red-500);">${error.message}</p>`;
@@ -42,36 +60,30 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.container.removeAttribute('aria-busy');
         }
     };
-
-    const populateFilters = () => {
-        const stores = [...new Set(allVariants.map(v => v.store_name))];
-        const types = [...new Set(allVariants.map(v => v.product_type).filter(Boolean))];
+    
+    // MODIFIED: Populates filter lists with checkboxes for multi-select
+    const populateFilters = (variants) => {
+        const stores = [...new Map(variants.map(v => [v.store_id, v.store_name])).entries()];
+        const types = [...new Set(variants.map(v => v.product_type).filter(Boolean))];
         
-        elements.storeFilter.innerHTML = '<option value="">All Stores</option>';
-        stores.sort().forEach(s => elements.storeFilter.add(new Option(s, s)));
+        elements.storeFilterList.innerHTML = '';
+        stores.sort((a,b) => a[1].localeCompare(b[1])).forEach(([id, name]) => {
+            elements.storeFilterList.innerHTML += `<li><label><input type="checkbox" name="store" value="${id}"> ${name}</label></li>`;
+        });
 
-        elements.typeFilter.innerHTML = '<option value="">All Types</option>';
-        types.sort().forEach(t => elements.typeFilter.add(new Option(t, t)));
+        elements.typeFilterList.innerHTML = '';
+        types.sort().forEach(t => {
+            elements.typeFilterList.innerHTML += `<li><label><input type="checkbox" name="type" value="${t}"> ${t}</label></li>`;
+        });
     };
 
     // --- Rendering Logic ---
     const render = () => {
-        const searchTerm = elements.searchInput.value.toLowerCase();
-        const selectedStore = elements.storeFilter.value;
-        const selectedType = elements.typeFilter.value;
-
-        let filteredVariants = allVariants.filter(v => {
-            const matchesSearch = !searchTerm || 
-                v.product_title.toLowerCase().includes(searchTerm) || 
-                (v.sku && v.sku.toLowerCase().includes(searchTerm)) ||
-                (v.barcode && v.barcode.toLowerCase().includes(searchTerm));
-            const matchesStore = !selectedStore || v.store_name === selectedStore;
-            const matchesType = !selectedType || v.product_type === selectedType;
-            return matchesSearch && matchesStore && matchesType;
-        });
+        // MODIFIED: Filtering is now handled by the backend, so we just sort the results.
+        let variantsToRender = [...allVariants];
 
         if (currentView === 'individual') {
-            filteredVariants.sort((a, b) => {
+            variantsToRender.sort((a, b) => {
                 const valA = a[sortState.key];
                 const valB = b[sortState.key];
                 if (valA === null || valA === undefined) return 1;
@@ -88,16 +100,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (currentView === 'grouped') {
-            renderGroupedView(filteredVariants);
+            renderGroupedView(variantsToRender);
         } else {
-            renderIndividualView(filteredVariants);
+            renderIndividualView(variantsToRender);
         }
     };
 
     const renderIndividualView = (variantsToRender) => {
         const tableHeaders = [
             { key: 'product_title', label: 'Product' },
-            { key: 'barcode', label: 'Barcode' },
+            // MODIFIED: Barcode header is now sortable
+            { key: 'barcode', label: 'Barcode', sortable: true },
             { key: 'product_type', label: 'Type' },
             { key: 'price', label: 'Price' },
             { key: 'cost', label: 'Cost' },
@@ -110,7 +123,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <th>Image</th>
             <th data-sort-key="store_name">Store</th>
             <th data-sort-key="sku">SKU</th>
-            ${tableHeaders.map(h => `<th data-sort-key="${h.key}">${h.label}</th>`).join('')}
+            ${tableHeaders.map(h => `<th ${h.sortable ? `data-sort-key="${h.key}"` : ''}>${h.label}</th>`).join('')}
             </tr>`;
         
         tableHtml += `<tr id="bulk-apply-row">
@@ -122,10 +135,9 @@ document.addEventListener('DOMContentLoaded', () => {
             tableHtml += '<tr><td colspan="12">No products match the current filters.</td></tr>';
         } else {
             variantsToRender.forEach(v => {
-                // MODIFIED: Conditionally render the image tag only if a URL exists
                 const imageCell = v.image_url 
                     ? `<td><img src="${v.image_url}" alt="${v.product_title}"></td>` 
-                    : '<td></td>'; // Render an empty cell if no image
+                    : '<td></td>';
 
                 tableHtml += `<tr data-variant-id="${v.variant_id}" data-store-id="${v.store_id}">
                     <td><input type="checkbox" class="row-checkbox"></td>
@@ -370,9 +382,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Initial Setup ---
     elements.saveBtn.addEventListener('click', handleSaveChanges);
-    elements.searchInput.addEventListener('input', render);
-    elements.storeFilter.addEventListener('change', render);
-    elements.typeFilter.addEventListener('change', render);
+    // MODIFIED: Event listeners now trigger a reload of data
+    elements.searchInput.addEventListener('change', loadAllVariants);
+    elements.storeFilterList.addEventListener('change', loadAllVariants);
+    elements.typeFilterList.addEventListener('change', loadAllVariants);
+    elements.noBarcodeFilter.addEventListener('change', loadAllVariants);
+
     elements.groupToggle.addEventListener('change', (e) => {
         currentView = e.target.checked ? 'grouped' : 'individual';
         elements.saveBtn.disabled = currentView === 'grouped';

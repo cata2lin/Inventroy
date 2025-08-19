@@ -1,6 +1,6 @@
 # routes/bulk_update.py
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -31,9 +31,22 @@ class BarcodeGenerationRequest(BaseModel):
     mode: str
 
 # --- API Endpoints ---
+# MODIFIED: Endpoint updated to accept new filter parameters from the frontend.
 @router.get("/variants/")
-def get_all_variants_for_bulk_edit(db: Session = Depends(get_db)):
-    return crud_bulk_update.get_all_variants_for_bulk_edit(db)
+def get_all_variants_for_bulk_edit(
+    db: Session = Depends(get_db),
+    search: Optional[str] = Query(None),
+    store_ids: Optional[List[int]] = Query(None),
+    product_types: Optional[List[str]] = Query(None),
+    has_no_barcode: bool = Query(False)
+):
+    return crud_bulk_update.get_all_variants_for_bulk_edit(
+        db,
+        search=search,
+        store_ids=store_ids,
+        product_types=product_types,
+        has_no_barcode=has_no_barcode
+    )
 
 @router.post("/generate-barcode/")
 def generate_barcodes_endpoint(request: BarcodeGenerationRequest, db: Session = Depends(get_db)):

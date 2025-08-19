@@ -1,21 +1,52 @@
 # crud/bulk_update.py
 
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import or_
+from typing import List, Optional
 import models
 
-def get_all_variants_for_bulk_edit(db: Session):
+# MODIFIED: Function signature and query logic updated to handle advanced filtering.
+def get_all_variants_for_bulk_edit(
+    db: Session,
+    search: Optional[str] = None,
+    store_ids: Optional[List[int]] = None,
+    product_types: Optional[List[str]] = None,
+    has_no_barcode: bool = False
+):
     """
-    Fetches a comprehensive list of all product variants from all stores,
-    including all necessary related data for the bulk edit page.
+    Fetches a comprehensive list of all product variants, applying advanced filters.
     """
-    all_variants = db.query(models.ProductVariant).join(
+    query = db.query(models.ProductVariant).join(
         models.ProductVariant.product
     ).join(
         models.Product.store
     ).options(
         joinedload(models.ProductVariant.product).joinedload(models.Product.store),
         joinedload(models.ProductVariant.inventory_levels)
-    ).order_by(
+    )
+
+    # --- FILTERING LOGIC ---
+    if search:
+        search_terms = [term.strip() for term in search.split(',') if term.strip()]
+        if search_terms:
+            search_filters = []
+            for term in search_terms:
+                search_ilike = f"%{term}%"
+                search_filters.append(models.Product.title.ilike(search_ilike))
+                search_filters.append(models.ProductVariant.sku.ilike(search_ilike))
+                search_filters.append(models.ProductVariant.barcode.ilike(search_ilike))
+            query = query.filter(or_(*search_filters))
+
+    if store_ids:
+        query = query.filter(models.Product.store_id.in_(store_ids))
+    
+    if product_types:
+        query = query.filter(models.Product.product_type.in_(product_types))
+
+    if has_no_barcode:
+        query = query.filter(models.ProductVariant.barcode.is_(None))
+
+    all_variants = query.order_by(
         models.Store.name,
         models.Product.title,
         models.ProductVariant.title
