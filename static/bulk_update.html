@@ -26,10 +26,9 @@
             <h2>Edit product variants across all stores and save changes in one go.</h2>
         </hgroup>
 
-        <!-- MODIFIED: Added the 'bulk-update-controls' class -->
         <article class="bulk-update-controls">
             <div class="grid">
-                <button id="save-changes-btn" aria-busy="false">Save Changes</button>
+                <button id="save-changes-btn" class="bulk-update-action-btn" aria-busy="false">Save Changes</button>
                 <input type="search" id="search-input" placeholder="Filter products...">
                 <select id="store-filter">
                     <option value="">All Stores</option>
@@ -53,11 +52,11 @@
             </div>
             <div class="grid" style="margin-top: 1rem;">
                 <input type="file" id="excel-file-input" accept=".xlsx">
-                <button id="import-excel-btn">Import from Excel</button>
+                <button id="import-excel-btn" class="bulk-update-action-btn">Import from Excel</button>
             </div>
         </article>
 
-        <article id="bulk-update-container" aria-busy="true">
+        <article id="bulk-update-container" class="overflow-auto" aria-busy="true">
             <p>Loading products...</p>
         </article>
     </main>

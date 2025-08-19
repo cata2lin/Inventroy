@@ -115,9 +115,30 @@ th[data-sort-by].desc::after { content: '▼'; }
 
 /* --- Bulk Update Page Specific Styles --- */
 
-/* ADDED: Rule to make control section text smaller */
 .bulk-update-controls .grid > * {
-    font-size: 0.7rem; /* Approx 30% smaller than base */
+    font-size: 0.7rem;
+}
+
+/* ADDED: Specific styling for main action buttons to make them smaller */
+.bulk-update-controls .bulk-update-action-btn {
+    font-size: 0.7rem;
+    padding: 0.25rem 0.5rem;
+    height: auto;
+}
+
+/* ADDED: Style file input to behave more like a button */
+.bulk-update-controls input[type="file"] {
+    font-size: 0.7rem;
+    padding: 0;
+}
+.bulk-update-controls input[type="file"]::file-selector-button {
+    font-size: 1em;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--border-radius);
+    border: 1px solid var(--pico-form-element-border-color);
+    background-color: var(--pico-form-element-background-color);
+    color: var(--pico-color);
+    cursor: pointer;
 }
 
 .bulk-update-table {
@@ -125,16 +146,20 @@ th[data-sort-by].desc::after { content: '▼'; }
     table-layout: auto;
     width: 100%;
 }
-/* MODIFIED: Enforced max-height and vertical alignment */
 .bulk-update-table td, .bulk-update-table th {
-    height: 30px;
-    max-height: 30px;
-    padding: 0.2rem 0.4rem;
+    /* MODIFIED: Set height to max 35px */
+    height: 35px;
+    max-height: 35px;
+    padding: 0.1rem 0.4rem;
     vertical-align: middle;
 }
+/* ADDED: Specific column width adjustments */
+.bulk-update-table th:nth-child(2), .bulk-update-table td:nth-child(2) { width: 40px; } /* Image column */
+.bulk-update-table th:nth-child(4), .bulk-update-table td:nth-child(4) { width: 125px; } /* SKU column */
+
 .bulk-update-table img {
-    width: 40px;
-    height: 40px;
+    width: 30px;
+    height: 30px;
     object-fit: cover;
     border-radius: var(--border-radius);
 }
