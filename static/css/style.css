@@ -97,7 +97,7 @@ th[data-sort-by].desc::after { content: '▼'; }
 .grouped-item summary { display: block; cursor: pointer; padding: 0.5rem; }
 .grouped-item summary > .grid {
     align-items: center;
-    grid-template-columns: 60px 3fr 1fr 1fr; /* Adjusted for bulk update view */
+    grid-template-columns: 60px 3fr 1fr 1fr;
     gap: 1rem;
     min-height: 50px;
 }
@@ -114,14 +114,23 @@ th[data-sort-by].desc::after { content: '▼'; }
 .quantity-display p { font-size: 0.7rem; color: var(--muted-color); }
 
 /* --- Bulk Update Page Specific Styles --- */
+
+/* ADDED: Rule to make control section text smaller */
+.bulk-update-controls .grid > * {
+    font-size: 0.7rem; /* Approx 30% smaller than base */
+}
+
 .bulk-update-table {
-    font-size: 65%; /* 35% smaller text */
+    font-size: 65%;
     table-layout: auto;
     width: 100%;
 }
+/* MODIFIED: Enforced max-height and vertical alignment */
 .bulk-update-table td, .bulk-update-table th {
     height: 50px;
+    max-height: 50px;
     padding: 0.2rem 0.4rem;
+    vertical-align: middle;
 }
 .bulk-update-table img {
     width: 40px;
@@ -136,7 +145,8 @@ th[data-sort-by].desc::after { content: '▼'; }
     border: 1px solid transparent;
     background: transparent;
     padding: 0 0.25rem;
-    font-size: 1em; /* Inherit from table */
+    font-size: 1em;
+    box-sizing: border-box;
 }
 .bulk-update-table input:focus {
     border-color: var(--pico-primary);
