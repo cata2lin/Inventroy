@@ -155,17 +155,15 @@ th[data-sort-by].desc::after { content: '▼'; }
     max-height: 28px;
     padding: 0.1rem 0.4rem;
     vertical-align: middle;
-    font-size: 0.76em; /* MODIFIED: 24% smaller font size for headers */
+    font-size: 0.76em;
 }
 
-/* Column width adjustments for a more compact layout */
+/* MODIFIED: Added specific width for the new Status column */
 .bulk-update-table th:nth-child(2), .bulk-update-table td:nth-child(2) { width: 60px; } /* Image */
-.bulk-update-table th:nth-child(5), .bulk-update-table td:nth-child(5) { width: 25%; } /* Product Title */
-.bulk-update-table th:nth-child(6), .bulk-update-table td:nth-child(6) { width: 15%; } /* Barcode */
-.bulk-update-table th:nth-child(8), .bulk-update-table td:nth-child(8) { width: 5%; } /* Price */
-.bulk-update-table th:nth-child(9), .bulk-update-table td:nth-child(9) { width: 5%; } /* Cost */
-.bulk-update-table th:nth-child(10), .bulk-update-table td:nth-child(10) { width: 6%; } /* On Hand */
-.bulk-update-table th:nth-child(11), .bulk-update-table td:nth-child(11) { width: 6%; } /* Available */
+.bulk-update-table th:nth-child(5), .bulk-update-table td:nth-child(5) { width: 20%; } /* Product Title */
+.bulk-update-table th:nth-child(6), .bulk-update-table td:nth-child(6) { width: 12%; } /* Barcode */
+.bulk-update-table th:nth-child(8), .bulk-update-table td:nth-child(8) { width: 8%; }  /* Status */
+.bulk-update-table th:nth-child(9), .bulk-update-table td:nth-child(9) { width: 5%; } /* Price */
 
 .bulk-update-table img {
     width: 50px;
@@ -174,21 +172,23 @@ th[data-sort-by].desc::after { content: '▼'; }
     border-radius: var(--border-radius);
 }
 
+/* MODIFIED: This selector now also applies to the 'select' element for Status. */
 .bulk-update-table input[type="text"], 
-.bulk-update-table input[type="number"] {
+.bulk-update-table input[type="number"],
+.bulk-update-table select {
     width: 100%;
     height: 70%;
     border: 1px solid transparent;
     background: transparent;
     padding: 0 0.25rem;
-    font-size: 0.76em; /* MODIFIED: 24% smaller font size for inputs */
+    font-size: 0.76em;
     box-sizing: border-box;
 }
-.bulk-update-table input:focus {
+.bulk-update-table input:focus, .bulk-update-table select:focus {
     border-color: var(--pico-primary);
     background: var(--pico-form-element-background-color);
 }
-.bulk-update-table input.changed {
+.bulk-update-table input.changed, .bulk-update-table select.changed {
     background-color: rgba(255, 204, 0, 0.1);
     font-weight: bold;
 }

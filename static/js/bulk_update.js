@@ -1,7 +1,6 @@
 // static/js/bulk_update.js
 
 document.addEventListener('DOMContentLoaded', () => {
-    // --- Element References ---
     const elements = {
         container: document.getElementById('bulk-update-container'),
         saveBtn: document.getElementById('save-changes-btn'),
@@ -22,7 +21,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentView = 'individual';
     let sortState = { key: 'product_title', order: 'asc' };
 
-    // --- Utility Functions ---
     const showToast = (message, type = 'info', duration = 5000) => {
         elements.toast.textContent = message;
         elements.toast.className = `show ${type}`;
@@ -37,7 +35,6 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     };
 
-    // --- Data Fetching and Population ---
     const loadAllVariants = async () => {
         try {
             elements.container.setAttribute('aria-busy', 'true');
@@ -84,7 +81,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
 
-    // --- Rendering Logic ---
     const render = () => {
         let variantsToRender = [...allVariants];
 
@@ -113,15 +109,16 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const renderIndividualView = (variantsToRender) => {
+        // MODIFIED: The table headers are now all contained in this array.
         const tableHeaders = [
-            { key: 'product_title', label: 'Product' },
-            { key: 'barcode', label: 'Barcode', sortable: true },
-            { key: 'product_type', label: 'Type' },
-            { key: 'status', label: 'Status' },
-            { key: 'price', label: 'Price' },
-            { key: 'cost', label: 'Cost' },
-            { key: 'onHand', label: 'On Hand' },
-            { key: 'available', label: 'Available' },
+            { key: 'product_title', label: 'Product', isEditable: true, type: 'text' },
+            { key: 'barcode', label: 'Barcode', isEditable: true, type: 'text', sortable: true },
+            { key: 'product_type', label: 'Type', isEditable: true, type: 'text' },
+            { key: 'status', label: 'Status', isEditable: true, type: 'select' },
+            { key: 'price', label: 'Price', isEditable: true, type: 'number' },
+            { key: 'cost', label: 'Cost', isEditable: true, type: 'number' },
+            { key: 'onHand', label: 'On Hand', isEditable: true, type: 'number' },
+            { key: 'available', label: 'Available', isEditable: true, type: 'number' },
         ];
 
         let tableHtml = `<table class="bulk-update-table"><thead><tr>
@@ -133,20 +130,22 @@ document.addEventListener('DOMContentLoaded', () => {
             </tr>`;
         
         tableHtml += `<tr id="bulk-apply-row">
-                        <th></th><th></th><th></th><th></th><th></th>
-                        ${tableHeaders.map(h => `<td><input type="${h.key.includes('price') || h.key.includes('cost') || h.key.includes('Hand') || h.key.includes('available') ? 'number' : 'text'}" placeholder="Apply..." data-bulk-apply-for="${h.key}"></td>`).join('')}
+                        <th></th><th></th><th></th><th></th>
+                        ${tableHeaders.map(h => `<td>${h.isEditable ? `<input type="${h.type === 'select' ? 'text' : h.type}" placeholder="Apply..." data-bulk-apply-for="${h.key}">` : ''}</td>`).join('')}
                       </tr></thead><tbody>`;
 
         if (variantsToRender.length === 0) {
-            tableHtml += '<tr><td colspan="13">No products match the current filters.</td></tr>';
+            tableHtml += '<tr><td colspan="12">No products match the current filters.</td></tr>';
         } else {
             variantsToRender.forEach(v => {
                 const imageCell = v.image_url 
                     ? `<td><img src="${v.image_url}" alt="${v.product_title}"></td>` 
                     : '<td></td>';
 
+                // MODIFIED: This function now renders all editable fields based on the tableHeaders array.
                 const renderField = (h) => {
-                    if (h.key === 'status') {
+                    if (!h.isEditable) return '<td></td>';
+                    if (h.type === 'select' && h.key === 'status') {
                         return `<td>
                                     <select data-field-key="status" data-original-value="${v.status || ''}">
                                         <option value="ACTIVE" ${v.status === 'ACTIVE' ? 'selected' : ''}>Active</option>
@@ -155,7 +154,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     </select>
                                 </td>`;
                     }
-                    return `<td><input data-field-key="${h.key}" value="${v[h.key] !== null && v[h.key] !== undefined ? v[h.key] : ''}" data-original-value="${v[h.key] !== null && v[h.key] !== undefined ? v[h.key] : ''}"></td>`;
+                    return `<td><input type="${h.type}" data-field-key="${h.key}" value="${v[h.key] !== null && v[h.key] !== undefined ? v[h.key] : ''}" data-original-value="${v[h.key] !== null && v[h.key] !== undefined ? v[h.key] : ''}"></td>`;
                 };
 
                 tableHtml += `<tr data-variant-id="${v.variant_id}" data-store-id="${v.store_id}" data-product-id="${v.product_id}">
@@ -237,7 +236,6 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.container.innerHTML = html;
     };
 
-    // --- Event Handling ---
     const addIndividualViewEventListeners = () => {
         const currentTh = document.querySelector(`th[data-sort-key="${sortState.key}"]`);
         if (currentTh) currentTh.classList.add(sortState.order);
@@ -325,7 +323,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const result = await response.json();
             if (!response.ok) throw new Error(result.detail?.message || 'An unknown error occurred.');
             showToast(result.message, 'success');
-            // MODIFIED: Added 'await' to prevent the race condition.
             await loadAllVariants();
         } catch (error) {
             showToast(`Error: ${error.message}`, 'error');

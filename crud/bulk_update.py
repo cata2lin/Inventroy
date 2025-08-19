@@ -13,9 +13,6 @@ def get_all_variants_for_bulk_edit(
     statuses: Optional[List[str]] = None,
     has_no_barcode: bool = False
 ):
-    """
-    Fetches a comprehensive list of all product variants, applying advanced filters.
-    """
     query = db.query(models.ProductVariant).join(
         models.ProductVariant.product
     ).join(
@@ -70,7 +67,6 @@ def get_all_variants_for_bulk_edit(
             "barcode": variant.barcode,
             "product_type": variant.product.product_type,
             "product_category": variant.product.product_category,
-            # ADDED: Include the product's status in the data sent to the frontend.
             "status": variant.product.status,
             "price": float(variant.price) if variant.price is not None else None,
             "cost": float(variant.cost) if variant.cost is not None else None,
@@ -85,23 +81,28 @@ def get_variant_for_update(db: Session, variant_id: int):
         joinedload(models.ProductVariant.inventory_levels)
     ).first()
 
-# MODIFIED: This function can now update the product's status in the local database.
 def update_local_variant(db: Session, variant_id: int, changes: dict):
     db_variant = db.query(models.ProductVariant).filter(models.ProductVariant.id == variant_id).first()
     if not db_variant:
         print(f"Warning: Could not find variant with ID {variant_id} in local DB to update.")
         return
 
-    if 'product_title' in changes or 'product_type' in changes or 'status' in changes:
+    # MODIFIED: This block now correctly handles all product-level fields.
+    product_fields_to_update = ['product_title', 'product_type', 'status', 'title']
+    if any(field in changes for field in product_fields_to_update):
         db_product = db.query(models.Product).filter(models.Product.id == db_variant.product_id).first()
         if db_product:
-            if 'product_title' in changes:
-                db_product.title = changes['product_title']
-            if 'product_type' in changes:
-                db_product.product_type = changes['product_type']
-            if 'status' in changes:
-                db_product.status = changes['status']
+            if 'product_title' in changes: db_product.title = changes['product_title']
+            if 'title' in changes: db_product.title = changes['title'] # Handle alias from Shopify payload
+            if 'product_type' in changes: db_product.product_type = changes['product_type']
+            if 'status' in changes: db_product.status = changes['status']
 
+    # MODIFIED: Logic to update inventory level fields.
+    if 'onHand' in changes and db_variant.inventory_levels:
+        db_variant.inventory_levels[0].on_hand = changes['onHand']
+    if 'available' in changes and db_variant.inventory_levels:
+        db_variant.inventory_levels[0].available = changes['available']
+        
     for key, value in changes.items():
         if hasattr(db_variant, key):
             setattr(db_variant, key, value)

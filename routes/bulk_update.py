@@ -149,25 +149,44 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 # --- Shopify Update Logic ---
                 product_changes = {}
                 variant_changes = {"id": variant_db.shopify_gid}
-                
+                inventory_changes = {}
+
+                # MODIFIED: This block now correctly separates changes into product, variant, and inventory categories.
                 if 'status' in changes:
                     product_changes['status'] = changes.pop('status')
+                if 'product_title' in changes:
+                    product_changes['title'] = changes.pop('product_title')
+                if 'product_type' in changes:
+                    product_changes['productType'] = changes.pop('product_type')
+                
+                if 'onHand' in changes:
+                    inventory_changes['onHand'] = changes.pop('onHand')
+                if 'available' in changes:
+                    inventory_changes['available'] = changes.pop('available')
 
                 if product_changes:
                     service.update_product(variant_db.product.shopify_gid, product_changes)
-                
-                # MODIFIED: This loop now correctly handles the 'cost' field.
+
                 for key, value in changes.items():
                     if key == 'cost':
                         variant_changes['inventoryItem'] = {'cost': value}
-                    elif key in ["price", "barcode"]:
+                    elif key in ["price", "barcode", "sku"]:
                         variant_changes[key] = value
 
                 if len(variant_changes) > 1:
                     service.update_variant_details(variant_db.product.shopify_gid, variant_changes)
+
+                if inventory_changes:
+                    location_gid = f"gid://shopify/Location/{variant_db.inventory_levels[0].location_id}"
+                    inventory_item_gid = f"gid://shopify/InventoryItem/{variant_db.inventory_item_id}"
+                    if 'available' in inventory_changes:
+                        current_qty = variant_db.inventory_levels[0].available or 0
+                        delta = int(inventory_changes['available']) - current_qty
+                        if delta != 0:
+                            service.adjust_inventory_quantity(inventory_item_gid, location_gid, delta)
                 
                 # --- Local Database Update ---
-                crud_bulk_update.update_local_variant(db, update_data.variant_id, {**product_changes, **changes})
+                crud_bulk_update.update_local_variant(db, update_data.variant_id, {**product_changes, **changes, **inventory_changes})
                 results["success"].append(f"Successfully updated variant ID {update_data.variant_id}")
 
             except Exception as e:
