@@ -19,7 +19,8 @@ from routes import (
     inventory_v2,
     mutations, 
     products, 
-    sync_control
+    sync_control,
+    bulk_update  # --- ADDED: Import the bulk_update router ---
 )
 
 Base.metadata.create_all(bind=engine)
@@ -43,6 +44,7 @@ app.include_router(inventory_v2.router)
 app.include_router(mutations.router)
 app.include_router(products.router, prefix="/api")
 app.include_router(sync_control.router)
+app.include_router(bulk_update.router) # --- ADDED: Include the bulk_update router ---
 
 # --- HTML Page Routes ---
 @app.get("/", response_class=RedirectResponse, include_in_schema=False)
