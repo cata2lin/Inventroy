@@ -79,15 +79,13 @@ GET_ALL_ORDERS_QUERY = f"""
 {LINE_ITEM_FRAGMENT}
 {FULFILLMENT_EVENT_FRAGMENT}
 {FULFILLMENT_FRAGMENT}
-{TRANSACTION_FRAGMENT}
 query GetAllData($cursor: String) {{
   orders(first: 5, after: $cursor, sortKey: UPDATED_AT, reverse: false) {{
     pageInfo {{ hasNextPage endCursor }}
     edges {{
       node {{
         id legacyResourceId name createdAt updatedAt cancelledAt cancelReason closedAt processedAt
-        displayFinancialStatus displayFulfillmentStatus currencyCode note tags
-        transactions(first: 5) {{ ...TransactionFragment }}
+        displayFinancialStatus displayFulfillmentStatus currencyCode note tags paymentGatewayNames
         totalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
         subtotalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
         totalTaxSet {{ shopMoney {{ ...MoneyFragment }} }}

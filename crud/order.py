@@ -19,7 +19,9 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
     processed_product_ids, processed_variant_ids, processed_location_ids, processed_line_item_ids = set(), set(), set(), set()
 
     for order in orders_data:
-        # MODIFIED: Added 'payment_gateway' to the data being saved
+        # MODIFIED: Joins the list of gateway names into a single string for storage
+        payment_gateway_str = ", ".join(order.paymentGatewayNames) if order.paymentGatewayNames else None
+        
         all_orders.append({
             "id": order.legacy_resource_id, "shopify_gid": order.id, "store_id": store_id, 
             "name": order.name, "email": order.email, "phone": order.phone, 
@@ -28,7 +30,7 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
             "closed_at": order.closed_at, "processed_at": order.processed_at, 
             "financial_status": order.financial_status, "fulfillment_status": order.fulfillment_status, 
             "currency": order.currency, "note": order.note, "tags": ", ".join(order.tags),
-            "payment_gateway": order.gateway,
+            "payment_gateway": payment_gateway_str,
             "total_price": order.total_price.amount, 
             "subtotal_price": order.subtotal_price.amount if order.subtotal_price else None, 
             "total_tax": order.total_tax.amount if order.total_tax else None, 
