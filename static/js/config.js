@@ -21,6 +21,7 @@ const API_ENDPOINTS = {
     getAllVariantsForBulkEdit: '/api/bulk-update/variants/',
     processBulkUpdates: '/api/bulk-update/variants/',
     generateBarcodes: '/api/bulk-update/generate-barcode/', // ADDED
+    uploadExcel: '/api/bulk-update/upload-excel/', // ADDED
 
     // Legacy Endpoints (can be removed if not used elsewhere)
     syncOrders: (storeId) => `/api/orders/sync/${storeId}`,

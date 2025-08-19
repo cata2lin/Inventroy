@@ -81,3 +81,17 @@ def update_local_variant(db: Session, variant_id: int, changes: dict):
     # Note: Inventory levels are managed by Shopify's response during a full sync.
     # We update the direct fields here that were part of the bulk edit.
     db.commit()
+
+def get_variants_by_skus(db: Session, skus: list[str]):
+    """
+    Fetches all product variants that match a given list of SKUs.
+    Eagerly loads relationships needed for processing updates.
+    """
+    if not skus:
+        return []
+    return db.query(models.ProductVariant).filter(
+        models.ProductVariant.sku.in_(skus)
+    ).options(
+        joinedload(models.ProductVariant.product).joinedload(models.Product.store),
+        joinedload(models.ProductVariant.inventory_levels)
+    ).all()

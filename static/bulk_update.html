@@ -36,7 +36,6 @@
                 <select id="type-filter">
                     <option value="">All Types</option>
                 </select>
-                <!-- ADDED: Barcode Actions Dropdown -->
                 <details role="list" class="dropdown">
                     <summary>Barcode Actions</summary>
                     <ul role="listbox">
@@ -50,6 +49,10 @@
                         Group by Barcode
                     </label>
                 </fieldset>
+            </div>
+            <div class="grid" style="margin-top: 1rem;">
+                <input type="file" id="excel-file-input" accept=".xlsx">
+                <button id="import-excel-btn">Import from Excel</button>
             </div>
         </article>
 

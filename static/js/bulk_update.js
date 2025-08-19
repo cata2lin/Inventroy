@@ -12,6 +12,8 @@ document.addEventListener('DOMContentLoaded', () => {
         toast: document.getElementById('toast'),
         generateUniqueBtn: document.getElementById('generate-unique-barcode-btn'),
         generateSameBtn: document.getElementById('generate-same-barcode-btn'),
+        excelFileInput: document.getElementById('excel-file-input'),
+        importExcelBtn: document.getElementById('import-excel-btn'),
     };
 
     let allVariants = [];
@@ -28,6 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Data Fetching and Population ---
     const loadAllVariants = async () => {
         try {
+            elements.container.setAttribute('aria-busy', 'true');
             const response = await fetch(API_ENDPOINTS.getAllVariantsForBulkEdit);
             if (!response.ok) throw new Error('Failed to fetch product variants.');
             allVariants = await response.json();
@@ -73,8 +76,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const valB = b[sortState.key];
                 if (valA === null || valA === undefined) return 1;
                 if (valB === null || valB === undefined) return -1;
+
                 if (typeof valA === 'string') {
-                    return sortState.order === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                    return sortState.order === 'asc' 
+                        ? valA.localeCompare(valB) 
+                        : valB.localeCompare(valA);
                 } else {
                     return sortState.order === 'asc' ? valA - valB : valB - valA;
                 }
@@ -109,7 +115,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         tableHtml += `<tr id="bulk-apply-row">
                         <th></th><th></th><th></th><th></th>
-                        ${tableHeaders.map(h => `<td><input type="${h.type || 'text'}" placeholder="Apply..." data-bulk-apply-for="${h.key}"></td>`).join('')}
+                        ${tableHeaders.map(h => `<td><input type="${h.key.includes('price') || h.key.includes('cost') || h.key.includes('Hand') || h.key.includes('available') ? 'number' : 'text'}" placeholder="Apply..." data-bulk-apply-for="${h.key}"></td>`).join('')}
                       </tr></thead><tbody>`;
 
         if (variantsToRender.length === 0) {
@@ -323,6 +329,36 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    const handleImportExcel = async () => {
+        const file = elements.excelFileInput.files[0];
+        if (!file) {
+            showToast('Please select an Excel file first.', 'error');
+            return;
+        }
+
+        elements.importExcelBtn.setAttribute('aria-busy', 'true');
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const response = await fetch(API_ENDPOINTS.uploadExcel, {
+                method: 'POST',
+                body: formData,
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result.detail?.message || result.detail || 'An unknown error occurred during import.');
+            }
+            showToast(result.message || 'Excel import processed successfully.', 'success');
+            loadAllVariants();
+        } catch (error) {
+            showToast(`Error: ${error.message}`, 'error');
+        } finally {
+            elements.importExcelBtn.removeAttribute('aria-busy');
+            elements.excelFileInput.value = '';
+        }
+    };
+
     // --- Initial Setup ---
     elements.saveBtn.addEventListener('click', handleSaveChanges);
     elements.searchInput.addEventListener('input', render);
@@ -342,6 +378,8 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         handleGenerateBarcodes('same');
     });
+    
+    elements.importExcelBtn.addEventListener('click', handleImportExcel);
     
     loadAllVariants();
 });
