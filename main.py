@@ -57,9 +57,9 @@ async def get_dashboard_v2_page(request: Request):
 async def get_inventory_page(request: Request):
     return templates.TemplateResponse("inventory.html", {"request": request, "title": "Inventory Report"})
 
-@app.get("/products", response_class=HTMLResponse, include_in_schema=False)
-async def get_products_page(request: Request):
-    return templates.TemplateResponse("products.html", {"request": request, "title": "Bulk Update"})
+@app.get("/bulk-update", response_class=HTMLResponse, include_in_schema=False)
+async def get_bulk_update_page(request: Request):
+    return templates.TemplateResponse("bulk_update.html", {"request": request, "title": "Bulk Update"})
 
 @app.get("/mutations", response_class=HTMLResponse, include_in_schema=False)
 async def get_mutations_page(request: Request):

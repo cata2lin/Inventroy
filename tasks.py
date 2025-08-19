@@ -1,5 +1,4 @@
 # tasks.py
-# tasks.py
 import logging
 import os
 from fastapi import APIRouter, BackgroundTasks, Request
@@ -21,7 +20,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-templates = Jinja2Templates(directory="static")
+templates = Jinja2Templates(directory="templates")
 
 # Securely load configuration from environment variables
 # This prevents leaking sensitive API tokens in the source code.
