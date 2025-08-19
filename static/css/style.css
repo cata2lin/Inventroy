@@ -222,7 +222,7 @@ body {
 
 .app-layout {
     display: grid;
-    grid-template-columns: 240px 1fr; /* Sidebar width and main content */
+    grid-template-columns: 168px 1fr; /* MODIFIED: Was 240px */
     min-height: 100vh;
 }
 
