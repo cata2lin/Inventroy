@@ -77,53 +77,48 @@ def get_inventory_report(
     ).one()
 
     if view == 'grouped':
-        # MODIFIED: This entire block is refactored for correct grouping and primary variant selection.
         query_base = base_query.filter(models.ProductVariant.barcode.isnot(None))
         total_count = query_base.distinct(models.ProductVariant.barcode).count()
-
-        # Step 1: Subquery to aggregate variant data for each barcode
-        variant_agg_sq = query_base.group_by(
-            models.ProductVariant.barcode
-        ).with_entities(
-            models.ProductVariant.barcode,
+        
+        grouped_data_sq = query_base.group_by(models.ProductVariant.barcode).with_entities(
+            models.ProductVariant.barcode.label("barcode"),
             func.max(on_hand_col).label("on_hand"),
             func.sum(func.coalesce(committed_sq.c.committed, 0)).label("committed"),
-            func.json_agg(
-                func.json_build_object(
-                    'variant_id', models.ProductVariant.id, 
-                    'sku', models.ProductVariant.sku, 
-                    'store_name', models.Store.name, 
-                    'status', models.Product.status, 
-                    'is_primary', models.ProductVariant.is_primary_variant
-                )
-            ).label("variants_json")
-        ).subquery('variant_agg_sq')
+            func.json_agg(func.json_build_object('variant_id', models.ProductVariant.id, 'sku', models.ProductVariant.sku, 'store_name', models.Store.name, 'status', models.Product.status, 'is_primary', models.ProductVariant.is_primary_variant)).label("variants_json")
+        ).subquery('grouped_data_sq')
 
-        # Step 2: Subquery to find the single primary variant ID for each barcode
-        primary_variant_sq = db.query(
+        # MODIFIED: This subquery now robustly selects a primary variant for every group.
+        # It prioritizes the one marked 'is_primary_variant', but falls back to the one with the lowest ID if none is marked.
+        row_num_sq = db.query(
+            models.ProductVariant.id,
             models.ProductVariant.barcode,
-            func.min(models.ProductVariant.id).filter(models.ProductVariant.is_primary_variant == True).label("primary_variant_id")
-        ).group_by(models.ProductVariant.barcode).subquery('primary_variant_sq')
-        
-        # Step 3: Join the aggregated data with the primary variant's details
-        final_query = db.query(
-            variant_agg_sq.c.barcode,
-            variant_agg_sq.c.on_hand,
-            variant_agg_sq.c.committed,
-            (variant_agg_sq.c.on_hand - variant_agg_sq.c.committed).label("available"),
-            variant_agg_sq.c.variants_json,
+            func.row_number().over(
+                partition_by=models.ProductVariant.barcode,
+                order_by=[models.ProductVariant.is_primary_variant.desc(), models.ProductVariant.id.asc()]
+            ).label('rn')
+        ).filter(models.ProductVariant.barcode.isnot(None)).subquery('row_num_sq')
+
+        primary_variant_sq = db.query(
+            row_num_sq.c.id.label('primary_variant_id'),
+            row_num_sq.c.barcode
+        ).filter(row_num_sq.c.rn == 1).subquery('primary_variant_sq')
+
+        primary_details_sq = db.query(
+            primary_variant_sq.c.barcode,
             models.Product.title.label("primary_title"),
             models.Store.name.label("primary_store"),
             models.Product.image_url.label("primary_image_url")
-        ).join(
-            primary_variant_sq, variant_agg_sq.c.barcode == primary_variant_sq.c.barcode
-        ).join(
-            models.ProductVariant, models.ProductVariant.id == primary_variant_sq.c.primary_variant_id
-        ).join(
-            models.Product, models.Product.id == models.ProductVariant.product_id
-        ).join(
-            models.Store, models.Store.id == models.Product.store_id
-        )
+        ).join(models.ProductVariant, models.ProductVariant.id == primary_variant_sq.c.primary_variant_id)\
+         .join(models.Product, models.Product.id == models.ProductVariant.product_id)\
+         .join(models.Store, models.Store.id == models.Product.store_id)\
+         .subquery('primary_details_sq')
+        
+        final_query = db.query(
+            grouped_data_sq.c.barcode, grouped_data_sq.c.on_hand, grouped_data_sq.c.committed,
+            (grouped_data_sq.c.on_hand - grouped_data_sq.c.committed).label("available"),
+            grouped_data_sq.c.variants_json, primary_details_sq.c.primary_title,
+            primary_details_sq.c.primary_store, primary_details_sq.c.primary_image_url
+        ).join(primary_details_sq, primary_details_sq.c.barcode == grouped_data_sq.c.barcode)
 
         sort_column_map = {'on_hand': 'on_hand', 'committed': 'committed', 'available': 'available', 'primary_title': 'primary_title', "barcode": "barcode"}
         sort_column = sort_column_map.get(sort_by, 'on_hand')
