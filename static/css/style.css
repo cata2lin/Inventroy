@@ -215,3 +215,51 @@ th[data-sort-by].desc::after { content: '▼'; }
 .status-voided, .status-cancelled, .status-archived { color: #546e7a; }
 .status-refunded, .status-unfulfilled { color: #d32f2f; }
 .pagination-controls { grid-template-columns: 1fr auto 1fr; }
+/* --- New Sidebar Layout Styles --- */
+body {
+    background-color: var(--background-color);
+}
+
+.app-layout {
+    display: grid;
+    grid-template-columns: 240px 1fr; /* Sidebar width and main content */
+    min-height: 100vh;
+}
+
+.sidebar {
+    background-color: var(--card-background-color);
+    padding: 1.5rem;
+    border-right: 1px solid var(--card-border-color);
+}
+
+.sidebar nav a {
+    padding: 0.75rem;
+    border-radius: var(--border-radius);
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+}
+
+.sidebar nav a.contrast {
+    background-color: var(--primary);
+    color: var(--primary-inverse);
+}
+
+.main-content {
+    padding: 2rem;
+    overflow-y: auto;
+}
+
+/* Mobile responsive layout */
+@media (max-width: 992px) {
+    .app-layout {
+        grid-template-columns: 1fr; /* Stack sidebar on top */
+    }
+    .sidebar {
+        border-right: none;
+        border-bottom: 1px solid var(--card-border-color);
+        padding: 1rem;
+    }
+    .main-content {
+        padding: 1rem;
+    }
+}

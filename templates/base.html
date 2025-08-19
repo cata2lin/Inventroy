@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - Inventory Intelligence</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+    <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+    <div class="app-layout">
+        <aside class="sidebar">
+            <nav>
+                <ul>
+                    <li><strong>Inventory Intelligence</strong></li>
+                </ul>
+                <ul>
+                    <li><a href="/dashboard-v2" {% if title == "Dashboard" %}class="contrast"{% endif %}>Dashboard</a></li>
+                    <li><a href="/inventory" {% if title == "Inventory Report" %}class="contrast"{% endif %}>Inventory Report</a></li>
+                    <li><a href="/products" {% if title == "Bulk Update" %}class="contrast"{% endif %}>Bulk Update</a></li>
+                    <li><a href="/sync-control" {% if title == "Sync Control" %}class="contrast"{% endif %}>Sync Control</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="main-content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+    
+    {% block scripts %}{% endblock %}
+</body>
+</html>

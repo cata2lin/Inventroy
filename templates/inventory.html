@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+    <hgroup>
+        <h1>Inventory Report</h1>
+        <h2>Detailed view of all product variants across all stores.</h2>
+    </hgroup>
+
+    <article class="filter-container">
+        <section id="metrics-container" class="grid"></section>
+        <section class="controls-grid">
+            <input type="search" id="search-input" placeholder="Search SKU, Barcode, Name...">
+            <select id="store-filter"><option value="">All Stores</option></select>
+            <select id="type-filter"><option value="">All Types</option></select>
+            <select id="category-filter"><option value="">All Categories</option></select>
+            <select id="status-filter"><option value="">All Statuses</option><option value="ACTIVE">Active</option><option value="DRAFT">Draft</option><option value="ARCHIVED">Archived</option></select>
+            <input type="number" id="min-retail-input" placeholder="Min Retail Value">
+            <input type="number" id="max-retail-input" placeholder="Max Retail Value">
+            <input type="number" id="min-inv-input" placeholder="Min Inv. Value">
+            <input type="number" id="max-inv-input" placeholder="Max Inv. Value">
+            <fieldset><label for="group-toggle"><input type="checkbox" id="group-toggle" name="group-toggle" role="switch"> Group by Barcode</label></fieldset>
+            <button id="reset-filters" class="secondary outline">Reset</button>
+        </section>
+    </article>
+
+    <article id="inventory-table-container" aria-busy="true"><p>Loading...</p></article>
+
+    <div class="grid pagination-controls">
+        <button id="prev-button" class="secondary outline" disabled>&larr; Previous</button>
+        <span id="page-indicator">Page 1</span>
+        <button id="next-button" class="secondary outline">Next &rarr;</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/config.js"></script>
+<script src="/static/js/inventory.js"></script>
+{% endblock %}
