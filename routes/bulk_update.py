@@ -31,13 +31,14 @@ class BarcodeGenerationRequest(BaseModel):
     mode: str
 
 # --- API Endpoints ---
-# MODIFIED: Endpoint updated to accept new filter parameters from the frontend.
+# MODIFIED: Endpoint updated to accept the new 'statuses' filter parameter.
 @router.get("/variants/")
 def get_all_variants_for_bulk_edit(
     db: Session = Depends(get_db),
     search: Optional[str] = Query(None),
     store_ids: Optional[List[int]] = Query(None),
     product_types: Optional[List[str]] = Query(None),
+    statuses: Optional[List[str]] = Query(None),
     has_no_barcode: bool = Query(False)
 ):
     return crud_bulk_update.get_all_variants_for_bulk_edit(
@@ -45,6 +46,7 @@ def get_all_variants_for_bulk_edit(
         search=search,
         store_ids=store_ids,
         product_types=product_types,
+        statuses=statuses,
         has_no_barcode=has_no_barcode
     )
 
@@ -65,13 +67,8 @@ def generate_barcodes_endpoint(request: BarcodeGenerationRequest, db: Session = 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred during barcode generation: {str(e)}")
 
-# --- ADDED: New endpoint for Excel file upload ---
 @router.post("/upload-excel/")
 async def upload_excel_for_bulk_update(db: Session = Depends(get_db), file: UploadFile = File(...)):
-    """
-    Processes an Excel file to bulk update product variants.
-    Matches rows by 'sku' and updates specified fields.
-    """
     if not file.filename.endswith('.xlsx'):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload an .xlsx file.")
 
@@ -155,8 +152,6 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                             changes[field] = float(changes[field]) if '.' in str(changes[field]) else int(changes[field])
                         except (ValueError, TypeError):
                             changes[field] = None
-                
-                # (Existing API call logic remains the same)
                 
                 crud_bulk_update.update_local_variant(db, update_data.variant_id, changes)
                 results["success"].append(f"Successfully updated variant ID {update_data.variant_id}")

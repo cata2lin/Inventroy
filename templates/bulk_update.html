@@ -23,6 +23,15 @@
             </details>
 
             <details role="list" class="dropdown">
+                <summary>Status</summary>
+                <ul role="listbox" id="status-filter-list">
+                    <li><label><input type="checkbox" name="status" value="ACTIVE"> Active</label></li>
+                    <li><label><input type="checkbox" name="status" value="DRAFT"> Draft</label></li>
+                    <li><label><input type="checkbox" name="status" value="ARCHIVED"> Archived</label></li>
+                </ul>
+            </details>
+
+            <details role="list" class="dropdown">
                 <summary>Barcode Actions</summary>
                 <ul role="listbox">
                     <li><a href="#" id="generate-unique-barcode-btn">Generate Unique for Selected</a></li>

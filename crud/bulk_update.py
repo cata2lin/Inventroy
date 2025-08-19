@@ -5,11 +5,13 @@ from sqlalchemy import or_
 from typing import List, Optional
 import models
 
+# MODIFIED: Function signature and query logic updated to handle the new status filter.
 def get_all_variants_for_bulk_edit(
     db: Session,
     search: Optional[str] = None,
     store_ids: Optional[List[int]] = None,
     product_types: Optional[List[str]] = None,
+    statuses: Optional[List[str]] = None,
     has_no_barcode: bool = False
 ):
     """
@@ -42,7 +44,9 @@ def get_all_variants_for_bulk_edit(
     if product_types:
         query = query.filter(models.Product.product_type.in_(product_types))
 
-    # MODIFIED: This now checks for both NULL and empty strings for a more reliable filter.
+    if statuses:
+        query = query.filter(models.Product.status.in_(statuses))
+
     if has_no_barcode:
         query = query.filter(or_(models.ProductVariant.barcode.is_(None), models.ProductVariant.barcode == ''))
 
@@ -76,19 +80,12 @@ def get_all_variants_for_bulk_edit(
     return variants_list
 
 def get_variant_for_update(db: Session, variant_id: int):
-    """
-    Fetches a single variant with all relationships needed for an update operation.
-    """
     return db.query(models.ProductVariant).filter(models.ProductVariant.id == variant_id).options(
         joinedload(models.ProductVariant.product),
         joinedload(models.ProductVariant.inventory_levels)
     ).first()
 
 def update_local_variant(db: Session, variant_id: int, changes: dict):
-    """
-    Updates a single variant record and its related product in the local database.
-    This should be called AFTER a successful Shopify update to ensure data consistency.
-    """
     db_variant = db.query(models.ProductVariant).filter(models.ProductVariant.id == variant_id).first()
     if not db_variant:
         print(f"Warning: Could not find variant with ID {variant_id} in local DB to update.")
@@ -109,10 +106,6 @@ def update_local_variant(db: Session, variant_id: int, changes: dict):
     db.commit()
 
 def get_variants_by_skus(db: Session, skus: list[str]):
-    """
-    Fetches all product variants that match a given list of SKUs.
-    Eagerly loads relationships needed for processing updates.
-    """
     if not skus:
         return []
     return db.query(models.ProductVariant).filter(

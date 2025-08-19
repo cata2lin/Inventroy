@@ -8,6 +8,8 @@ document.addEventListener('DOMContentLoaded', () => {
         searchInput: document.getElementById('search-input'),
         storeFilterList: document.getElementById('store-filter-list'),
         typeFilterList: document.getElementById('type-filter-list'),
+        // ADDED: Element reference for the new status filter
+        statusFilterList: document.getElementById('status-filter-list'),
         noBarcodeFilter: document.getElementById('no-barcode-filter'),
         groupToggle: document.getElementById('group-toggle'),
         toast: document.getElementById('toast'),
@@ -28,7 +30,6 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => { elements.toast.className = ''; }, duration);
     };
 
-    // MODIFIED: Added a debounce utility for the auto-search feature
     const debounce = (func, delay) => {
         let timeout;
         return (...args) => {
@@ -45,12 +46,16 @@ document.addEventListener('DOMContentLoaded', () => {
             const search = elements.searchInput.value;
             const store_ids = Array.from(elements.storeFilterList.querySelectorAll('input:checked')).map(cb => cb.value);
             const product_types = Array.from(elements.typeFilterList.querySelectorAll('input:checked')).map(cb => cb.value);
+            // MODIFIED: Read values from the new status filter
+            const statuses = Array.from(elements.statusFilterList.querySelectorAll('input:checked')).map(cb => cb.value);
             const has_no_barcode = elements.noBarcodeFilter.checked;
 
             if (search) params.set('search', search);
             if (has_no_barcode) params.set('has_no_barcode', true);
             store_ids.forEach(id => params.append('store_ids', id));
             product_types.forEach(type => params.append('product_types', type));
+            // MODIFIED: Append statuses to the API request
+            statuses.forEach(status => params.append('statuses', status));
             
             const response = await fetch(`${API_ENDPOINTS.getAllVariantsForBulkEdit}?${params.toString()}`);
             if (!response.ok) throw new Error('Failed to fetch product variants.');
@@ -385,10 +390,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Initial Setup ---
     elements.saveBtn.addEventListener('click', handleSaveChanges);
-    // MODIFIED: Search input now uses 'input' event with debounce for auto-searching
     elements.searchInput.addEventListener('input', debounce(loadAllVariants, 400));
     elements.storeFilterList.addEventListener('change', loadAllVariants);
     elements.typeFilterList.addEventListener('change', loadAllVariants);
+    // ADDED: Event listener for the new status filter
+    elements.statusFilterList.addEventListener('change', loadAllVariants);
     elements.noBarcodeFilter.addEventListener('change', loadAllVariants);
 
     elements.groupToggle.addEventListener('change', (e) => {
