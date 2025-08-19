@@ -122,9 +122,14 @@ document.addEventListener('DOMContentLoaded', () => {
             tableHtml += '<tr><td colspan="12">No products match the current filters.</td></tr>';
         } else {
             variantsToRender.forEach(v => {
+                // MODIFIED: Conditionally render the image tag only if a URL exists
+                const imageCell = v.image_url 
+                    ? `<td><img src="${v.image_url}" alt="${v.product_title}"></td>` 
+                    : '<td></td>'; // Render an empty cell if no image
+
                 tableHtml += `<tr data-variant-id="${v.variant_id}" data-store-id="${v.store_id}">
                     <td><input type="checkbox" class="row-checkbox"></td>
-                    <td><img src="${v.image_url || 'https://via.placeholder.com/40x40.png?text=No+Image'}" alt="${v.product_title}"></td>
+                    ${imageCell}
                     <td>${v.store_name}</td>
                     <td>${v.sku || ''}</td>
                     ${tableHeaders.map(h => `<td><input data-field-key="${h.key}" value="${v[h.key] !== null && v[h.key] !== undefined ? v[h.key] : ''}" data-original-value="${v[h.key] !== null && v[h.key] !== undefined ? v[h.key] : ''}"></td>`).join('')}
@@ -161,11 +166,15 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             for (const barcode in groups) {
                 const group = groups[barcode];
+                const imageTag = group.primary_image_url 
+                    ? `<img src="${group.primary_image_url}" alt="${group.primary_title}">` 
+                    : ''; // Render nothing if no image
+
                 html += `
                 <details class="grouped-item">
                     <summary>
                         <div class="grid">
-                            <img src="${group.primary_image_url || 'https://via.placeholder.com/50x50.png?text=No+Image'}" alt="${group.primary_title}">
+                            ${imageTag}
                             <div class="product-info">
                                 <strong>${group.primary_title}</strong>
                                 <small>Barcode: ${barcode}</small>
