@@ -25,9 +25,11 @@ fragment InventoryLevelFragment on InventoryLevel {
   location { ...LocationFragment }
 }
 """
+# MODIFIED: Added 'unitCost' to the InventoryItemFragment
 INVENTORY_ITEM_FRAGMENT = """
 fragment InventoryItemFragment on InventoryItem {
   id legacyResourceId sku
+  unitCost { amount }
   inventoryLevels(first: 10) { edges { node { ...InventoryLevelFragment } } }
 }
 """
@@ -50,7 +52,7 @@ LINE_ITEM_FRAGMENT = """
 fragment LineItemFragment on LineItem {
   id title quantity sku vendor taxable
   originalUnitPriceSet { shopMoney { ...MoneyFragment } }
-  totalDiscountSet { shopMoney { ...MoneyFragment } }
+  totalDiscountSet { shopMoney { ...MoneyMoneyFragment } }
   variant { ...VariantFragment }
 }
 """
