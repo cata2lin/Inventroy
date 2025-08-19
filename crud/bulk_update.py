@@ -5,7 +5,6 @@ from sqlalchemy import or_
 from typing import List, Optional
 import models
 
-# MODIFIED: Function signature and query logic updated to handle the new status filter.
 def get_all_variants_for_bulk_edit(
     db: Session,
     search: Optional[str] = None,
@@ -26,7 +25,6 @@ def get_all_variants_for_bulk_edit(
         joinedload(models.ProductVariant.inventory_levels)
     )
 
-    # --- FILTERING LOGIC ---
     if search:
         search_terms = [term.strip() for term in search.split(',') if term.strip()]
         if search_terms:
@@ -72,6 +70,8 @@ def get_all_variants_for_bulk_edit(
             "barcode": variant.barcode,
             "product_type": variant.product.product_type,
             "product_category": variant.product.product_category,
+            # ADDED: Include the product's status in the data sent to the frontend.
+            "status": variant.product.status,
             "price": float(variant.price) if variant.price is not None else None,
             "cost": float(variant.cost) if variant.cost is not None else None,
             "onHand": primary_inventory_level.on_hand if primary_inventory_level else None,
@@ -85,19 +85,22 @@ def get_variant_for_update(db: Session, variant_id: int):
         joinedload(models.ProductVariant.inventory_levels)
     ).first()
 
+# MODIFIED: This function can now update the product's status in the local database.
 def update_local_variant(db: Session, variant_id: int, changes: dict):
     db_variant = db.query(models.ProductVariant).filter(models.ProductVariant.id == variant_id).first()
     if not db_variant:
         print(f"Warning: Could not find variant with ID {variant_id} in local DB to update.")
         return
 
-    if 'product_title' in changes or 'product_type' in changes:
+    if 'product_title' in changes or 'product_type' in changes or 'status' in changes:
         db_product = db.query(models.Product).filter(models.Product.id == db_variant.product_id).first()
         if db_product:
             if 'product_title' in changes:
                 db_product.title = changes['product_title']
             if 'product_type' in changes:
                 db_product.product_type = changes['product_type']
+            if 'status' in changes:
+                db_product.status = changes['status']
 
     for key, value in changes.items():
         if hasattr(db_variant, key):

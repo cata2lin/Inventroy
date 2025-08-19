@@ -133,7 +133,6 @@ class ProductService:
             raise ValueError(f"Shopify Inventory Error: {error_message}")
         return result.get("inventoryAdjustmentGroup", {})
 
-    # FIXED: Replaced 'set' with a reliable 'adjust' method that targets the 'available' quantity to affect 'onHand'.
     def adjust_on_hand_quantity(self, inventory_item_id: str, location_id: str, on_hand_delta: int) -> Dict[str, Any]:
         """
         Adjusts the 'on hand' quantity by changing the 'available' quantity, which is the reliable method.

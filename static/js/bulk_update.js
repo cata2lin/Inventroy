@@ -1,14 +1,12 @@
 // static/js/bulk_update.js
 
 document.addEventListener('DOMContentLoaded', () => {
-    // --- Element References ---
     const elements = {
         container: document.getElementById('bulk-update-container'),
         saveBtn: document.getElementById('save-changes-btn'),
         searchInput: document.getElementById('search-input'),
         storeFilterList: document.getElementById('store-filter-list'),
         typeFilterList: document.getElementById('type-filter-list'),
-        // ADDED: Element reference for the new status filter
         statusFilterList: document.getElementById('status-filter-list'),
         noBarcodeFilter: document.getElementById('no-barcode-filter'),
         groupToggle: document.getElementById('group-toggle'),
@@ -23,7 +21,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentView = 'individual';
     let sortState = { key: 'product_title', order: 'asc' };
 
-    // --- Utility Functions ---
     const showToast = (message, type = 'info', duration = 5000) => {
         elements.toast.textContent = message;
         elements.toast.className = `show ${type}`;
@@ -38,7 +35,6 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     };
 
-    // --- Data Fetching and Population ---
     const loadAllVariants = async () => {
         try {
             elements.container.setAttribute('aria-busy', 'true');
@@ -46,7 +42,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const search = elements.searchInput.value;
             const store_ids = Array.from(elements.storeFilterList.querySelectorAll('input:checked')).map(cb => cb.value);
             const product_types = Array.from(elements.typeFilterList.querySelectorAll('input:checked')).map(cb => cb.value);
-            // MODIFIED: Read values from the new status filter
             const statuses = Array.from(elements.statusFilterList.querySelectorAll('input:checked')).map(cb => cb.value);
             const has_no_barcode = elements.noBarcodeFilter.checked;
 
@@ -54,7 +49,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (has_no_barcode) params.set('has_no_barcode', true);
             store_ids.forEach(id => params.append('store_ids', id));
             product_types.forEach(type => params.append('product_types', type));
-            // MODIFIED: Append statuses to the API request
             statuses.forEach(status => params.append('statuses', status));
             
             const response = await fetch(`${API_ENDPOINTS.getAllVariantsForBulkEdit}?${params.toString()}`);
@@ -87,7 +81,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
 
-    // --- Rendering Logic ---
     const render = () => {
         let variantsToRender = [...allVariants];
 
@@ -120,6 +113,8 @@ document.addEventListener('DOMContentLoaded', () => {
             { key: 'product_title', label: 'Product' },
             { key: 'barcode', label: 'Barcode', sortable: true },
             { key: 'product_type', label: 'Type' },
+            // ADDED: Header for the new Status column
+            { key: 'status', label: 'Status' },
             { key: 'price', label: 'Price' },
             { key: 'cost', label: 'Cost' },
             { key: 'onHand', label: 'On Hand' },
@@ -140,19 +135,33 @@ document.addEventListener('DOMContentLoaded', () => {
                       </tr></thead><tbody>`;
 
         if (variantsToRender.length === 0) {
-            tableHtml += '<tr><td colspan="12">No products match the current filters.</td></tr>';
+            tableHtml += '<tr><td colspan="13">No products match the current filters.</td></tr>';
         } else {
             variantsToRender.forEach(v => {
                 const imageCell = v.image_url 
                     ? `<td><img src="${v.image_url}" alt="${v.product_title}"></td>` 
                     : '<td></td>';
 
-                tableHtml += `<tr data-variant-id="${v.variant_id}" data-store-id="${v.store_id}">
+                // MODIFIED: This block now renders a dropdown for the status field.
+                const renderField = (h) => {
+                    if (h.key === 'status') {
+                        return `<td>
+                                    <select data-field-key="status" data-original-value="${v.status || ''}">
+                                        <option value="ACTIVE" ${v.status === 'ACTIVE' ? 'selected' : ''}>Active</option>
+                                        <option value="DRAFT" ${v.status === 'DRAFT' ? 'selected' : ''}>Draft</option>
+                                        <option value="ARCHIVED" ${v.status === 'ARCHIVED' ? 'selected' : ''}>Archived</option>
+                                    </select>
+                                </td>`;
+                    }
+                    return `<td><input data-field-key="${h.key}" value="${v[h.key] !== null && v[h.key] !== undefined ? v[h.key] : ''}" data-original-value="${v[h.key] !== null && v[h.key] !== undefined ? v[h.key] : ''}"></td>`;
+                };
+
+                tableHtml += `<tr data-variant-id="${v.variant_id}" data-store-id="${v.store_id}" data-product-id="${v.product_id}">
                     <td><input type="checkbox" class="row-checkbox"></td>
                     ${imageCell}
                     <td>${v.store_name}</td>
                     <td>${v.sku || ''}</td>
-                    ${tableHeaders.map(h => `<td><input data-field-key="${h.key}" value="${v[h.key] !== null && v[h.key] !== undefined ? v[h.key] : ''}" data-original-value="${v[h.key] !== null && v[h.key] !== undefined ? v[h.key] : ''}"></td>`).join('')}
+                    ${tableHeaders.map(h => renderField(h)).join('')}
                 </tr>`;
             });
         }
@@ -226,7 +235,6 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.container.innerHTML = html;
     };
 
-    // --- Event Handling ---
     const addIndividualViewEventListeners = () => {
         const currentTh = document.querySelector(`th[data-sort-key="${sortState.key}"]`);
         if (currentTh) currentTh.classList.add(sortState.order);
@@ -244,10 +252,11 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        elements.container.querySelectorAll('input[data-field-key]').forEach(input => {
-            input.addEventListener('input', () => {
-                const isChanged = input.value !== input.dataset.originalValue;
-                input.classList.toggle('changed', isChanged);
+        // MODIFIED: This now handles both inputs and select dropdowns.
+        elements.container.querySelectorAll('input[data-field-key], select[data-field-key]').forEach(field => {
+            field.addEventListener('input', () => {
+                const isChanged = field.value !== field.dataset.originalValue;
+                field.classList.toggle('changed', isChanged);
             });
         });
 
@@ -261,7 +270,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const fieldKey = bulkInput.dataset.bulkApplyFor;
                 document.querySelectorAll('.row-checkbox:checked').forEach(checkbox => {
                     const row = checkbox.closest('tr');
-                    const targetInput = row.querySelector(`input[data-field-key="${fieldKey}"]`);
+                    const targetInput = row.querySelector(`[data-field-key="${fieldKey}"]`);
                     if (targetInput) {
                         targetInput.value = bulkInput.value;
                         targetInput.dispatchEvent(new Event('input'));
@@ -272,6 +281,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
     
+    // MODIFIED: This function now correctly collects changes from both inputs and selects.
     const handleSaveChanges = async () => {
         elements.saveBtn.setAttribute('aria-busy', 'true');
         const selectedRows = Array.from(document.querySelectorAll('.row-checkbox:checked')).map(cb => cb.closest('tr'));
@@ -284,15 +294,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const payload = { updates: [] };
         selectedRows.forEach(row => {
-            const changedInputs = row.querySelectorAll('input.changed');
-            if (changedInputs.length > 0) {
+            const changedFields = row.querySelectorAll('.changed');
+            if (changedFields.length > 0) {
                 const update = {
                     variant_id: parseInt(row.dataset.variantId, 10),
                     store_id: parseInt(row.dataset.storeId, 10),
+                    product_id: parseInt(row.dataset.productId, 10),
                     changes: {}
                 };
-                changedInputs.forEach(input => {
-                    update.changes[input.dataset.fieldKey] = input.value;
+                changedFields.forEach(field => {
+                    update.changes[field.dataset.fieldKey] = field.value;
                 });
                 payload.updates.push(update);
             }
@@ -393,7 +404,6 @@ document.addEventListener('DOMContentLoaded', () => {
     elements.searchInput.addEventListener('input', debounce(loadAllVariants, 400));
     elements.storeFilterList.addEventListener('change', loadAllVariants);
     elements.typeFilterList.addEventListener('change', loadAllVariants);
-    // ADDED: Event listener for the new status filter
     elements.statusFilterList.addEventListener('change', loadAllVariants);
     elements.noBarcodeFilter.addEventListener('change', loadAllVariants);
 
