@@ -15,7 +15,7 @@ def gid_to_id(gid: Optional[str]) -> Optional[int]:
     try: return int(str(gid).split('/')[-1])
     except (IndexError, ValueError): return None
 
-# --- GraphQL Fragments (FINAL & CORRECTED) ---
+# --- GraphQL Fragments ---
 MONEY_FRAGMENT = "fragment MoneyFragment on MoneyV2 { amount currencyCode }"
 LOCATION_FRAGMENT = "fragment LocationFragment on Location { id legacyResourceId name }"
 INVENTORY_LEVEL_FRAGMENT = """
@@ -66,7 +66,7 @@ fragment FulfillmentFragment on Fulfillment {
 }
 """
 
-# --- GraphQL Queries (FINAL & CORRECTED) ---
+# --- GraphQL Queries ---
 GET_ALL_ORDERS_QUERY = f"""
 {MONEY_FRAGMENT}
 {LOCATION_FRAGMENT}
@@ -84,7 +84,7 @@ query GetAllData($cursor: String) {{
       node {{
         id legacyResourceId name createdAt updatedAt cancelledAt cancelReason closedAt processedAt
         displayFinancialStatus displayFulfillmentStatus currencyCode note tags
-        paymentGatewayNames # <-- FIXED: Added the missing field
+        paymentGatewayNames
         totalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
         subtotalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
         totalTaxSet {{ shopMoney {{ ...MoneyFragment }} }}
@@ -149,7 +149,24 @@ class ShopifyService:
         if not all([store_url, token]):
             raise ValueError("Store URL and Access Token are required.")
         self.api_endpoint = f"https://{store_url}/admin/api/{api_version}/graphql.json"
+        self.rest_api_endpoint = f"https://{store_url}/admin/api/{api_version}"
         self.headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": token}
+        self.rest_headers = {"X-Shopify-Access-Token": token}
+        self.api_version = api_version
+
+    def get_total_counts(self) -> Dict[str, int]:
+        """
+        Fetches the total count of orders using the Shopify REST API.
+        """
+        try:
+            count_url = f"{self.rest_api_endpoint}/orders/count.json"
+            response = requests.get(count_url, headers=self.rest_headers, timeout=10)
+            response.raise_for_status()
+            count_data = response.json()
+            return {"orders": count_data.get("count", 0)}
+        except requests.exceptions.RequestException as e:
+            print(f"An error occurred while fetching order count via REST API: {e}")
+            return {"orders": 0}
 
     def _execute_query(self, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = {"query": query, "variables": variables or {}}
