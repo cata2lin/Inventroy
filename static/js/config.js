@@ -21,4 +21,15 @@ const API_ENDPOINTS = {
     syncOrders: '/api/sync-control/orders',
     syncProducts: '/api/sync-control/products',
     getSyncStatus: '/api/sync-control/status',
+
+    // --- ADDED: Bulk Update Endpoints ---
+    getAllVariantsForBulkEdit: '/api/bulk-update/variants/',
+    processBulkUpdates: '/api/bulk-update/variants/',
+    generateBarcodes: '/api/bulk-update/generate-barcode/',
+    uploadExcel: '/api/bulk-update/upload-excel/',
+    
+    // --- LEGACY/DEPRECATED (Kept for reference) ---
+    getVariants: (storeId) => `/api/products/variants/${storeId}`,
+    updateVariantField: (storeId) => `/api/products/variants/update-field/${storeId}`,
+    syncInventory: (storeId) => `/api/inventory/sync/${storeId}`
 };
