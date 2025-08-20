@@ -1,6 +1,6 @@
 # routes/config.py
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, Request # --- ADDED: Import Request ---
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -75,22 +75,17 @@ def create_all_necessary_webhooks(store_id: int, request: Request, db: Session =
     try:
         service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
         
-        # 1. Get existing webhooks from Shopify to avoid duplicates
         existing_webhooks = service.get_webhooks()
         existing_topics = {wh['topic'] for wh in existing_webhooks}
         
-        # 2. Determine which webhooks are missing
         missing_topics = [topic for topic in ESSENTIAL_WEBHOOK_TOPICS if topic not in existing_topics]
         
         if not missing_topics:
             return {"message": "All necessary webhooks are already registered."}
 
-        # 3. Construct the full webhook URL from the request
-        # This makes the app domain-agnostic (works on localhost or production)
         base_url = str(request.base_url)
         webhook_address = f"{base_url.rstrip('/')}/api/webhooks/{store_id}"
 
-        # 4. Create only the missing webhooks
         created_count = 0
         for topic in missing_topics:
             created_webhook = service.create_webhook(topic=topic, address=webhook_address)
