@@ -13,7 +13,6 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     Upserts a single order and its line items from a webhook payload.
     This is separate from the GraphQL sync due to structural differences in the payload.
     """
-    # Map the webhook payload to the database model for the Order
     order_dict = {
         "id": order_data.id,
         "shopify_gid": order_data.admin_graphql_api_id,
@@ -41,7 +40,6 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     }
     upsert_batch(db, models.Order, [order_dict], ['id'])
 
-    # Map the line items from the webhook payload
     line_items_list = []
     for item in order_data.line_items:
         line_items_list.append({
@@ -65,10 +63,22 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     db.commit()
 
 
-def create_or_update_fulfillment_from_webhook(db: Session, fulfillment_data: schemas.ShopifyFulfillmentWebhook):
+def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfillment_data: schemas.ShopifyFulfillmentWebhook):
     """
-    Upserts a single fulfillment from a webhook payload and updates the parent order.
+    Upserts a single fulfillment from a webhook payload. If the parent order does not
+    exist, a placeholder is created to prevent foreign key violations.
     """
+    # --- FIX: Check for parent order and create a placeholder if it doesn't exist ---
+    order = db.query(models.Order).filter(models.Order.id == fulfillment_data.order_id).first()
+    if not order:
+        placeholder_order = {
+            "id": fulfillment_data.order_id,
+            "store_id": store_id,
+            "name": f"#{fulfillment_data.order_id}", # Use a placeholder name
+            "shopify_gid": f"gid://shopify/Order/{fulfillment_data.order_id}"
+        }
+        upsert_batch(db, models.Order, [placeholder_order], ['id'])
+
     fulfillment_dict = {
         "id": fulfillment_data.id,
         "order_id": fulfillment_data.order_id,
@@ -82,16 +92,34 @@ def create_or_update_fulfillment_from_webhook(db: Session, fulfillment_data: sch
     }
     upsert_batch(db, models.Fulfillment, [fulfillment_dict], ['id'])
     
-    order = db.query(models.Order).filter(models.Order.id == fulfillment_data.order_id).first()
-    if order:
-        order.fulfillment_status = fulfillment_data.status
+    # Refresh the order's fulfillment status
+    order_to_update = db.query(models.Order).filter(models.Order.id == fulfillment_data.order_id).first()
+    if order_to_update:
+        # A simple update based on the fulfillment status. A more complex logic
+        # might be needed for partial fulfillments if line items are sent.
+        if fulfillment_data.status == 'success':
+             order_to_update.fulfillment_status = 'fulfilled'
+        else:
+             order_to_update.fulfillment_status = fulfillment_data.status
         db.commit()
 
 
-def create_refund_from_webhook(db: Session, refund_data: schemas.ShopifyRefundWebhook):
+def create_refund_from_webhook(db: Session, store_id: int, refund_data: schemas.ShopifyRefundWebhook):
     """
-    Creates refund records from a webhook payload and updates the order's financial status.
+    Creates refund records from a webhook payload. If the parent order does not
+    exist, a placeholder is created.
     """
+    # --- FIX: Check for parent order and create a placeholder if it doesn't exist ---
+    order = db.query(models.Order).filter(models.Order.id == refund_data.order_id).first()
+    if not order:
+        placeholder_order = {
+            "id": refund_data.order_id,
+            "store_id": store_id,
+            "name": f"#{refund_data.order_id}",
+            "shopify_gid": f"gid://shopify/Order/{refund_data.order_id}"
+        }
+        upsert_batch(db, models.Order, [placeholder_order], ['id'])
+
     total_refunded = 0.0
     currency = "USD"
     for transaction in refund_data.transactions:
@@ -108,11 +136,8 @@ def create_refund_from_webhook(db: Session, refund_data: schemas.ShopifyRefundWe
         "currency": currency,
         "shopify_gid": f"gid://shopify/Refund/{refund_data.id}"
     }
-    
-    # Use upsert to prevent duplicates on webhook retries
     upsert_batch(db, models.Refund, [refund_dict], ['id'])
     
-    # Get the refund object we just created/updated
     db_refund = db.query(models.Refund).filter(models.Refund.id == refund_data.id).one()
 
     refund_line_items_list = []
@@ -129,12 +154,12 @@ def create_refund_from_webhook(db: Session, refund_data: schemas.ShopifyRefundWe
     if refund_line_items_list:
         upsert_batch(db, models.RefundLineItem, refund_line_items_list, ['id'])
 
-    order = db.query(models.Order).filter(models.Order.id == refund_data.order_id).first()
-    if order:
-        if total_refunded >= float(order.total_price):
-             order.financial_status = 'refunded'
+    order_to_update = db.query(models.Order).filter(models.Order.id == refund_data.order_id).first()
+    if order_to_update and order_to_update.total_price is not None:
+        if total_refunded >= float(order_to_update.total_price):
+             order_to_update.financial_status = 'refunded'
         else:
-             order.financial_status = 'partially_refunded'
+             order_to_update.financial_status = 'partially_refunded'
 
     db.commit()
 
