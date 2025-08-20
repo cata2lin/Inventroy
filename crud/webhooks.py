@@ -29,7 +29,7 @@ def delete_webhook_registration(db: Session, shopify_webhook_id: int):
     db.query(models.Webhook).filter(models.Webhook.shopify_webhook_id == shopify_webhook_id).delete()
     db.commit()
 
-def update_order_fulfillment_status_from_hold(db: Session, order_id: int, status: str, reason: Optional[str] = None):
+def update_order_fulfillment_status_from_hold(db: Session, order_id: int, fulfillment_order_gid: str, status: str, reason: Optional[str] = None):
     """
     Finds an order by its ID and updates its fulfillment status based on a hold event.
     If a fulfillment doesn't exist when a hold is placed, a placeholder is created.
@@ -40,30 +40,30 @@ def update_order_fulfillment_status_from_hold(db: Session, order_id: int, status
         if status == "ON_HOLD":
             order.fulfillment_status = "on_hold"
             
-            # Find an existing unfulfilled fulfillment for this order.
             fulfillment = db.query(models.Fulfillment).filter(
                 models.Fulfillment.order_id == order_id, 
                 models.Fulfillment.status != 'success'
             ).first()
             
-            # If no fulfillment exists yet, create a placeholder to store the hold reason.
             if not fulfillment:
-                fulfillment = models.Fulfillment(
-                    order_id=order_id,
-                    status="on_hold", # Set initial status
-                    shopify_gid=f"placeholder-gid-for-order-{order_id}" # Use a placeholder GID
-                )
-                db.add(fulfillment)
+                # --- FIX: Extract the numeric ID from the GID for the primary key ---
+                fulfillment_order_id = gid_to_id(fulfillment_order_gid)
+                if fulfillment_order_id:
+                    fulfillment = models.Fulfillment(
+                        id=fulfillment_order_id, # Use the extracted ID as the primary key
+                        order_id=order_id,
+                        status="on_hold",
+                        shopify_gid=fulfillment_order_gid
+                    )
+                    db.add(fulfillment)
             
-            # Now that we're sure a fulfillment object exists, update its hold status and reason.
-            fulfillment.hold_status = "ON_HOLD"
-            fulfillment.hold_reason = reason
+            if fulfillment:
+                fulfillment.hold_status = "ON_HOLD"
+                fulfillment.hold_reason = reason
         
         elif status == "RELEASED" and order.fulfillment_status == "on_hold":
-            # Revert to unfulfilled.
             order.fulfillment_status = "unfulfilled"
             
-            # Clear the hold status and reason from any relevant fulfillment.
             db.query(models.Fulfillment).filter(
                 models.Fulfillment.order_id == order_id,
                 models.Fulfillment.hold_status == "ON_HOLD"
