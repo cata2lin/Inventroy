@@ -7,9 +7,10 @@ const API_ENDPOINTS = {
     addStore: '/api/config/stores',
     updateStore: (storeId) => `/api/config/stores/${storeId}`,
 
-    // --- ADDED: Webhook Endpoints ---
+    // Webhook Endpoints
     getWebhooks: (storeId) => `/api/config/stores/${storeId}/webhooks`,
-    createWebhook: (storeId) => `/api/config/stores/${storeId}/webhooks`,
+    // ADDED: New endpoint for automatic creation
+    createAllWebhooks: (storeId) => `/api/config/stores/${storeId}/webhooks/create-all`,
     deleteWebhook: (storeId, webhookId) => `/api/config/stores/${storeId}/webhooks/${webhookId}`,
 
     // Dashboard V2 (Orders Report)

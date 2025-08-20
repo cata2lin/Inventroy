@@ -69,12 +69,10 @@
         <section id="webhook-management-section">
             <header><strong>Webhook Subscriptions</strong></header>
             <p>Your webhook URL is: <code id="webhook-url-display"></code></p>
-            <form id="add-webhook-form" class="grid">
-                <select id="webhook-topic-select" required>
-                    <option value="" disabled selected>Select a topic...</option>
-                </select>
-                <button type="submit" id="add-webhook-btn">Create Webhook</button>
-            </form>
+            
+            <!-- MODIFIED: Replaced manual form with a single button -->
+            <button id="create-all-webhooks-btn">Create / Verify All Necessary Webhooks</button>
+            
             <div id="webhooks-list-container" aria-busy="true">
                 <p>Loading webhooks...</p>
             </div>

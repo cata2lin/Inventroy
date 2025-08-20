@@ -9,24 +9,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const editStoreForm = document.getElementById('edit-store-form');
     const updateStoreBtn = document.getElementById('update-store-btn');
 
-    // --- ADDED: Webhook Management Elements ---
+    // --- Webhook Management Elements ---
     const webhookManagementSection = document.getElementById('webhook-management-section');
     const webhookUrlDisplay = document.getElementById('webhook-url-display');
-    const addWebhookForm = document.getElementById('add-webhook-form');
-    const webhookTopicSelect = document.getElementById('webhook-topic-select');
+    // MODIFIED: Replaced form with a single button
+    const createAllWebhooksBtn = document.getElementById('create-all-webhooks-btn');
     const webhooksListContainer = document.getElementById('webhooks-list-container');
     
     let currentStoreId = null;
-
-    const webhookTopics = [
-        "orders/create", "orders/updated", "orders/delete",
-        "products/create", "products/update", "products/delete",
-        "fulfillments/create", "fulfillments/update",
-        "refunds/create", "inventory_levels/update",
-        "fulfillment_orders/placed_on_hold",
-        "fulfillment_orders/hold_released",
-        "fulfillment_orders/cancellation_request_accepted"
-    ];
 
     // --- Store Management Functions ---
     const loadStores = async () => {
@@ -73,10 +63,8 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('edit-name').value = store.name;
             document.getElementById('edit-shopify_url').value = store.shopify_url;
             
-            // Show webhook section and load data
             webhookManagementSection.style.display = 'block';
             webhookUrlDisplay.textContent = `${window.location.origin}/api/webhooks/${store.id}`;
-            populateWebhookTopics();
             await loadWebhooks();
 
             editStoreModal.showModal();
@@ -162,14 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- ADDED: Webhook Management Functions ---
-    const populateWebhookTopics = () => {
-        webhookTopicSelect.innerHTML = '<option value="" disabled selected>Select a topic...</option>';
-        webhookTopics.forEach(topic => {
-            webhookTopicSelect.add(new Option(topic, topic));
-        });
-    };
-
+    // --- Webhook Management Functions ---
     const loadWebhooks = async () => {
         if (!currentStoreId) return;
         webhooksListContainer.setAttribute('aria-busy', 'true');
@@ -203,37 +184,28 @@ document.addEventListener('DOMContentLoaded', () => {
         webhooksListContainer.innerHTML = tableHtml;
     };
 
-    addWebhookForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const topic = webhookTopicSelect.value;
-        if (!topic) {
-            alert('Please select a webhook topic.');
-            return;
-        }
+    // MODIFIED: Event listener for the new automatic creation button
+    createAllWebhooksBtn.addEventListener('click', async () => {
+        if (!currentStoreId) return;
         
-        const addBtn = document.getElementById('add-webhook-btn');
-        addBtn.setAttribute('aria-busy', 'true');
-        
-        const payload = {
-            topic: topic,
-            address: webhookUrlDisplay.textContent
-        };
+        createAllWebhooksBtn.setAttribute('aria-busy', 'true');
+        createAllWebhooksBtn.disabled = true;
 
         try {
-            const response = await fetch(API_ENDPOINTS.createWebhook(currentStoreId), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+            const response = await fetch(API_ENDPOINTS.createAllWebhooks(currentStoreId), {
+                method: 'POST'
             });
+            const result = await response.json();
             if (!response.ok) {
-                const result = await response.json();
-                throw new Error(result.detail || 'Failed to create webhook.');
+                throw new Error(result.detail || 'Failed to create webhooks.');
             }
-            await loadWebhooks();
+            alert(result.message);
+            await loadWebhooks(); // Refresh the list
         } catch (error) {
             alert(`Error: ${error.message}`);
         } finally {
-            addBtn.removeAttribute('aria-busy');
+            createAllWebhooksBtn.removeAttribute('aria-busy');
+            createAllWebhooksBtn.disabled = false;
         }
     });
 
@@ -254,8 +226,6 @@ document.addEventListener('DOMContentLoaded', () => {
             await loadWebhooks();
         } catch (error) {
             alert(`Error: ${error.message}`);
-        } finally {
-            // The button will be gone after re-render, so no need to remove busy state.
         }
     };
 
