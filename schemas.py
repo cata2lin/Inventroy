@@ -4,31 +4,7 @@ from pydantic import BaseModel, Field, HttpUrl
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-# ... (most schemas are unchanged)
-
-class StoreBase(BaseModel):
-    name: str
-    shopify_url: str
-
-class StoreCreate(StoreBase):
-    api_token: str
-    api_secret: Optional[str] = None
-
-class StoreUpdate(BaseModel):
-    name: Optional[str] = None
-    shopify_url: Optional[str] = None
-    api_token: Optional[str] = None
-    api_secret: Optional[str] = None
-
-class Store(StoreBase):
-    id: int
-    api_token: str
-    api_secret: Optional[str] = None
-    created_at: datetime
-    class Config: from_attributes = True
-
-# ... (rest of the file is unchanged)
-# --- Schemas for Parsing Shopify API Response ---
+# --- Schemas for Parsing Shopify GraphQL API Response ---
 class MoneySet(BaseModel):
     amount: float
     currency_code: str = Field(..., alias="currencyCode")
@@ -149,32 +125,26 @@ class ShopifyOrder(BaseModel):
     fulfillments: List[Fulfillment] = []
 
 # --- Schemas for Internal Application API ---
-class Order(BaseModel):
+# ... (Store, Webhook, and other internal schemas remain the same) ...
+class StoreBase(BaseModel):
     name: str
-    created_at: datetime
-    email: Optional[str]
-    total_price: float
-    currency: str
-    financial_status: Optional[str]
-    fulfillment_status: Optional[str]
-    class Config: from_attributes = True
+    shopify_url: str
 
-class Fulfillment(BaseModel):
+class StoreCreate(StoreBase):
+    api_token: str
+    api_secret: Optional[str] = None
+
+class StoreUpdate(BaseModel):
+    name: Optional[str] = None
+    shopify_url: Optional[str] = None
+    api_token: Optional[str] = None
+    api_secret: Optional[str] = None
+
+class Store(StoreBase):
     id: int
-    order_name: str
+    api_token: str
+    api_secret: Optional[str] = None
     created_at: datetime
-    tracking_company: Optional[str]
-    tracking_number: Optional[str]
-    status: str
-    class Config: from_attributes = True
-
-class Inventory(BaseModel):
-    product_title: str
-    variant_title: str
-    sku: Optional[str]
-    inventory_policy: str
-    available_quantity: Optional[int]
-    location_name: str
     class Config: from_attributes = True
 
 class WebhookBase(BaseModel):
@@ -190,8 +160,45 @@ class Webhook(WebhookBase):
     store_id: int
     class Config:
         from_attributes = True
-
+        
 # --- ADDED/UPDATED: Schemas for Webhook Payloads ---
+class LineItemWebhook(BaseModel):
+    id: int
+    variant_id: Optional[int] = None
+    product_id: Optional[int] = None
+    title: str
+    quantity: int
+    sku: Optional[str] = None
+    vendor: Optional[str] = None
+    price: str
+    total_discount: str
+    taxable: bool
+
+class ShopifyOrderWebhook(BaseModel):
+    id: int
+    admin_graphql_api_id: str
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: Optional[str] = None
+    closed_at: Optional[datetime] = None
+    processed_at: Optional[datetime] = None
+    financial_status: Optional[str] = None
+    fulfillment_status: Optional[str] = None
+    currency: str
+    payment_gateway_names: Optional[List[str]] = []
+    total_price: str
+    subtotal_price: Optional[str] = None
+    total_tax: Optional[str] = None
+    total_discounts: str
+    total_shipping_price_set: Dict[str, Any]
+    note: Optional[str] = None
+    tags: str
+    line_items: List[LineItemWebhook] = []
+
 class ShopifyProductWebhook(BaseModel):
     id: int
     title: str

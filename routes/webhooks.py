@@ -21,7 +21,6 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
     Receives, verifies, and processes all webhooks from Shopify.
     """
     store = crud_store.get_store(db, store_id=store_id)
-    # UPDATED: Use api_secret for verification
     if not store or not store.api_secret:
         raise HTTPException(status_code=404, detail="Store not found or API Secret Key not configured.")
 
@@ -31,7 +30,6 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
 
     raw_body = await request.body()
     try:
-        # UPDATED: Use api_secret for HMAC calculation
         calculated_hmac = base64.b64encode(hmac.new(store.api_secret.encode(), raw_body, hashlib.sha256).digest()).decode()
         if not hmac.compare_digest(calculated_hmac, shopify_hmac):
             raise HTTPException(status_code=401, detail="HMAC verification failed.")
@@ -44,8 +42,9 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
 
     # --- Order Topics ---
     if topic in ["orders/create", "orders/updated"]:
-        order_data = schemas.ShopifyOrder.parse_obj(payload)
-        crud_order.create_or_update_orders(db, [order_data], store.id)
+        # FIXED: Use the new webhook-specific Pydantic model and CRUD function
+        order_data = schemas.ShopifyOrderWebhook.parse_obj(payload)
+        crud_order.create_or_update_order_from_webhook(db, store.id, order_data)
     elif topic == "orders/delete":
         delete_data = schemas.DeletePayload.parse_obj(payload)
         crud_webhook.delete_order_by_id(db, order_id=delete_data.id)

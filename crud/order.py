@@ -1,12 +1,69 @@
 # crud/order.py
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Dict, Any
 
 import models
 import schemas
 from shopify_service import gid_to_id
 from .utils import upsert_batch
+
+def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: schemas.ShopifyOrderWebhook):
+    """
+    Upserts a single order and its line items from a webhook payload.
+    This is separate from the GraphQL sync due to structural differences in the payload.
+    """
+    # Map the webhook payload to the database model for the Order
+    order_dict = {
+        "id": order_data.id,
+        "shopify_gid": order_data.admin_graphql_api_id,
+        "store_id": store_id,
+        "name": order_data.name,
+        "email": order_data.email,
+        "phone": order_data.phone,
+        "created_at": order_data.created_at,
+        "updated_at": order_data.updated_at,
+        "cancelled_at": order_data.cancelled_at,
+        "cancel_reason": order_data.cancel_reason,
+        "closed_at": order_data.closed_at,
+        "processed_at": order_data.processed_at,
+        "financial_status": order_data.financial_status,
+        "fulfillment_status": order_data.fulfillment_status,
+        "currency": order_data.currency,
+        "payment_gateway_names": ", ".join(order_data.payment_gateway_names) if order_data.payment_gateway_names else None,
+        "note": order_data.note,
+        "tags": order_data.tags,
+        "total_price": order_data.total_price,
+        "subtotal_price": order_data.subtotal_price,
+        "total_tax": order_data.total_tax,
+        "total_discounts": order_data.total_discounts,
+        "total_shipping_price": order_data.total_shipping_price_set['shop_money']['amount']
+    }
+    upsert_batch(db, models.Order, [order_dict], ['id'])
+
+    # Map the line items from the webhook payload
+    line_items_list = []
+    for item in order_data.line_items:
+        line_items_list.append({
+            "id": item.id,
+            "order_id": order_data.id,
+            "variant_id": item.variant_id,
+            "product_id": item.product_id,
+            "title": item.title,
+            "quantity": item.quantity,
+            "sku": item.sku,
+            "vendor": item.vendor,
+            "price": item.price,
+            "total_discount": item.total_discount,
+            "taxable": item.taxable,
+            "shopify_gid": f"gid://shopify/LineItem/{item.id}"
+        })
+    
+    if line_items_list:
+        upsert_batch(db, models.LineItem, line_items_list, ['id'])
+
+    db.commit()
+
 
 def create_or_update_fulfillment_from_webhook(db: Session, fulfillment_data: schemas.ShopifyFulfillmentWebhook):
     """
@@ -25,21 +82,9 @@ def create_or_update_fulfillment_from_webhook(db: Session, fulfillment_data: sch
     }
     upsert_batch(db, models.Fulfillment, [fulfillment_dict], ['id'])
     
-    # After a fulfillment is created/updated, refresh the order's fulfillment status
-    order = db.query(models.Order).options(joinedload(models.Order.fulfillments), joinedload(models.Order.line_items)).filter(models.Order.id == fulfillment_data.order_id).first()
+    order = db.query(models.Order).filter(models.Order.id == fulfillment_data.order_id).first()
     if order:
-        total_line_items = len(order.line_items)
-        fulfilled_line_items = sum(len(f.line_items) for f in order.fulfillments if f.status == 'success') # Assuming line_items relationship on fulfillment
-        
-        new_status = 'unfulfilled'
-        if fulfilled_line_items == 0:
-            new_status = 'unfulfilled'
-        elif fulfilled_line_items < total_line_items:
-            new_status = 'partially_fulfilled'
-        else:
-            new_status = 'fulfilled'
-        
-        order.fulfillment_status = new_status
+        order.fulfillment_status = fulfillment_data.status
         db.commit()
 
 
@@ -48,7 +93,7 @@ def create_refund_from_webhook(db: Session, refund_data: schemas.ShopifyRefundWe
     Creates refund records from a webhook payload and updates the order's financial status.
     """
     total_refunded = 0.0
-    currency = "USD"  # Default
+    currency = "USD"
     for transaction in refund_data.transactions:
         if transaction.get('kind') == 'refund' and transaction.get('status') == 'success':
             total_refunded += float(transaction.get('amount', 0.0))
@@ -63,9 +108,12 @@ def create_refund_from_webhook(db: Session, refund_data: schemas.ShopifyRefundWe
         "currency": currency,
         "shopify_gid": f"gid://shopify/Refund/{refund_data.id}"
     }
-    db_refund = models.Refund(**refund_dict)
-    db.add(db_refund)
-    db.flush()  # To get the refund ID for the line items
+    
+    # Use upsert to prevent duplicates on webhook retries
+    upsert_batch(db, models.Refund, [refund_dict], ['id'])
+    
+    # Get the refund object we just created/updated
+    db_refund = db.query(models.Refund).filter(models.Refund.id == refund_data.id).one()
 
     refund_line_items_list = []
     for item in refund_data.refund_line_items:
@@ -79,12 +127,10 @@ def create_refund_from_webhook(db: Session, refund_data: schemas.ShopifyRefundWe
         })
     
     if refund_line_items_list:
-        db.bulk_insert_mappings(models.RefundLineItem, refund_line_items_list)
+        upsert_batch(db, models.RefundLineItem, refund_line_items_list, ['id'])
 
-    # Update the order's financial status
     order = db.query(models.Order).filter(models.Order.id == refund_data.order_id).first()
     if order:
-        # A more robust logic for partial refunds
         if total_refunded >= float(order.total_price):
              order.financial_status = 'refunded'
         else:
@@ -95,7 +141,7 @@ def create_refund_from_webhook(db: Session, refund_data: schemas.ShopifyRefundWe
 
 def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder], store_id: int):
     """
-    Takes a list of Pydantic ShopifyOrder objects and upserts them and all related data.
+    Takes a list of Pydantic ShopifyOrder objects from GraphQL and upserts them.
     """
     if not orders_data: return
 
