@@ -113,7 +113,7 @@ class ShopifyOrder(BaseModel):
     financial_status: Optional[str] = Field(None, alias="displayFinancialStatus")
     fulfillment_status: str = Field(..., alias="displayFulfillmentStatus")
     currency: str = Field(..., alias="currencyCode")
-    paymentGatewayNames: Optional[List[str]] = [] # <-- FIXED: Added the missing field
+    paymentGatewayNames: Optional[List[str]] = []
     total_price: MoneySet = Field(..., alias="totalPriceSet")
     subtotal_price: Optional[MoneySet] = Field(None, alias="subtotalPriceSet")
     total_tax: Optional[MoneySet] = Field(None, alias="totalTaxSet")
@@ -161,7 +161,15 @@ class StoreCreate(StoreBase):
     api_token: str
     api_secret: Optional[str] = None
 
+class StoreUpdate(BaseModel):
+    name: Optional[str] = None
+    shopify_url: Optional[str] = None
+    api_token: Optional[str] = None
+    api_secret: Optional[str] = None
+
 class Store(StoreBase):
     id: int
+    api_token: str
+    api_secret: Optional[str] = None
     created_at: datetime
     class Config: from_attributes = True

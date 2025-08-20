@@ -3,7 +3,9 @@
 const API_ENDPOINTS = {
     // Stores
     getStores: '/api/config/stores',
+    getStore: (storeId) => `/api/config/stores/${storeId}`,
     addStore: '/api/config/stores',
+    updateStore: (storeId) => `/api/config/stores/${storeId}`,
 
     // Dashboard V2 (Orders Report)
     getDashboardOrders: (params) => `/api/v2/dashboard/orders/?${params.toString()}`,

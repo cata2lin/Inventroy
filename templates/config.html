@@ -33,6 +33,34 @@
             </div>
         </article>
     </div>
+
+    <dialog id="edit-store-modal">
+      <article>
+        <header>
+            <button class="close" aria-label="Close" data-target="edit-store-modal"></button>
+            <strong>Edit Store</strong>
+        </header>
+        <form id="edit-store-form">
+            <input type="hidden" id="edit-store-id" name="id">
+            
+            <label for="edit-name">Store Name</label>
+            <input type="text" id="edit-name" name="name" required>
+            
+            <label for="edit-shopify_url">Shopify URL</label>
+            <input type="text" id="edit-shopify_url" name="shopify_url" required>
+            
+            <label for="edit-api_token">API Access Token</label>
+            <input type="password" id="edit-api_token" name="api_token" placeholder="Leave blank to keep unchanged">
+            
+            <label for="edit-api_secret">API Secret</label>
+            <input type="password" id="edit-api_secret" name="api_secret" placeholder="Leave blank to keep unchanged">
+            
+            <footer>
+                <button type="submit" id="update-store-btn">Save Changes</button>
+            </footer>
+        </form>
+      </article>
+    </dialog>
 </div>
 {% endblock %}
 
