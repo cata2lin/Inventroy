@@ -8,6 +8,91 @@ import schemas
 from shopify_service import gid_to_id
 from .utils import upsert_batch
 
+def create_or_update_fulfillment_from_webhook(db: Session, fulfillment_data: schemas.ShopifyFulfillmentWebhook):
+    """
+    Upserts a single fulfillment from a webhook payload and updates the parent order.
+    """
+    fulfillment_dict = {
+        "id": fulfillment_data.id,
+        "order_id": fulfillment_data.order_id,
+        "status": fulfillment_data.status,
+        "created_at": fulfillment_data.created_at,
+        "updated_at": fulfillment_data.updated_at,
+        "tracking_company": fulfillment_data.tracking_company,
+        "tracking_number": fulfillment_data.tracking_number,
+        "tracking_url": str(fulfillment_data.tracking_url) if fulfillment_data.tracking_url else None,
+        "shopify_gid": f"gid://shopify/Fulfillment/{fulfillment_data.id}"
+    }
+    upsert_batch(db, models.Fulfillment, [fulfillment_dict], ['id'])
+    
+    # After a fulfillment is created/updated, refresh the order's fulfillment status
+    order = db.query(models.Order).options(joinedload(models.Order.fulfillments), joinedload(models.Order.line_items)).filter(models.Order.id == fulfillment_data.order_id).first()
+    if order:
+        total_line_items = len(order.line_items)
+        fulfilled_line_items = sum(len(f.line_items) for f in order.fulfillments if f.status == 'success') # Assuming line_items relationship on fulfillment
+        
+        new_status = 'unfulfilled'
+        if fulfilled_line_items == 0:
+            new_status = 'unfulfilled'
+        elif fulfilled_line_items < total_line_items:
+            new_status = 'partially_fulfilled'
+        else:
+            new_status = 'fulfilled'
+        
+        order.fulfillment_status = new_status
+        db.commit()
+
+
+def create_refund_from_webhook(db: Session, refund_data: schemas.ShopifyRefundWebhook):
+    """
+    Creates refund records from a webhook payload and updates the order's financial status.
+    """
+    total_refunded = 0.0
+    currency = "USD"  # Default
+    for transaction in refund_data.transactions:
+        if transaction.get('kind') == 'refund' and transaction.get('status') == 'success':
+            total_refunded += float(transaction.get('amount', 0.0))
+            currency = transaction.get('currency', currency)
+
+    refund_dict = {
+        "id": refund_data.id,
+        "order_id": refund_data.order_id,
+        "created_at": refund_data.created_at,
+        "note": refund_data.note,
+        "total_refunded": total_refunded,
+        "currency": currency,
+        "shopify_gid": f"gid://shopify/Refund/{refund_data.id}"
+    }
+    db_refund = models.Refund(**refund_dict)
+    db.add(db_refund)
+    db.flush()  # To get the refund ID for the line items
+
+    refund_line_items_list = []
+    for item in refund_data.refund_line_items:
+        refund_line_items_list.append({
+            "id": item.id,
+            "refund_id": db_refund.id,
+            "line_item_id": item.line_item_id,
+            "quantity": item.quantity,
+            "subtotal": item.subtotal,
+            "total_tax": item.total_tax
+        })
+    
+    if refund_line_items_list:
+        db.bulk_insert_mappings(models.RefundLineItem, refund_line_items_list)
+
+    # Update the order's financial status
+    order = db.query(models.Order).filter(models.Order.id == refund_data.order_id).first()
+    if order:
+        # A more robust logic for partial refunds
+        if total_refunded >= float(order.total_price):
+             order.financial_status = 'refunded'
+        else:
+             order.financial_status = 'partially_refunded'
+
+    db.commit()
+
+
 def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder], store_id: int):
     """
     Takes a list of Pydantic ShopifyOrder objects and upserts them and all related data.
@@ -19,7 +104,6 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
     processed_product_ids, processed_variant_ids, processed_location_ids, processed_line_item_ids = set(), set(), set(), set()
 
     for order in orders_data:
-        # --- FIXED: Correctly process the payment gateway names ---
         payment_gateway_str = ", ".join(order.paymentGatewayNames) if order.paymentGatewayNames else None
         
         all_orders.append({
@@ -28,7 +112,7 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
             "cancelled_at": order.cancelled_at, "cancel_reason": order.cancel_reason, "closed_at": order.closed_at, 
             "processed_at": order.processed_at, "financial_status": order.financial_status, 
             "fulfillment_status": order.fulfillment_status, "currency": order.currency, 
-            "payment_gateway_names": payment_gateway_str, # <-- FIXED: Add to dictionary
+            "payment_gateway_names": payment_gateway_str,
             "note": order.note, "tags": ", ".join(order.tags), 
             "total_price": order.total_price.amount, "subtotal_price": order.subtotal_price.amount if order.subtotal_price else None, 
             "total_tax": order.total_tax.amount if order.total_tax else None, "total_discounts": order.total_discounts.amount, 

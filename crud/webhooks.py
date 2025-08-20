@@ -42,19 +42,24 @@ def delete_order_by_id(db: Session, order_id: int):
         db.delete(order)
         db.commit()
 
-def delete_product_by_id(db: Session, product_id: int):
-    """Deletes a product by its Shopify legacy ID."""
+def mark_product_as_deleted(db: Session, product_id: int):
+    """Marks a product as 'DELETED' in the database."""
     product = db.query(models.Product).filter(models.Product.id == product_id).first()
     if product:
-        db.delete(product)
+        product.status = 'DELETED'
         db.commit()
 
 def process_product_webhook(db: Session, store_id: int, product_data: schemas.ShopifyProductWebhook):
     """Processes a product create/update webhook."""
-    # This is a simplified version. You might need to adapt your existing
-    # `create_or_update_products` logic to handle a single product payload.
-    print(f"Processing product webhook for product ID: {product_data.id}")
-    # Placeholder for your logic to upsert the product and its variants.
+    crud_product.create_or_update_product_from_webhook(db, store_id, product_data)
+
+def process_fulfillment_webhook(db: Session, fulfillment_data: schemas.ShopifyFulfillmentWebhook):
+    """Processes a fulfillment create/update webhook."""
+    crud_order.create_or_update_fulfillment_from_webhook(db, fulfillment_data)
+
+def process_refund_webhook(db: Session, refund_data: schemas.ShopifyRefundWebhook):
+    """Processes a refund create webhook."""
+    crud_order.create_refund_from_webhook(db, refund_data)
 
 def process_inventory_level_update(db: Session, payload: dict):
     """Processes an inventory level update webhook."""

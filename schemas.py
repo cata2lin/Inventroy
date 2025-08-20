@@ -177,7 +177,6 @@ class Store(StoreBase):
     created_at: datetime
     class Config: from_attributes = True
 
-# --- ADDED: Schemas for Webhooks ---
 class WebhookBase(BaseModel):
     topic: str
     address: str
@@ -192,7 +191,7 @@ class Webhook(WebhookBase):
     class Config:
         from_attributes = True
 
-# --- ADDED: Schemas for Webhook Payloads ---
+# --- ADDED/UPDATED: Schemas for Webhook Payloads ---
 class ShopifyProductWebhook(BaseModel):
     id: int
     title: str
@@ -207,11 +206,32 @@ class ShopifyProductWebhook(BaseModel):
     tags: Optional[str] = None
     variants: List[Dict[str, Any]] = []
 
+class ShopifyFulfillmentWebhook(BaseModel):
+    id: int
+    order_id: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    tracking_company: Optional[str] = None
+    tracking_number: Optional[str] = None
+    tracking_url: Optional[HttpUrl] = None
+    line_items: List[Dict[str, Any]] = []
+
+class RefundLineItemWebhook(BaseModel):
+    id: int
+    line_item_id: int
+    quantity: int
+    subtotal: float
+    total_tax: float
+    line_item: Dict[str, Any]
+
 class ShopifyRefundWebhook(BaseModel):
     id: int
     order_id: int
     created_at: datetime
     note: Optional[str] = None
+    transactions: List[Dict[str, Any]] = []
+    refund_line_items: List[RefundLineItemWebhook] = []
 
 class DeletePayload(BaseModel):
     id: int

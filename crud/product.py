@@ -4,7 +4,52 @@ from sqlalchemy.orm import Session, joinedload
 from typing import List, Dict, Any
 
 import models
+import schemas
 from .utils import upsert_batch
+
+def create_or_update_product_from_webhook(db: Session, store_id: int, product_data: schemas.ShopifyProductWebhook):
+    """
+    Upserts a single product and its variants from a webhook payload.
+    """
+    product_dict = {
+        "id": product_data.id,
+        "store_id": store_id,
+        "title": product_data.title,
+        "body_html": product_data.body_html,
+        "vendor": product_data.vendor,
+        "product_type": product_data.product_type,
+        "created_at": product_data.created_at,
+        "handle": product_data.handle,
+        "updated_at": product_data.updated_at,
+        "published_at": product_data.published_at,
+        "status": product_data.status,
+        "tags": product_data.tags,
+        "shopify_gid": f"gid://shopify/Product/{product_data.id}"
+    }
+    upsert_batch(db, models.Product, [product_dict], ['id'])
+
+    variants_list = []
+    for variant_data in product_data.variants:
+        variants_list.append({
+            "id": variant_data['id'],
+            "product_id": product_data.id,
+            "title": variant_data['title'],
+            "price": variant_data['price'],
+            "sku": variant_data['sku'],
+            "position": variant_data['position'],
+            "inventory_policy": variant_data['inventory_policy'],
+            "compare_at_price": variant_data.get('compare_at_price'),
+            "barcode": variant_data.get('barcode'),
+            "inventory_item_id": variant_data['inventory_item_id'],
+            "inventory_quantity": variant_data['inventory_quantity'],
+            "created_at": variant_data['created_at'],
+            "updated_at": variant_data['updated_at'],
+            "shopify_gid": f"gid://shopify/ProductVariant/{variant_data['id']}"
+        })
+    if variants_list:
+        upsert_batch(db, models.ProductVariant, variants_list, ['id'])
+    
+    db.commit()
 
 def update_inventory_details(db: Session, inventory_data: List[Dict[str, Any]]):
     """
@@ -52,7 +97,6 @@ def create_or_update_products(db: Session, products_data: List[Dict[str, Any]], 
 
         for variant in item['variants']:
             inv_item = variant.inventory_item
-            # MODIFIED: Added the 'cost' field to the variant dictionary
             all_variants.append({
                 "id": variant.legacy_resource_id, "shopify_gid": variant.id, 
                 "product_id": product.legacy_resource_id, "title": variant.title, 

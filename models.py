@@ -13,21 +13,15 @@ class Store(Base):
     shopify_url = Column(String(255), unique=True, nullable=False)
     api_token = Column(String(255), nullable=False)
     api_secret = Column(String(255), nullable=True)
-    # ADDED: A secret for verifying webhook integrity.
     webhook_secret = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
     products = relationship("Product", back_populates="store", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="store", cascade="all, delete-orphan")
     locations = relationship("Location", back_populates="store", cascade="all, delete-orphan")
-    # ADDED: Relationship to the new Webhook model
     webhooks = relationship("Webhook", back_populates="store", cascade="all, delete-orphan")
 
-# --- ADDED: New Webhook Model ---
 class Webhook(Base):
-    """
-    Stores information about registered webhooks for each store.
-    """
     __tablename__ = "webhooks"
     id = Column(Integer, primary_key=True, index=True)
     shopify_webhook_id = Column(BIGINT, unique=True, nullable=False)
@@ -36,7 +30,6 @@ class Webhook(Base):
     address = Column(String(2048), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     store = relationship("Store", back_populates="webhooks")
-
 
 class Location(Base):
     __tablename__ = "locations"
@@ -125,7 +118,7 @@ class Order(Base):
     financial_status = Column(String(50))
     fulfillment_status = Column(String(50))
     currency = Column(String(10))
-    payment_gateway_names = Column(Text) # <-- FIXED: Added the new column
+    payment_gateway_names = Column(Text)
     total_price = Column(NUMERIC(10, 2))
     subtotal_price = Column(NUMERIC(10, 2))
     total_tax = Column(NUMERIC(10, 2))
@@ -137,6 +130,8 @@ class Order(Base):
     store = relationship("Store", back_populates="orders")
     line_items = relationship("LineItem", back_populates="order", cascade="all, delete-orphan")
     fulfillments = relationship("Fulfillment", back_populates="order", cascade="all, delete-orphan")
+    # ADDED: Relationship to the new Refund model
+    refunds = relationship("Refund", back_populates="order", cascade="all, delete-orphan")
 
 class LineItem(Base):
     __tablename__ = "line_items"
@@ -170,7 +165,6 @@ class Fulfillment(Base):
     tracking_url = Column(String(2048))
     shipment_status = Column(String(50))
     location_id = Column(BIGINT)
-    # ADDED: A field to track the hold status of a fulfillment.
     hold_status = Column(String(50), nullable=True)
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     order = relationship("Order", back_populates="fulfillments")
@@ -203,3 +197,29 @@ class StockMovement(Base):
     reason = Column(String(255))
     source_info = Column(String(255))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+# --- ADDED: New Refund Models ---
+class Refund(Base):
+    __tablename__ = "refunds"
+    id = Column(BIGINT, primary_key=True, index=True)
+    shopify_gid = Column(String(255), unique=True, nullable=False)
+    order_id = Column(BIGINT, ForeignKey("orders.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True))
+    note = Column(Text)
+    total_refunded = Column(NUMERIC(10, 2))
+    currency = Column(String(10))
+    
+    order = relationship("Order", back_populates="refunds")
+    refund_line_items = relationship("RefundLineItem", back_populates="refund", cascade="all, delete-orphan")
+
+class RefundLineItem(Base):
+    __tablename__ = "refund_line_items"
+    id = Column(BIGINT, primary_key=True, index=True)
+    refund_id = Column(BIGINT, ForeignKey("refunds.id"), nullable=False)
+    line_item_id = Column(BIGINT, ForeignKey("line_items.id"), nullable=False)
+    quantity = Column(Integer)
+    subtotal = Column(NUMERIC(10, 2))
+    total_tax = Column(NUMERIC(10, 2))
+    
+    refund = relationship("Refund", back_populates="refund_line_items")
+    line_item = relationship("LineItem")
