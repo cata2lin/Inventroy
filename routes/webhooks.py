@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 import schemas
 from crud import store as crud_store, webhooks as crud_webhook, order as crud_order
-from shopify_service import ShopifyService # --- ADDED: Import ShopifyService ---
+from shopify_service import ShopifyService
 
 router = APIRouter(
     prefix="/api/webhooks",
@@ -70,27 +70,25 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
         fulfillment_order_gid = webhook_data.fulfillment_order.get("id")
         reason = webhook_data.fulfillment_hold.reason_notes if webhook_data.fulfillment_hold else None
         
-        # --- FIX: Use the service to get the order_id ---
         service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
         order_id = service.get_order_id_from_fulfillment_order_gid(fulfillment_order_gid)
         
         if order_id:
-            crud_webhook.update_order_fulfillment_status_from_hold(db, order_id, "ON_HOLD", reason)
+            # --- FIXED: Pass all arguments in the correct order ---
+            crud_webhook.update_order_fulfillment_status_from_hold(db, order_id, fulfillment_order_gid, "ON_HOLD", reason)
             
     elif topic == "fulfillment_orders/hold_released":
         webhook_data = schemas.FulfillmentOrderWebhook.parse_obj(payload)
         fulfillment_order_gid = webhook_data.fulfillment_order.get("id")
 
-        # --- FIX: Use the service to get the order_id ---
         service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
         order_id = service.get_order_id_from_fulfillment_order_gid(fulfillment_order_gid)
 
         if order_id:
-            crud_webhook.update_order_fulfillment_status_from_hold(db, order_id, "RELEASED")
+            # --- FIXED: Pass all arguments in the correct order ---
+            crud_webhook.update_order_fulfillment_status_from_hold(db, order_id, fulfillment_order_gid, "RELEASED")
 
     elif topic == "fulfillment_orders/cancellation_request_accepted":
-        # This topic indicates a change, but doesn't directly map to a simple status.
-        # Often it's followed by another event. For now, we can log it.
         print(f"Fulfillment cancellation for order related to {payload.get('fulfillment_order', {}).get('id')} was accepted.")
 
     # --- Refund Topic ---
