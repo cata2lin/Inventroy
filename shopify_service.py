@@ -25,7 +25,6 @@ fragment InventoryLevelFragment on InventoryLevel {
   location { ...LocationFragment }
 }
 """
-# MODIFIED: Added 'unitCost' to the InventoryItemFragment
 INVENTORY_ITEM_FRAGMENT = """
 fragment InventoryItemFragment on InventoryItem {
   id legacyResourceId sku
@@ -140,6 +139,29 @@ class ShopifyService:
         self.rest_api_endpoint = f"https://{store_url}/admin/api/{api_version}"
         self.headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": token}
         self.rest_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+
+    # --- ADDED: New method to resolve order ID from fulfillment order GID ---
+    def get_order_id_from_fulfillment_order_gid(self, fulfillment_order_gid: str) -> Optional[int]:
+        """
+        Queries the GraphQL API to find the parent order's legacy ID from a fulfillment order GID.
+        """
+        query = """
+        query($id: ID!) {
+          fulfillmentOrder(id: $id) {
+            order {
+              legacyResourceId
+            }
+          }
+        }
+        """
+        variables = {"id": fulfillment_order_gid}
+        try:
+            data = self._execute_query(query, variables)
+            if data and data.get("fulfillmentOrder") and data["fulfillmentOrder"].get("order"):
+                return data["fulfillmentOrder"]["order"].get("legacyResourceId")
+        except Exception as e:
+            print(f"Could not resolve order ID for fulfillment order {fulfillment_order_gid}: {e}")
+        return None
 
     # --- Webhook Management Methods (REST API) ---
     def get_webhooks(self) -> List[Dict[str, Any]]:

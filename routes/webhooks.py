@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 import schemas
 from crud import store as crud_store, webhooks as crud_webhook, order as crud_order
+from shopify_service import ShopifyService # --- ADDED: Import ShopifyService ---
 
 router = APIRouter(
     prefix="/api/webhooks",
@@ -61,32 +62,40 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
     # --- Fulfillment Topics ---
     elif topic in ["fulfillments/create", "fulfillments/update"]:
         fulfillment_data = schemas.ShopifyFulfillmentWebhook.parse_obj(payload)
-        # FIXED: Pass the store.id to the processing function
         crud_webhook.process_fulfillment_webhook(db, store.id, fulfillment_data)
     
     # --- Fulfillment Hold Topics ---
     elif topic == "fulfillment_orders/placed_on_hold":
         webhook_data = schemas.FulfillmentOrderWebhook.parse_obj(payload)
-        fulfillment_gid = webhook_data.fulfillment_order.get("id")
-        if fulfillment_gid:
-            crud_webhook.update_fulfillment_hold_status_by_gid(db, fulfillment_gid, "ON_HOLD")
+        fulfillment_order_gid = webhook_data.fulfillment_order.get("id")
+        reason = webhook_data.fulfillment_hold.reason_notes if webhook_data.fulfillment_hold else None
+        
+        # --- FIX: Use the service to get the order_id ---
+        service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+        order_id = service.get_order_id_from_fulfillment_order_gid(fulfillment_order_gid)
+        
+        if order_id:
+            crud_webhook.update_order_fulfillment_status_from_hold(db, order_id, "ON_HOLD", reason)
             
     elif topic == "fulfillment_orders/hold_released":
         webhook_data = schemas.FulfillmentOrderWebhook.parse_obj(payload)
-        fulfillment_gid = webhook_data.fulfillment_order.get("id")
-        if fulfillment_gid:
-            crud_webhook.update_fulfillment_hold_status_by_gid(db, fulfillment_gid, "RELEASED")
+        fulfillment_order_gid = webhook_data.fulfillment_order.get("id")
+
+        # --- FIX: Use the service to get the order_id ---
+        service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+        order_id = service.get_order_id_from_fulfillment_order_gid(fulfillment_order_gid)
+
+        if order_id:
+            crud_webhook.update_order_fulfillment_status_from_hold(db, order_id, "RELEASED")
 
     elif topic == "fulfillment_orders/cancellation_request_accepted":
-        webhook_data = schemas.FulfillmentOrderWebhook.parse_obj(payload)
-        fulfillment_gid = webhook_data.fulfillment_order.get("id")
-        if fulfillment_gid:
-            crud_webhook.update_fulfillment_hold_status_by_gid(db, fulfillment_gid, "CANCELLED")
+        # This topic indicates a change, but doesn't directly map to a simple status.
+        # Often it's followed by another event. For now, we can log it.
+        print(f"Fulfillment cancellation for order related to {payload.get('fulfillment_order', {}).get('id')} was accepted.")
 
     # --- Refund Topic ---
     elif topic == "refunds/create":
         refund_data = schemas.ShopifyRefundWebhook.parse_obj(payload)
-        # FIXED: Pass the store.id to the processing function
         crud_webhook.process_refund_webhook(db, store.id, refund_data)
 
     else:
