@@ -1,6 +1,6 @@
 # routes/config.py
 
-from fastapi import APIRouter, Depends, HTTPException, Response, Request # --- ADDED: Import Request ---
+from fastapi import APIRouter, Depends, HTTPException, Response, Request
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -66,7 +66,8 @@ def get_store_webhooks(store_id: int, db: Session = Depends(get_db)):
 @router.post("/stores/{store_id}/webhooks/create-all", status_code=201)
 def create_all_necessary_webhooks(store_id: int, request: Request, db: Session = Depends(get_db)):
     """
-    Checks for existing webhooks and creates any missing essential webhooks for the store.
+    Checks for existing webhooks. Deletes any that point to the wrong address
+    and creates any that are missing for the correct address.
     """
     store = crud_store.get_store(db, store_id=store_id)
     if not store:
@@ -75,26 +76,50 @@ def create_all_necessary_webhooks(store_id: int, request: Request, db: Session =
     try:
         service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
         
-        existing_webhooks = service.get_webhooks()
-        existing_topics = {wh['topic'] for wh in existing_webhooks}
-        
-        missing_topics = [topic for topic in ESSENTIAL_WEBHOOK_TOPICS if topic not in existing_topics]
-        
-        if not missing_topics:
-            return {"message": "All necessary webhooks are already registered."}
-
+        # 1. Determine the correct, current webhook address for this application instance.
         base_url = str(request.base_url)
-        webhook_address = f"{base_url.rstrip('/')}/api/webhooks/{store_id}"
+        correct_address = f"{base_url.rstrip('/')}/api/webhooks/{store_id}"
+        
+        # 2. Get all webhooks currently registered on Shopify.
+        existing_webhooks = service.get_webhooks()
+        
+        # 3. Create a map of topic -> {id, address} for easy lookup.
+        existing_webhooks_map = {wh['topic']: {'id': wh['id'], 'address': wh['address']} for wh in existing_webhooks}
 
         created_count = 0
-        for topic in missing_topics:
-            created_webhook = service.create_webhook(topic=topic, address=webhook_address)
-            crud_webhook.create_webhook_registration(db, store_id=store.id, webhook_data=created_webhook)
-            created_count += 1
+        updated_count = 0
+
+        # 4. Iterate through the list of essential topics and ensure each one is correctly registered.
+        for topic in ESSENTIAL_WEBHOOK_TOPICS:
+            existing_webhook = existing_webhooks_map.get(topic)
             
-        return {"message": f"Successfully created {created_count} new webhook(s)."}
+            if not existing_webhook:
+                # Case 1: The webhook does not exist at all. Create it.
+                print(f"Webhook for topic '{topic}' not found. Creating...")
+                created_webhook_data = service.create_webhook(topic=topic, address=correct_address)
+                crud_webhook.create_webhook_registration(db, store_id=store.id, webhook_data=created_webhook_data)
+                created_count += 1
+            elif existing_webhook['address'] != correct_address:
+                # Case 2: The webhook exists but points to the wrong URL. Replace it.
+                print(f"Webhook for topic '{topic}' has incorrect address '{existing_webhook['address']}'. Replacing...")
+                # Delete the old one from Shopify and our DB
+                service.delete_webhook(webhook_id=existing_webhook['id'])
+                crud_webhook.delete_webhook_registration(db, shopify_webhook_id=existing_webhook['id'])
+                
+                # Create the new, correct one
+                created_webhook_data = service.create_webhook(topic=topic, address=correct_address)
+                crud_webhook.create_webhook_registration(db, store_id=store.id, webhook_data=created_webhook_data)
+                updated_count += 1
+            # Case 3: The correct webhook already exists. Do nothing.
+
+        message = f"Webhook verification complete. Created: {created_count}, Updated: {updated_count}."
+        if created_count == 0 and updated_count == 0:
+            message = "All necessary webhooks are already correctly registered."
+            
+        return {"message": message}
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create webhooks: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create/verify webhooks: {str(e)}")
 
 
 @router.delete("/stores/{store_id}/webhooks/{shopify_webhook_id}", status_code=204)
