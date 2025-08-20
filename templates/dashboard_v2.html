@@ -12,8 +12,19 @@
         <section class="controls-grid">
             <input type="search" id="search-input" name="search" placeholder="Search Order Name...">
             <details role="list" class="dropdown"><summary aria-haspopup="listbox">Stores</summary><ul role="listbox" id="store-filter-list"><li>Loading...</li></ul></details>
-            <details role="list" class="dropdown"><summary aria-haspopup="listbox">Financial Status</summary><ul role="listbox" id="financial-status-filter"><li><label><input type="radio" name="fs" value="" checked> All</label></li><li><label><input type="radio" name="fs" value="pending"> Pending</label></li><li><label><input type="radio" name="fs" value="paid"> Paid</label></li><li><label><input type="radio" name="fs" value="refunded"> Refunded</label></li><li><label><input type="radio" name="fs" value="voided"> Voided</label></li></ul></details>
-            <details role="list" class="dropdown"><summary aria-haspopup="listbox">Fulfillment</summary><ul role="listbox" id="fulfillment-status-filter"><li><label><input type="radio" name="ffs" value="" checked> All</label></li><li><label><input type="radio" name="ffs" value="unfulfilled"> Unfulfilled</label></li><li><label><input type="radio" name="ffs" value="partially_fulfilled"> Partially</label></li><li><label><input type="radio" name="ffs" value="fulfilled"> Fulfilled</label></li></ul></details>
+            
+            <!-- MODIFIED: Removed hardcoded financial statuses -->
+            <details role="list" class="dropdown">
+                <summary aria-haspopup="listbox">Financial Status</summary>
+                <ul role="listbox" id="financial-status-filter"><li>Loading...</li></ul>
+            </details>
+
+            <!-- MODIFIED: Removed hardcoded fulfillment statuses -->
+            <details role="list" class="dropdown">
+                <summary aria-haspopup="listbox">Fulfillment</summary>
+                <ul role="listbox" id="fulfillment-status-filter"><li>Loading...</li></ul>
+            </details>
+
             <details role="list" class="dropdown"><summary aria-haspopup="listbox">Notes</summary><ul role="listbox" id="has-note-filter"><li><label><input type="radio" name="note" value="" checked> All</label></li><li><label><input type="radio" name="note" value="true"> Has Note</label></li><li><label><input type="radio" name="note" value="false"> No Note</label></li></ul></details>
             <button id="column-visibility-button" class="outline">Columns</button>
             <input type="search" id="tags-input" name="tags" placeholder="Filter by tags...">

@@ -9,13 +9,14 @@ const API_ENDPOINTS = {
 
     // Webhook Endpoints
     getWebhooks: (storeId) => `/api/config/stores/${storeId}/webhooks`,
-    // ADDED: New endpoint for automatic creation
     createAllWebhooks: (storeId) => `/api/config/stores/${storeId}/webhooks/create-all`,
     deleteWebhook: (storeId, webhookId) => `/api/config/stores/${storeId}/webhooks/${webhookId}`,
 
     // Dashboard V2 (Orders Report)
     getDashboardOrders: (params) => `/api/v2/dashboard/orders/?${params.toString()}`,
     exportDashboardOrders: (params) => `/api/v2/dashboard/export/?${params.toString()}`,
+    // ADDED: New endpoint for dynamic filters
+    getDashboardFilters: '/api/v2/dashboard/filters/',
 
     // Inventory V2 (Inventory Report)
     getInventoryReport: (params) => `/api/v2/inventory/report/?${params.toString()}`,

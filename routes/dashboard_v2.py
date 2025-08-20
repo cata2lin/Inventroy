@@ -14,12 +14,18 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
+@router.get("/filters/")
+def get_dashboard_filters(db: Session = Depends(get_db)):
+    """
+    Endpoint to get all unique, non-null status values for dashboard filters.
+    """
+    return crud_dashboard.get_status_filters(db)
+
 @router.get("/orders/")
 def get_dashboard_orders(
     skip: int = 0, limit: int = 50,
     store_ids: Optional[List[int]] = Query(None),
     start_date: Optional[str] = None, end_date: Optional[str] = None,
-    # MODIFIED: Changed from Optional[str] to Optional[List[str]]
     financial_status: Optional[List[str]] = Query(None), 
     fulfillment_status: Optional[List[str]] = Query(None),
     has_note: Optional[bool] = None, tags: Optional[str] = None, search: Optional[str] = None,
@@ -36,7 +42,6 @@ def get_dashboard_orders(
 def export_dashboard_orders(
     store_ids: Optional[List[int]] = Query(None),
     start_date: Optional[str] = None, end_date: Optional[str] = None,
-    # MODIFIED: Changed from Optional[str] to Optional[List[str]]
     financial_status: Optional[List[str]] = Query(None), 
     fulfillment_status: Optional[List[str]] = Query(None),
     has_note: Optional[bool] = None, tags: Optional[str] = None, search: Optional[str] = None,

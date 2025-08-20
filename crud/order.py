@@ -13,6 +13,11 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     Upserts a single order and its line items from a webhook payload.
     This is separate from the GraphQL sync due to structural differences in the payload.
     """
+    # --- FIX: Standardize statuses and set default fulfillment status ---
+    financial_status = (order_data.financial_status or 'pending').lower()
+    # If fulfillment_status is null or missing, it means the order is unfulfilled.
+    fulfillment_status = (order_data.fulfillment_status or 'unfulfilled').lower()
+
     order_dict = {
         "id": order_data.id,
         "shopify_gid": order_data.admin_graphql_api_id,
@@ -26,8 +31,8 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
         "cancel_reason": order_data.cancel_reason,
         "closed_at": order_data.closed_at,
         "processed_at": order_data.processed_at,
-        "financial_status": order_data.financial_status,
-        "fulfillment_status": order_data.fulfillment_status,
+        "financial_status": financial_status,
+        "fulfillment_status": fulfillment_status,
         "currency": order_data.currency,
         "payment_gateway_names": ", ".join(order_data.payment_gateway_names) if order_data.payment_gateway_names else None,
         "note": order_data.note,
@@ -68,13 +73,12 @@ def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfil
     Upserts a single fulfillment from a webhook payload. If the parent order does not
     exist, a placeholder is created to prevent foreign key violations.
     """
-    # --- FIX: Check for parent order and create a placeholder if it doesn't exist ---
     order = db.query(models.Order).filter(models.Order.id == fulfillment_data.order_id).first()
     if not order:
         placeholder_order = {
             "id": fulfillment_data.order_id,
             "store_id": store_id,
-            "name": f"#{fulfillment_data.order_id}", # Use a placeholder name
+            "name": f"#{fulfillment_data.order_id}",
             "shopify_gid": f"gid://shopify/Order/{fulfillment_data.order_id}"
         }
         upsert_batch(db, models.Order, [placeholder_order], ['id'])
@@ -92,15 +96,12 @@ def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfil
     }
     upsert_batch(db, models.Fulfillment, [fulfillment_dict], ['id'])
     
-    # Refresh the order's fulfillment status
     order_to_update = db.query(models.Order).filter(models.Order.id == fulfillment_data.order_id).first()
     if order_to_update:
-        # A simple update based on the fulfillment status. A more complex logic
-        # might be needed for partial fulfillments if line items are sent.
         if fulfillment_data.status == 'success':
              order_to_update.fulfillment_status = 'fulfilled'
         else:
-             order_to_update.fulfillment_status = fulfillment_data.status
+             order_to_update.fulfillment_status = fulfillment_data.status.lower()
         db.commit()
 
 
@@ -109,7 +110,6 @@ def create_refund_from_webhook(db: Session, store_id: int, refund_data: schemas.
     Creates refund records from a webhook payload. If the parent order does not
     exist, a placeholder is created.
     """
-    # --- FIX: Check for parent order and create a placeholder if it doesn't exist ---
     order = db.query(models.Order).filter(models.Order.id == refund_data.order_id).first()
     if not order:
         placeholder_order = {
@@ -136,6 +136,7 @@ def create_refund_from_webhook(db: Session, store_id: int, refund_data: schemas.
         "currency": currency,
         "shopify_gid": f"gid://shopify/Refund/{refund_data.id}"
     }
+    
     upsert_batch(db, models.Refund, [refund_dict], ['id'])
     
     db_refund = db.query(models.Refund).filter(models.Refund.id == refund_data.id).one()
@@ -156,7 +157,9 @@ def create_refund_from_webhook(db: Session, store_id: int, refund_data: schemas.
 
     order_to_update = db.query(models.Order).filter(models.Order.id == refund_data.order_id).first()
     if order_to_update and order_to_update.total_price is not None:
-        if total_refunded >= float(order_to_update.total_price):
+        current_refunds = db.query(func.sum(models.Refund.total_refunded)).filter(models.Refund.order_id == refund_data.order_id).scalar() or 0
+        
+        if current_refunds >= float(order_to_update.total_price):
              order_to_update.financial_status = 'refunded'
         else:
              order_to_update.financial_status = 'partially_refunded'
@@ -181,8 +184,10 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
             "id": order.legacy_resource_id, "shopify_gid": order.id, "store_id": store_id, "name": order.name, 
             "email": order.email, "phone": order.phone, "created_at": order.created_at, "updated_at": order.updated_at, 
             "cancelled_at": order.cancelled_at, "cancel_reason": order.cancel_reason, "closed_at": order.closed_at, 
-            "processed_at": order.processed_at, "financial_status": order.financial_status, 
-            "fulfillment_status": order.fulfillment_status, "currency": order.currency, 
+            "processed_at": order.processed_at, 
+            "financial_status": (order.financial_status or 'pending').lower(), 
+            "fulfillment_status": (order.fulfillment_status or 'unfulfilled').lower(), 
+            "currency": order.currency, 
             "payment_gateway_names": payment_gateway_str,
             "note": order.note, "tags": ", ".join(order.tags), 
             "total_price": order.total_price.amount, "subtotal_price": order.subtotal_price.amount if order.subtotal_price else None, 

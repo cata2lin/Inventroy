@@ -29,10 +29,23 @@ def delete_webhook_registration(db: Session, shopify_webhook_id: int):
     db.commit()
 
 def update_fulfillment_hold_status_by_gid(db: Session, fulfillment_gid: str, status: str):
-    """Updates the hold status of a fulfillment based on its Shopify GID."""
+    """
+    Updates the hold status of a fulfillment and, more importantly,
+    updates the parent order's fulfillment_status to 'on_hold'.
+    """
     fulfillment = db.query(models.Fulfillment).filter(models.Fulfillment.shopify_gid == fulfillment_gid).first()
     if fulfillment:
         fulfillment.hold_status = status
+        
+        # --- FIX: Update the parent order's status ---
+        order = db.query(models.Order).filter(models.Order.id == fulfillment.order_id).first()
+        if order:
+            if status == "ON_HOLD":
+                order.fulfillment_status = "on_hold"
+            # You might add logic here for when a hold is released, e.g., revert to 'unfulfilled'
+            elif status == "RELEASED" and order.fulfillment_status == "on_hold":
+                order.fulfillment_status = "unfulfilled"
+        
         db.commit()
 
 def delete_order_by_id(db: Session, order_id: int):
@@ -55,12 +68,10 @@ def process_product_webhook(db: Session, store_id: int, product_data: schemas.Sh
 
 def process_fulfillment_webhook(db: Session, store_id: int, fulfillment_data: schemas.ShopifyFulfillmentWebhook):
     """Processes a fulfillment create/update webhook."""
-    # FIXED: Pass the store_id to the next function.
     crud_order.create_or_update_fulfillment_from_webhook(db, store_id, fulfillment_data)
 
 def process_refund_webhook(db: Session, store_id: int, refund_data: schemas.ShopifyRefundWebhook):
     """Processes a refund create webhook."""
-    # FIXED: Pass the store_id to the next function.
     crud_order.create_refund_from_webhook(db, store_id, refund_data)
 
 def process_inventory_level_update(db: Session, payload: dict):

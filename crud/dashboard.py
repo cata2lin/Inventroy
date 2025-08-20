@@ -1,7 +1,6 @@
 # crud/dashboard.py
 
 from sqlalchemy.orm import Session
-# MODIFIED: Imported func for SQL functions
 from sqlalchemy import func, desc, asc
 from typing import List, Optional
 from datetime import datetime, timedelta
@@ -9,6 +8,18 @@ import pandas as pd
 import io
 
 import models
+
+def get_status_filters(db: Session):
+    """
+    Queries the database for all distinct, non-null financial and fulfillment statuses.
+    """
+    financial = db.query(models.Order.financial_status).filter(models.Order.financial_status.isnot(None)).distinct().all()
+    fulfillment = db.query(models.Order.fulfillment_status).filter(models.Order.fulfillment_status.isnot(None)).distinct().all()
+    
+    return {
+        "financial": sorted([status[0] for status in financial]),
+        "fulfillment": sorted([status[0] for status in fulfillment])
+    }
 
 def _get_filtered_query(db: Session, store_ids, start_date, end_date, financial_status, fulfillment_status, has_note, tags, search):
     """Helper function to build the base filtered query."""
@@ -25,7 +36,6 @@ def _get_filtered_query(db: Session, store_ids, start_date, end_date, financial_
         end_date_dt = datetime.fromisoformat(end_date) + timedelta(days=1)
         query = query.filter(models.Order.created_at < end_date_dt.isoformat())
     
-    # FIXED: Use func.lower() for case-insensitive filtering on status fields.
     if financial_status:
         query = query.filter(func.lower(models.Order.financial_status).in_([fs.lower() for fs in financial_status]))
     if fulfillment_status:

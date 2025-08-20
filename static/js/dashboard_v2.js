@@ -79,7 +79,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         Object.entries(state.filters).forEach(([key, value]) => {
             if (value && value.length > 0) {
-                if (Array.isArray(value)) value.forEach(v => params.append(key, v));
+                if (Array.isArray(value)) value.forEach(v => params.append(key, value));
                 else params.append(key, value);
             }
         });
@@ -175,11 +175,26 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.columnModal.list.innerHTML = allColumns.map(col => `<div><label><input type="checkbox" name="col-${col.key}" value="${col.key}"> ${col.label}</label></div>`).join('');
         
         try {
-            const response = await fetch(API_ENDPOINTS.getStores);
-            const stores = await response.json();
+            // --- MODIFIED: Fetch all filters concurrently ---
+            const [storeResp, filterResp] = await Promise.all([
+                fetch(API_ENDPOINTS.getStores),
+                fetch(API_ENDPOINTS.getDashboardFilters)
+            ]);
+            
+            const stores = await storeResp.json();
             elements.filters.stores.innerHTML = stores.map(store => `<li><label><input type="checkbox" name="store" value="${store.id}"> ${store.name}</label></li>`).join('');
+
+            const filterData = await filterResp.json();
+            const financialHtml = filterData.financial.map(s => `<li><label><input type="checkbox" name="fs" value="${s}"> ${s.replace('_', ' ')}</label></li>`).join('');
+            elements.filters.financialStatus.innerHTML = financialHtml;
+
+            const fulfillmentHtml = filterData.fulfillment.map(s => `<li><label><input type="checkbox" name="ffs" value="${s}"> ${s.replace('_', ' ')}</label></li>`).join('');
+            elements.filters.fulfillmentStatus.innerHTML = fulfillmentHtml;
+
         } catch (error) {
             elements.filters.stores.innerHTML = '<li>Could not load stores</li>';
+            elements.filters.financialStatus.innerHTML = '<li>Could not load statuses</li>';
+            elements.filters.fulfillmentStatus.innerHTML = '<li>Could not load statuses</li>';
         }
 
         const params = new URLSearchParams(window.location.search);
@@ -192,7 +207,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 search: params.get('search') || '',
                 tags: params.get('tags') || '',
                 store_ids: params.getAll('stores') || [],
-                // MODIFIED: Read multi-select filters from URL
                 financial_status: params.getAll('fs') || [],
                 fulfillment_status: params.getAll('ffs') || [],
                 has_note: params.get('note') || '',
@@ -201,7 +215,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
         
-        // MODIFIED: Update form elements to reflect state
         elements.filters.search.value = state.filters.search;
         elements.filters.tags.value = state.filters.tags;
         elements.filters.startDate.value = state.filters.start_date;
@@ -240,7 +253,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // MODIFIED: Event listeners for checkbox groups
         elements.filters.financialStatus.addEventListener('change', () => {
             state.filters.financial_status = Array.from(elements.filters.financialStatus.querySelectorAll('input:checked')).map(cb => cb.value);
             state.page = 1;
@@ -264,7 +276,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         elements.filters.reset.addEventListener('click', () => {
             window.history.pushState({}, '', window.location.pathname);
-            // Re-initialize to clear state and form
             initialize();
         });
         elements.filters.export.addEventListener('click', handleExport);
