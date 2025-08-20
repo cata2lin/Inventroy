@@ -7,6 +7,11 @@ const API_ENDPOINTS = {
     addStore: '/api/config/stores',
     updateStore: (storeId) => `/api/config/stores/${storeId}`,
 
+    // --- ADDED: Webhook Endpoints ---
+    getWebhooks: (storeId) => `/api/config/stores/${storeId}/webhooks`,
+    createWebhook: (storeId) => `/api/config/stores/${storeId}/webhooks`,
+    deleteWebhook: (storeId, webhookId) => `/api/config/stores/${storeId}/webhooks/${webhookId}`,
+
     // Dashboard V2 (Orders Report)
     getDashboardOrders: (params) => `/api/v2/dashboard/orders/?${params.toString()}`,
     exportDashboardOrders: (params) => `/api/v2/dashboard/export/?${params.toString()}`,
@@ -25,13 +30,13 @@ const API_ENDPOINTS = {
     syncProducts: '/api/sync-control/products',
     getSyncStatus: '/api/sync-control/status',
 
-    // --- ADDED: Bulk Update Endpoints ---
+    // Bulk Update Endpoints
     getAllVariantsForBulkEdit: '/api/bulk-update/variants/',
     processBulkUpdates: '/api/bulk-update/variants/',
     generateBarcodes: '/api/bulk-update/generate-barcode/',
     uploadExcel: '/api/bulk-update/upload-excel/',
     
-    // --- LEGACY/DEPRECATED (Kept for reference) ---
+    // LEGACY/DEPRECATED (Kept for reference)
     getVariants: (storeId) => `/api/products/variants/${storeId}`,
     updateVariantField: (storeId) => `/api/products/variants/update-field/${storeId}`,
     syncInventory: (storeId) => `/api/inventory/sync/${storeId}`

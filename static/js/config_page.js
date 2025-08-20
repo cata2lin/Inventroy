@@ -1,6 +1,7 @@
 // static/js/config_page.js
 
 document.addEventListener('DOMContentLoaded', () => {
+    // --- Element References ---
     const addStoreForm = document.getElementById('add-store-form');
     const storesListContainer = document.getElementById('stores-list-container');
     const addStoreBtn = document.getElementById('add-store-btn');
@@ -8,6 +9,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const editStoreForm = document.getElementById('edit-store-form');
     const updateStoreBtn = document.getElementById('update-store-btn');
 
+    // --- ADDED: Webhook Management Elements ---
+    const webhookManagementSection = document.getElementById('webhook-management-section');
+    const webhookUrlDisplay = document.getElementById('webhook-url-display');
+    const addWebhookForm = document.getElementById('add-webhook-form');
+    const webhookTopicSelect = document.getElementById('webhook-topic-select');
+    const webhooksListContainer = document.getElementById('webhooks-list-container');
+    
+    let currentStoreId = null;
+
+    const webhookTopics = [
+        "orders/create", "orders/updated", "orders/delete",
+        "products/create", "products/update", "products/delete",
+        "fulfillments/create", "fulfillments/update",
+        "refunds/create", "inventory_levels/update",
+        "fulfillment_orders/placed_on_hold",
+        "fulfillment_orders/hold_released",
+        "fulfillment_orders/cancellation_request_accepted"
+    ];
+
+    // --- Store Management Functions ---
     const loadStores = async () => {
         storesListContainer.setAttribute('aria-busy', 'true');
         try {
@@ -27,7 +48,6 @@ document.addEventListener('DOMContentLoaded', () => {
             storesListContainer.innerHTML = '<p>No stores have been added yet.</p>';
             return;
         }
-
         let tableHtml = '<table><thead><tr><th>Name</th><th>Shopify URL</th><th>Created At</th><th>Actions</th></tr></thead><tbody>';
         stores.forEach(store => {
             tableHtml += `
@@ -36,17 +56,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td>${store.shopify_url}</td>
                     <td>${new Date(store.created_at).toLocaleDateString()}</td>
                     <td><button class="outline" data-store-id="${store.id}" onclick="openEditModal(this)">Edit</button></td>
-                </tr>
-            `;
+                </tr>`;
         });
         tableHtml += '</tbody></table>';
         storesListContainer.innerHTML = tableHtml;
     };
 
     window.openEditModal = async (button) => {
-        const storeId = button.dataset.storeId;
+        currentStoreId = button.dataset.storeId;
         try {
-            const response = await fetch(API_ENDPOINTS.getStore(storeId));
+            const response = await fetch(API_ENDPOINTS.getStore(currentStoreId));
             if (!response.ok) throw new Error('Failed to fetch store details.');
             const store = await response.json();
             
@@ -54,6 +73,12 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('edit-name').value = store.name;
             document.getElementById('edit-shopify_url').value = store.shopify_url;
             
+            // Show webhook section and load data
+            webhookManagementSection.style.display = 'block';
+            webhookUrlDisplay.textContent = `${window.location.origin}/api/webhooks/${store.id}`;
+            populateWebhookTopics();
+            await loadWebhooks();
+
             editStoreModal.showModal();
         } catch (error) {
             alert(`Error: ${error.message}`);
@@ -62,6 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     editStoreModal.querySelector('.close').addEventListener('click', () => {
         editStoreModal.close();
+        currentStoreId = null;
     });
 
     addStoreForm.addEventListener('submit', async (e) => {
@@ -75,6 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
             shopify_url: formData.get('shopify_url'),
             api_token: formData.get('api_token'),
             api_secret: formData.get('api_secret') || null,
+            webhook_secret: formData.get('webhook_secret') || null,
         };
 
         try {
@@ -83,15 +110,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
-
             if (!response.ok) {
                 const result = await response.json();
                 throw new Error(result.detail || 'Failed to add store.');
             }
-
             addStoreForm.reset();
             await loadStores();
-            
         } catch (error) {
             alert(`Error: ${error.message}`);
         } finally {
@@ -114,9 +138,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const apiToken = formData.get('api_token');
         if (apiToken) payload.api_token = apiToken;
-
         const apiSecret = formData.get('api_secret');
         if (apiSecret) payload.api_secret = apiSecret;
+        const webhookSecret = formData.get('edit-webhook_secret');
+        if (webhookSecret) payload.webhook_secret = webhookSecret;
         
         try {
             const response = await fetch(API_ENDPOINTS.updateStore(storeId), {
@@ -124,15 +149,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
-
             if (!response.ok) {
                 const result = await response.json();
                 throw new Error(result.detail || 'Failed to update store.');
             }
-
-            editStoreModal.close();
-            await loadStores();
-
+            alert('Store details updated successfully!');
         } catch (error) {
             alert(`Error: ${error.message}`);
         } finally {
@@ -141,5 +162,103 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // --- ADDED: Webhook Management Functions ---
+    const populateWebhookTopics = () => {
+        webhookTopicSelect.innerHTML = '<option value="" disabled selected>Select a topic...</option>';
+        webhookTopics.forEach(topic => {
+            webhookTopicSelect.add(new Option(topic, topic));
+        });
+    };
+
+    const loadWebhooks = async () => {
+        if (!currentStoreId) return;
+        webhooksListContainer.setAttribute('aria-busy', 'true');
+        try {
+            const response = await fetch(API_ENDPOINTS.getWebhooks(currentStoreId));
+            if (!response.ok) throw new Error('Failed to load webhooks.');
+            const webhooks = await response.json();
+            renderWebhooks(webhooks);
+        } catch (error) {
+            webhooksListContainer.innerHTML = `<p style="color: var(--pico-color-red-500);">${error.message}</p>`;
+        } finally {
+            webhooksListContainer.removeAttribute('aria-busy');
+        }
+    };
+
+    const renderWebhooks = (webhooks) => {
+        if (webhooks.length === 0) {
+            webhooksListContainer.innerHTML = '<p>No webhooks are registered for this store.</p>';
+            return;
+        }
+        let tableHtml = '<table><thead><tr><th>Topic</th><th>Address</th><th>Action</th></tr></thead><tbody>';
+        webhooks.forEach(wh => {
+            tableHtml += `
+                <tr>
+                    <td><code>${wh.topic}</code></td>
+                    <td><code>${wh.address}</code></td>
+                    <td><button class="secondary outline" data-webhook-id="${wh.shopify_webhook_id}" onclick="deleteWebhook(this)">Delete</button></td>
+                </tr>`;
+        });
+        tableHtml += '</tbody></table>';
+        webhooksListContainer.innerHTML = tableHtml;
+    };
+
+    addWebhookForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const topic = webhookTopicSelect.value;
+        if (!topic) {
+            alert('Please select a webhook topic.');
+            return;
+        }
+        
+        const addBtn = document.getElementById('add-webhook-btn');
+        addBtn.setAttribute('aria-busy', 'true');
+        
+        const payload = {
+            topic: topic,
+            address: webhookUrlDisplay.textContent
+        };
+
+        try {
+            const response = await fetch(API_ENDPOINTS.createWebhook(currentStoreId), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) {
+                const result = await response.json();
+                throw new Error(result.detail || 'Failed to create webhook.');
+            }
+            await loadWebhooks();
+        } catch (error) {
+            alert(`Error: ${error.message}`);
+        } finally {
+            addBtn.removeAttribute('aria-busy');
+        }
+    });
+
+    window.deleteWebhook = async (button) => {
+        if (!confirm('Are you sure you want to delete this webhook subscription?')) return;
+        
+        const webhookId = button.dataset.webhookId;
+        button.setAttribute('aria-busy', 'true');
+
+        try {
+            const response = await fetch(API_ENDPOINTS.deleteWebhook(currentStoreId, webhookId), {
+                method: 'DELETE'
+            });
+            if (!response.ok) {
+                const result = await response.json();
+                throw new Error(result.detail || 'Failed to delete webhook.');
+            }
+            await loadWebhooks();
+        } catch (error) {
+            alert(`Error: ${error.message}`);
+        } finally {
+            // The button will be gone after re-render, so no need to remove busy state.
+        }
+    };
+
+    // --- Initial Load ---
     loadStores();
 });

@@ -160,16 +160,61 @@ class StoreBase(BaseModel):
 class StoreCreate(StoreBase):
     api_token: str
     api_secret: Optional[str] = None
+    webhook_secret: Optional[str] = None
 
 class StoreUpdate(BaseModel):
     name: Optional[str] = None
     shopify_url: Optional[str] = None
     api_token: Optional[str] = None
     api_secret: Optional[str] = None
+    webhook_secret: Optional[str] = None
 
 class Store(StoreBase):
     id: int
     api_token: str
     api_secret: Optional[str] = None
+    webhook_secret: Optional[str] = None
     created_at: datetime
     class Config: from_attributes = True
+
+# --- ADDED: Schemas for Webhooks ---
+class WebhookBase(BaseModel):
+    topic: str
+    address: str
+
+class WebhookCreate(WebhookBase):
+    pass
+
+class Webhook(WebhookBase):
+    id: int
+    shopify_webhook_id: int
+    store_id: int
+    class Config:
+        from_attributes = True
+
+# --- ADDED: Schemas for Webhook Payloads ---
+class ShopifyProductWebhook(BaseModel):
+    id: int
+    title: str
+    body_html: Optional[str] = None
+    vendor: Optional[str] = None
+    product_type: Optional[str] = None
+    created_at: Optional[datetime] = None
+    handle: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    published_at: Optional[datetime] = None
+    status: Optional[str] = None
+    tags: Optional[str] = None
+    variants: List[Dict[str, Any]] = []
+
+class ShopifyRefundWebhook(BaseModel):
+    id: int
+    order_id: int
+    created_at: datetime
+    note: Optional[str] = None
+
+class DeletePayload(BaseModel):
+    id: int
+
+class FulfillmentOrderWebhook(BaseModel):
+    fulfillment_order: Dict[str, Any]

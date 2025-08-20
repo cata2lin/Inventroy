@@ -21,7 +21,8 @@ from routes import (
     products, 
     sync_control,
     bulk_update,
-    config  # --- ADDED: Import the config router ---
+    config,
+    webhooks # --- ADDED: Import the webhooks router ---
 )
 
 Base.metadata.create_all(bind=engine)
@@ -46,7 +47,8 @@ app.include_router(mutations.router)
 app.include_router(products.router, prefix="/api")
 app.include_router(sync_control.router)
 app.include_router(bulk_update.router)
-app.include_router(config.router) # --- ADDED: Include the config router ---
+app.include_router(config.router)
+app.include_router(webhooks.router) # --- ADDED: Include the webhooks router ---
 
 # --- HTML Page Routes ---
 @app.get("/", response_class=RedirectResponse, include_in_schema=False)

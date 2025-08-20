@@ -52,7 +52,7 @@ LINE_ITEM_FRAGMENT = """
 fragment LineItemFragment on LineItem {
   id title quantity sku vendor taxable
   originalUnitPriceSet { shopMoney { ...MoneyFragment } }
-  totalDiscountSet { shopMoney { ...MoneyMoneyFragment } }
+  totalDiscountSet { shopMoney { ...MoneyFragment } }
   variant { ...VariantFragment }
 }
 """
@@ -139,7 +139,30 @@ class ShopifyService:
         self.api_endpoint = f"https://{store_url}/admin/api/{api_version}/graphql.json"
         self.rest_api_endpoint = f"https://{store_url}/admin/api/{api_version}"
         self.headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": token}
-        self.rest_headers = {"X-Shopify-Access-Token": token}
+        self.rest_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+
+    # --- Webhook Management Methods (REST API) ---
+    def get_webhooks(self) -> List[Dict[str, Any]]:
+        """Retrieves all webhooks for the store."""
+        url = f"{self.rest_api_endpoint}/webhooks.json"
+        response = requests.get(url, headers=self.rest_headers)
+        response.raise_for_status()
+        return response.json().get("webhooks", [])
+
+    def create_webhook(self, topic: str, address: str) -> Dict[str, Any]:
+        """Creates a new webhook subscription."""
+        url = f"{self.rest_api_endpoint}/webhooks.json"
+        payload = {"webhook": {"topic": topic, "address": address, "format": "json"}}
+        response = requests.post(url, headers=self.rest_headers, json=payload)
+        response.raise_for_status()
+        return response.json().get("webhook")
+
+    def delete_webhook(self, webhook_id: int):
+        """Deletes a webhook subscription."""
+        url = f"{self.rest_api_endpoint}/webhooks/{webhook_id}.json"
+        response = requests.delete(url, headers=self.rest_headers)
+        response.raise_for_status()
+        return response.status_code
 
     def get_total_counts(self, created_at_min: Optional[str] = None, created_at_max: Optional[str] = None) -> Dict[str, int]:
         try:

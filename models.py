@@ -12,12 +12,31 @@ class Store(Base):
     name = Column(String(255), unique=True, index=True, nullable=False)
     shopify_url = Column(String(255), unique=True, nullable=False)
     api_token = Column(String(255), nullable=False)
-    api_secret = Column(String(255), nullable=True) # Added api_secret
+    api_secret = Column(String(255), nullable=True)
+    # ADDED: A secret for verifying webhook integrity.
+    webhook_secret = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
     products = relationship("Product", back_populates="store", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="store", cascade="all, delete-orphan")
     locations = relationship("Location", back_populates="store", cascade="all, delete-orphan")
+    # ADDED: Relationship to the new Webhook model
+    webhooks = relationship("Webhook", back_populates="store", cascade="all, delete-orphan")
+
+# --- ADDED: New Webhook Model ---
+class Webhook(Base):
+    """
+    Stores information about registered webhooks for each store.
+    """
+    __tablename__ = "webhooks"
+    id = Column(Integer, primary_key=True, index=True)
+    shopify_webhook_id = Column(BIGINT, unique=True, nullable=False)
+    store_id = Column(Integer, ForeignKey("stores.id"), nullable=False)
+    topic = Column(String(255), nullable=False)
+    address = Column(String(2048), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    store = relationship("Store", back_populates="webhooks")
+
 
 class Location(Base):
     __tablename__ = "locations"
@@ -151,6 +170,8 @@ class Fulfillment(Base):
     tracking_url = Column(String(2048))
     shipment_status = Column(String(50))
     location_id = Column(BIGINT)
+    # ADDED: A field to track the hold status of a fulfillment.
+    hold_status = Column(String(50), nullable=True)
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     order = relationship("Order", back_populates="fulfillments")
     events = relationship("FulfillmentEvent", back_populates="fulfillment", cascade="all, delete-orphan")

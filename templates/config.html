@@ -23,6 +23,9 @@
                 <label for="api_secret">API Secret</label>
                 <input type="password" id="api_secret" name="api_secret" placeholder="Optional, for future use">
                 
+                <label for="webhook_secret">Webhook Secret</label>
+                <input type="password" id="webhook_secret" name="webhook_secret" placeholder="A secure, random string">
+
                 <button type="submit" id="add-store-btn">Add Store</button>
             </form>
         </article>
@@ -55,10 +58,28 @@
             <label for="edit-api_secret">API Secret</label>
             <input type="password" id="edit-api_secret" name="api_secret" placeholder="Leave blank to keep unchanged">
             
-            <footer>
-                <button type="submit" id="update-store-btn">Save Changes</button>
-            </footer>
+            <label for="edit-webhook_secret">Webhook Secret</label>
+            <input type="password" id="edit-webhook_secret" name="webhook_secret" placeholder="Leave blank to keep unchanged">
+
+            <button type="submit" id="update-store-btn">Save Store Details</button>
         </form>
+        
+        <hr>
+
+        <section id="webhook-management-section">
+            <header><strong>Webhook Subscriptions</strong></header>
+            <p>Your webhook URL is: <code id="webhook-url-display"></code></p>
+            <form id="add-webhook-form" class="grid">
+                <select id="webhook-topic-select" required>
+                    <option value="" disabled selected>Select a topic...</option>
+                </select>
+                <button type="submit" id="add-webhook-btn">Create Webhook</button>
+            </form>
+            <div id="webhooks-list-container" aria-busy="true">
+                <p>Loading webhooks...</p>
+            </div>
+        </section>
+
       </article>
     </dialog>
 </div>
