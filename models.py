@@ -12,6 +12,7 @@ class Store(Base):
     name = Column(String(255), unique=True, index=True, nullable=False)
     shopify_url = Column(String(255), unique=True, nullable=False)
     api_token = Column(String(255), nullable=False)
+    api_secret = Column(String(255), nullable=True) # Added api_secret
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
     products = relationship("Product", back_populates="store", cascade="all, delete-orphan")

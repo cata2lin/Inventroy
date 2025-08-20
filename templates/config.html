@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <hgroup>
+        <h1>Configuration</h1>
+        <h2>Manage your connected Shopify stores.</h2>
+    </hgroup>
+
+    <div class="grid">
+        <article>
+            <header><strong>Add a New Store</strong></header>
+            <form id="add-store-form">
+                <label for="name">Store Name</label>
+                <input type="text" id="name" name="name" placeholder="My Awesome Store" required>
+                
+                <label for="shopify_url">Shopify URL</label>
+                <input type="text" id="shopify_url" name="shopify_url" placeholder="your-shop.myshopify.com" required>
+                
+                <label for="api_token">API Access Token</label>
+                <input type="password" id="api_token" name="api_token" required>
+                
+                <label for="api_secret">API Secret</label>
+                <input type="password" id="api_secret" name="api_secret" placeholder="Optional, for future use">
+                
+                <button type="submit" id="add-store-btn">Add Store</button>
+            </form>
+        </article>
+        <article>
+            <header><strong>Connected Stores</strong></header>
+            <div id="stores-list-container" aria-busy="true">
+                <p>Loading stores...</p>
+            </div>
+        </article>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/config.js"></script>
+<script src="/static/js/config_page.js"></script>
+{% endblock %}

@@ -159,6 +159,7 @@ class StoreBase(BaseModel):
 
 class StoreCreate(StoreBase):
     api_token: str
+    api_secret: Optional[str] = None
 
 class Store(StoreBase):
     id: int

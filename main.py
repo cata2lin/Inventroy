@@ -20,7 +20,8 @@ from routes import (
     mutations, 
     products, 
     sync_control,
-    bulk_update  # --- ADDED: Import the bulk_update router ---
+    bulk_update,
+    config  # --- ADDED: Import the config router ---
 )
 
 Base.metadata.create_all(bind=engine)
@@ -44,7 +45,8 @@ app.include_router(inventory_v2.router)
 app.include_router(mutations.router)
 app.include_router(products.router, prefix="/api")
 app.include_router(sync_control.router)
-app.include_router(bulk_update.router) # --- ADDED: Include the bulk_update router ---
+app.include_router(bulk_update.router)
+app.include_router(config.router) # --- ADDED: Include the config router ---
 
 # --- HTML Page Routes ---
 @app.get("/", response_class=RedirectResponse, include_in_schema=False)
@@ -70,3 +72,7 @@ async def get_mutations_page(request: Request):
 @app.get("/sync-control", response_class=HTMLResponse, include_in_schema=False)
 async def get_sync_control_page(request: Request):
     return templates.TemplateResponse("sync_control.html", {"request": request, "title": "Sync Control"})
+
+@app.get("/config", response_class=HTMLResponse, include_in_schema=False)
+async def get_config_page(request: Request):
+    return templates.TemplateResponse("config.html", {"request": request, "title": "Configuration"})
