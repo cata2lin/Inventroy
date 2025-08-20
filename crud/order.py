@@ -1,6 +1,7 @@
 # crud/order.py
 
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func # --- ADDED: Import func for SQL functions ---
 from typing import List, Dict, Any
 
 import models
@@ -13,10 +14,16 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     Upserts a single order and its line items from a webhook payload.
     This is separate from the GraphQL sync due to structural differences in the payload.
     """
-    # --- FIX: Standardize statuses and set default fulfillment status ---
-    financial_status = (order_data.financial_status or 'pending').lower()
-    # If fulfillment_status is null or missing, it means the order is unfulfilled.
-    fulfillment_status = (order_data.fulfillment_status or 'unfulfilled').lower()
+    financial_status_from_payload = order_data.financial_status
+    fulfillment_status_from_payload = order_data.fulfillment_status
+
+    financial_status = (financial_status_from_payload or 'pending').lower()
+    
+    if not fulfillment_status_from_payload:
+        fulfillment_status = 'unfulfilled'
+    else:
+        fulfillment_status = fulfillment_status_from_payload.lower()
+
 
     order_dict = {
         "id": order_data.id,
@@ -86,7 +93,7 @@ def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfil
     fulfillment_dict = {
         "id": fulfillment_data.id,
         "order_id": fulfillment_data.order_id,
-        "status": fulfillment_data.status,
+        "status": fulfillment_data.status.lower(),
         "created_at": fulfillment_data.created_at,
         "updated_at": fulfillment_data.updated_at,
         "tracking_company": fulfillment_data.tracking_company,
