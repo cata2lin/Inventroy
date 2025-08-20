@@ -4,6 +4,30 @@ from pydantic import BaseModel, Field, HttpUrl
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
+# ... (most schemas are unchanged)
+
+class StoreBase(BaseModel):
+    name: str
+    shopify_url: str
+
+class StoreCreate(StoreBase):
+    api_token: str
+    api_secret: Optional[str] = None
+
+class StoreUpdate(BaseModel):
+    name: Optional[str] = None
+    shopify_url: Optional[str] = None
+    api_token: Optional[str] = None
+    api_secret: Optional[str] = None
+
+class Store(StoreBase):
+    id: int
+    api_token: str
+    api_secret: Optional[str] = None
+    created_at: datetime
+    class Config: from_attributes = True
+
+# ... (rest of the file is unchanged)
 # --- Schemas for Parsing Shopify API Response ---
 class MoneySet(BaseModel):
     amount: float
@@ -151,30 +175,6 @@ class Inventory(BaseModel):
     inventory_policy: str
     available_quantity: Optional[int]
     location_name: str
-    class Config: from_attributes = True
-
-class StoreBase(BaseModel):
-    name: str
-    shopify_url: str
-
-class StoreCreate(StoreBase):
-    api_token: str
-    api_secret: Optional[str] = None
-    webhook_secret: Optional[str] = None
-
-class StoreUpdate(BaseModel):
-    name: Optional[str] = None
-    shopify_url: Optional[str] = None
-    api_token: Optional[str] = None
-    api_secret: Optional[str] = None
-    webhook_secret: Optional[str] = None
-
-class Store(StoreBase):
-    id: int
-    api_token: str
-    api_secret: Optional[str] = None
-    webhook_secret: Optional[str] = None
-    created_at: datetime
     class Config: from_attributes = True
 
 class WebhookBase(BaseModel):

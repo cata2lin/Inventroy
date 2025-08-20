@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from database import get_db
 import schemas
 from crud import store as crud_store, webhooks as crud_webhook, order as crud_order
-from utils import verify_hmac
 
 router = APIRouter(
     prefix="/api/webhooks",
@@ -22,8 +21,9 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
     Receives, verifies, and processes all webhooks from Shopify.
     """
     store = crud_store.get_store(db, store_id=store_id)
-    if not store or not store.webhook_secret:
-        raise HTTPException(status_code=404, detail="Store not found or webhook secret not configured.")
+    # UPDATED: Use api_secret for verification
+    if not store or not store.api_secret:
+        raise HTTPException(status_code=404, detail="Store not found or API Secret Key not configured.")
 
     shopify_hmac = request.headers.get("x-shopify-hmac-sha256")
     if not shopify_hmac:
@@ -31,7 +31,8 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
 
     raw_body = await request.body()
     try:
-        calculated_hmac = base64.b64encode(hmac.new(store.webhook_secret.encode(), raw_body, hashlib.sha256).digest()).decode()
+        # UPDATED: Use api_secret for HMAC calculation
+        calculated_hmac = base64.b64encode(hmac.new(store.api_secret.encode(), raw_body, hashlib.sha256).digest()).decode()
         if not hmac.compare_digest(calculated_hmac, shopify_hmac):
             raise HTTPException(status_code=401, detail="HMAC verification failed.")
     except Exception as e:

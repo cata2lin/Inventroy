@@ -17,15 +17,12 @@
                 <label for="shopify_url">Shopify URL</label>
                 <input type="text" id="shopify_url" name="shopify_url" placeholder="your-shop.myshopify.com" required>
                 
-                <label for="api_token">API Access Token</label>
+                <label for="api_token">Admin API Access Token</label>
                 <input type="password" id="api_token" name="api_token" required>
                 
-                <label for="api_secret">API Secret</label>
-                <input type="password" id="api_secret" name="api_secret" placeholder="Optional, for future use">
+                <label for="api_secret">API Secret Key</label>
+                <input type="password" id="api_secret" name="api_secret" placeholder="Used for webhook verification" required>
                 
-                <label for="webhook_secret">Webhook Secret</label>
-                <input type="password" id="webhook_secret" name="webhook_secret" placeholder="A secure, random string">
-
                 <button type="submit" id="add-store-btn">Add Store</button>
             </form>
         </article>
@@ -52,15 +49,12 @@
             <label for="edit-shopify_url">Shopify URL</label>
             <input type="text" id="edit-shopify_url" name="shopify_url" required>
             
-            <label for="edit-api_token">API Access Token</label>
+            <label for="edit-api_token">Admin API Access Token</label>
             <input type="password" id="edit-api_token" name="api_token" placeholder="Leave blank to keep unchanged">
             
-            <label for="edit-api_secret">API Secret</label>
+            <label for="edit-api_secret">API Secret Key</label>
             <input type="password" id="edit-api_secret" name="api_secret" placeholder="Leave blank to keep unchanged">
             
-            <label for="edit-webhook_secret">Webhook Secret</label>
-            <input type="password" id="edit-webhook_secret" name="webhook_secret" placeholder="Leave blank to keep unchanged">
-
             <button type="submit" id="update-store-btn">Save Store Details</button>
         </form>
         
@@ -70,7 +64,6 @@
             <header><strong>Webhook Subscriptions</strong></header>
             <p>Your webhook URL is: <code id="webhook-url-display"></code></p>
             
-            <!-- MODIFIED: Replaced manual form with a single button -->
             <button id="create-all-webhooks-btn">Create / Verify All Necessary Webhooks</button>
             
             <div id="webhooks-list-container" aria-busy="true">

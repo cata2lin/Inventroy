@@ -12,8 +12,8 @@ class Store(Base):
     name = Column(String(255), unique=True, index=True, nullable=False)
     shopify_url = Column(String(255), unique=True, nullable=False)
     api_token = Column(String(255), nullable=False)
-    api_secret = Column(String(255), nullable=True)
-    webhook_secret = Column(String(255), nullable=True)
+    # REMOVED: webhook_secret is no longer needed. The api_secret will be used.
+    api_secret = Column(String(255), nullable=True) 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
     products = relationship("Product", back_populates="store", cascade="all, delete-orphan")
@@ -21,6 +21,7 @@ class Store(Base):
     locations = relationship("Location", back_populates="store", cascade="all, delete-orphan")
     webhooks = relationship("Webhook", back_populates="store", cascade="all, delete-orphan")
 
+# ... (rest of the file is unchanged)
 class Webhook(Base):
     __tablename__ = "webhooks"
     id = Column(Integer, primary_key=True, index=True)
@@ -130,7 +131,6 @@ class Order(Base):
     store = relationship("Store", back_populates="orders")
     line_items = relationship("LineItem", back_populates="order", cascade="all, delete-orphan")
     fulfillments = relationship("Fulfillment", back_populates="order", cascade="all, delete-orphan")
-    # ADDED: Relationship to the new Refund model
     refunds = relationship("Refund", back_populates="order", cascade="all, delete-orphan")
 
 class LineItem(Base):
@@ -198,7 +198,6 @@ class StockMovement(Base):
     source_info = Column(String(255))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-# --- ADDED: New Refund Models ---
 class Refund(Base):
     __tablename__ = "refunds"
     id = Column(BIGINT, primary_key=True, index=True)

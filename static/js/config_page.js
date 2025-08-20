@@ -9,10 +9,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const editStoreForm = document.getElementById('edit-store-form');
     const updateStoreBtn = document.getElementById('update-store-btn');
 
-    // --- Webhook Management Elements ---
     const webhookManagementSection = document.getElementById('webhook-management-section');
     const webhookUrlDisplay = document.getElementById('webhook-url-display');
-    // MODIFIED: Replaced form with a single button
     const createAllWebhooksBtn = document.getElementById('create-all-webhooks-btn');
     const webhooksListContainer = document.getElementById('webhooks-list-container');
     
@@ -89,7 +87,6 @@ document.addEventListener('DOMContentLoaded', () => {
             shopify_url: formData.get('shopify_url'),
             api_token: formData.get('api_token'),
             api_secret: formData.get('api_secret') || null,
-            webhook_secret: formData.get('webhook_secret') || null,
         };
 
         try {
@@ -128,8 +125,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (apiToken) payload.api_token = apiToken;
         const apiSecret = formData.get('api_secret');
         if (apiSecret) payload.api_secret = apiSecret;
-        const webhookSecret = formData.get('edit-webhook_secret');
-        if (webhookSecret) payload.webhook_secret = webhookSecret;
         
         try {
             const response = await fetch(API_ENDPOINTS.updateStore(storeId), {
@@ -184,7 +179,6 @@ document.addEventListener('DOMContentLoaded', () => {
         webhooksListContainer.innerHTML = tableHtml;
     };
 
-    // MODIFIED: Event listener for the new automatic creation button
     createAllWebhooksBtn.addEventListener('click', async () => {
         if (!currentStoreId) return;
         
@@ -200,7 +194,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(result.detail || 'Failed to create webhooks.');
             }
             alert(result.message);
-            await loadWebhooks(); // Refresh the list
+            await loadWebhooks();
         } catch (error) {
             alert(`Error: ${error.message}`);
         } finally {
