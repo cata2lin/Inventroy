@@ -1,6 +1,6 @@
 # crud/dashboard.py
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, desc, asc
 from typing import List, Optional
 from datetime import datetime, timedelta
@@ -23,10 +23,26 @@ def get_status_filters(db: Session):
 
 def _get_filtered_query(db: Session, store_ids, start_date, end_date, financial_status, fulfillment_status, has_note, tags, search):
     """Helper function to build the base filtered query."""
+    
+    # --- FIX: Subquery to get the most recent hold reason for an order ---
+    hold_reason_sq = db.query(
+        models.Fulfillment.order_id,
+        models.Fulfillment.hold_reason
+    ).filter(
+        models.Fulfillment.hold_status == 'ON_HOLD',
+        models.Fulfillment.hold_reason.isnot(None)
+    ).distinct(models.Fulfillment.order_id).order_by(
+        models.Fulfillment.order_id,
+        models.Fulfillment.updated_at.desc()
+    ).subquery('hold_reason_sq')
+
     query = db.query(
         models.Order,
-        models.Store.name.label("store_name")
-    ).join(models.Store, models.Order.store_id == models.Store.id)
+        models.Store.name.label("store_name"),
+        hold_reason_sq.c.hold_reason
+    ).join(models.Store, models.Order.store_id == models.Store.id)\
+     .outerjoin(hold_reason_sq, models.Order.id == hold_reason_sq.c.order_id)
+
 
     if store_ids:
         query = query.filter(models.Order.store_id.in_(store_ids))
@@ -73,7 +89,9 @@ def get_orders_for_dashboard(
         'order_name': models.Order.name, 'store_name': 'store_name', 'created_at': models.Order.created_at,
         'total_price': models.Order.total_price, 'financial_status': models.Order.financial_status,
         'fulfillment_status': models.Order.fulfillment_status, 'cancelled': models.Order.cancelled_at,
-        'note': models.Order.note, 'tags': models.Order.tags
+        'note': models.Order.note, 'tags': models.Order.tags,
+        # ADDED: Allow sorting by hold reason
+        'hold_reason': 'hold_reason' 
     }
     sort_column = sort_column_map.get(sort_by, models.Order.created_at)
     order_func = asc(sort_column) if sort_order.lower() == 'asc' else desc(sort_column)
@@ -82,7 +100,7 @@ def get_orders_for_dashboard(
     orders_list = [{"id": order.id, "name": order.name, "created_at": order.created_at, "financial_status": order.financial_status,
                     "fulfillment_status": order.fulfillment_status, "total_price": order.total_price, "currency": order.currency,
                     "store_name": store_name, "cancelled": order.cancelled_at is not None, "cancel_reason": order.cancel_reason,
-                    "note": order.note, "tags": order.tags} for order, store_name in results]
+                    "note": order.note, "tags": order.tags, "hold_reason": hold_reason} for order, store_name, hold_reason in results]
 
     return {"total_count": aggregates.total_count or 0, "total_value": float(aggregates.total_value or 0),
             "total_shipping": float(aggregates.total_shipping or 0), "currency": aggregates.currency or "RON", "orders": orders_list}
@@ -98,12 +116,12 @@ def export_orders_for_dashboard(
     results = query.order_by(desc(models.Order.created_at)).all()
 
     data_to_export = []
-    for order, store_name in results:
+    for order, store_name, hold_reason in results:
         data_to_export.append({
             "Order": order.name, "Store": store_name, "Date": order.created_at.strftime('%Y-%m-%d %H:%M:%S'),
             "Total": f"{order.total_price} {order.currency}", "Financial Status": order.financial_status,
             "Fulfillment": order.fulfillment_status, "Cancelled": f"Yes ({order.cancel_reason})" if order.cancelled_at else "No",
-            "Note": order.note, "Tags": order.tags
+            "Note": order.note, "Tags": order.tags, "Hold Reason": hold_reason
         })
 
     if not data_to_export:
@@ -114,7 +132,7 @@ def export_orders_for_dashboard(
     column_map = {
         'order_name': 'Order', 'store_name': 'Store', 'created_at': 'Date', 'total_price': 'Total',
         'financial_status': 'Financial Status', 'fulfillment_status': 'Fulfillment',
-        'cancelled': 'Cancelled', 'note': 'Note', 'tags': 'Tags'
+        'cancelled': 'Cancelled', 'note': 'Note', 'tags': 'Tags', 'hold_reason': 'Hold Reason'
     }
     
     df_columns = [column_map[col] for col in visible_columns if col in column_map] if visible_columns else list(column_map.values())

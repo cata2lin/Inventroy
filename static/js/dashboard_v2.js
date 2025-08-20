@@ -36,6 +36,8 @@ document.addEventListener('DOMContentLoaded', () => {
         { key: 'created_at', label: 'Date' }, { key: 'total_price', label: 'Total' },
         { key: 'financial_status', label: 'Financial Status' },
         { key: 'fulfillment_status', label: 'Fulfillment' }, { key: 'cancelled', label: 'Cancelled' },
+        // ADDED: New column for hold reason
+        { key: 'hold_reason', label: 'Hold Reason' },
         { key: 'note', label: 'Note' }, { key: 'tags', label: 'Tags' },
     ];
 
@@ -79,7 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         Object.entries(state.filters).forEach(([key, value]) => {
             if (value && value.length > 0) {
-                if (Array.isArray(value)) value.forEach(v => params.append(key, value));
+                if (Array.isArray(value)) value.forEach(v => params.append(key, v));
                 else params.append(key, value);
             }
         });
@@ -136,6 +138,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     case 'financial_status': content = `<span class="status-${(order.financial_status || '').toLowerCase()}">${order.financial_status || 'N/A'}</span>`; break;
                     case 'fulfillment_status': content = `<span class="status-${(order.fulfillment_status || '').toLowerCase()}">${order.fulfillment_status || 'N/A'}</span>`; break;
                     case 'cancelled': content = `<span class="${order.cancelled ? 'status-cancelled' : ''}">${order.cancelled ? `Yes (${order.cancel_reason || 'N/A'})` : 'No'}</span>`; break;
+                    // ADDED: Render the hold reason
+                    case 'hold_reason': content = `<div class="truncate-text" title="${order.hold_reason || ''}">${order.hold_reason || ''}</div>`; break;
                     case 'note': content = `<div class="truncate-text" title="${order.note || ''}">${order.note || ''}</div>`; break;
                     case 'tags': content = `<div class="truncate-text" title="${order.tags || ''}">${order.tags || ''}</div>`; break;
                 }
@@ -175,7 +179,6 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.columnModal.list.innerHTML = allColumns.map(col => `<div><label><input type="checkbox" name="col-${col.key}" value="${col.key}"> ${col.label}</label></div>`).join('');
         
         try {
-            // --- MODIFIED: Fetch all filters concurrently ---
             const [storeResp, filterResp] = await Promise.all([
                 fetch(API_ENDPOINTS.getStores),
                 fetch(API_ENDPOINTS.getDashboardFilters)
@@ -185,10 +188,10 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.filters.stores.innerHTML = stores.map(store => `<li><label><input type="checkbox" name="store" value="${store.id}"> ${store.name}</label></li>`).join('');
 
             const filterData = await filterResp.json();
-            const financialHtml = filterData.financial.map(s => `<li><label><input type="checkbox" name="fs" value="${s}"> ${s.replace('_', ' ')}</label></li>`).join('');
+            const financialHtml = filterData.financial.map(s => `<li><label><input type="checkbox" name="fs" value="${s}"> ${s.replace(/_/g, ' ')}</label></li>`).join('');
             elements.filters.financialStatus.innerHTML = financialHtml;
 
-            const fulfillmentHtml = filterData.fulfillment.map(s => `<li><label><input type="checkbox" name="ffs" value="${s}"> ${s.replace('_', ' ')}</label></li>`).join('');
+            const fulfillmentHtml = filterData.fulfillment.map(s => `<li><label><input type="checkbox" name="ffs" value="${s}"> ${s.replace(/_/g, ' ')}</label></li>`).join('');
             elements.filters.fulfillmentStatus.innerHTML = fulfillmentHtml;
 
         } catch (error) {
@@ -202,7 +205,8 @@ document.addEventListener('DOMContentLoaded', () => {
             page: parseInt(params.get('page') || '1', 10),
             sortBy: params.get('sortBy') || 'created_at',
             sortOrder: params.get('sortOrder') || 'desc',
-            hiddenColumns: params.getAll('hide') || [],
+            // MODIFIED: Hide the new column by default
+            hiddenColumns: params.getAll('hide').length > 0 ? params.getAll('hide') : ['hold_reason'],
             filters: {
                 search: params.get('search') || '',
                 tags: params.get('tags') || '',

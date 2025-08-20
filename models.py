@@ -12,7 +12,6 @@ class Store(Base):
     name = Column(String(255), unique=True, index=True, nullable=False)
     shopify_url = Column(String(255), unique=True, nullable=False)
     api_token = Column(String(255), nullable=False)
-    # REMOVED: webhook_secret is no longer needed. The api_secret will be used.
     api_secret = Column(String(255), nullable=True) 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -21,7 +20,6 @@ class Store(Base):
     locations = relationship("Location", back_populates="store", cascade="all, delete-orphan")
     webhooks = relationship("Webhook", back_populates="store", cascade="all, delete-orphan")
 
-# ... (rest of the file is unchanged)
 class Webhook(Base):
     __tablename__ = "webhooks"
     id = Column(Integer, primary_key=True, index=True)
@@ -166,6 +164,8 @@ class Fulfillment(Base):
     shipment_status = Column(String(50))
     location_id = Column(BIGINT)
     hold_status = Column(String(50), nullable=True)
+    # ADDED: A field to store the reason for the hold.
+    hold_reason = Column(String(255), nullable=True)
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     order = relationship("Order", back_populates="fulfillments")
     events = relationship("FulfillmentEvent", back_populates="fulfillment", cascade="all, delete-orphan")

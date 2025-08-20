@@ -158,7 +158,6 @@ th[data-sort-by].desc::after { content: '▼'; }
     font-size: 0.76em;
 }
 
-/* MODIFIED: Added specific width for the new Status column */
 .bulk-update-table th:nth-child(2), .bulk-update-table td:nth-child(2) { width: 60px; } /* Image */
 .bulk-update-table th:nth-child(5), .bulk-update-table td:nth-child(5) { width: 20%; } /* Product Title */
 .bulk-update-table th:nth-child(6), .bulk-update-table td:nth-child(6) { width: 12%; } /* Barcode */
@@ -172,7 +171,6 @@ th[data-sort-by].desc::after { content: '▼'; }
     border-radius: var(--border-radius);
 }
 
-/* MODIFIED: This selector now also applies to the 'select' element for Status. */
 .bulk-update-table input[type="text"], 
 .bulk-update-table input[type="number"],
 .bulk-update-table select {
@@ -207,6 +205,7 @@ th[data-sort-by].desc::after { content: '▼'; }
 [data-column-key="cancelled"] { width: 12%; }
 [data-column-key="note"] { width: 16%; }
 [data-column-key="tags"] { width: 16%; }
+[data-column-key="hold_reason"] { width: 16%; }
 
 .truncate-text {
     white-space: nowrap;
@@ -220,6 +219,8 @@ th[data-sort-by].desc::after { content: '▼'; }
 .status-pending, .status-partially_fulfilled, .status-draft { color: #f57c00; }
 .status-voided, .status-cancelled, .status-archived { color: #546e7a; }
 .status-refunded, .status-unfulfilled { color: #d32f2f; }
+/* ADDED: New color for on_hold status */
+.status-on_hold { color: #0d6efd; }
 .pagination-controls { grid-template-columns: 1fr auto 1fr; }
 /* --- New Sidebar Layout Styles --- */
 body {

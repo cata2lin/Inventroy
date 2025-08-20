@@ -4,7 +4,20 @@ from pydantic import BaseModel, Field, HttpUrl
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-# --- Schemas for Parsing Shopify GraphQL API Response ---
+# ... (most schemas are unchanged) ...
+
+# --- ADDED/UPDATED: Schemas for Webhook Payloads ---
+
+class FulfillmentHold(BaseModel):
+    reason: Optional[str] = None
+    reason_notes: Optional[str] = None
+
+class FulfillmentOrderWebhook(BaseModel):
+    fulfillment_order: Dict[str, Any]
+    fulfillment_hold: Optional[FulfillmentHold] = None
+
+# ... (rest of the file is unchanged)
+# --- Schemas for Parsing Shopify API Response ---
 class MoneySet(BaseModel):
     amount: float
     currency_code: str = Field(..., alias="currencyCode")
@@ -125,7 +138,6 @@ class ShopifyOrder(BaseModel):
     fulfillments: List[Fulfillment] = []
 
 # --- Schemas for Internal Application API ---
-# ... (Store, Webhook, and other internal schemas remain the same) ...
 class StoreBase(BaseModel):
     name: str
     shopify_url: str
@@ -160,8 +172,7 @@ class Webhook(WebhookBase):
     store_id: int
     class Config:
         from_attributes = True
-        
-# --- ADDED/UPDATED: Schemas for Webhook Payloads ---
+
 class LineItemWebhook(BaseModel):
     id: int
     variant_id: Optional[int] = None
@@ -242,6 +253,3 @@ class ShopifyRefundWebhook(BaseModel):
 
 class DeletePayload(BaseModel):
     id: int
-
-class FulfillmentOrderWebhook(BaseModel):
-    fulfillment_order: Dict[str, Any]

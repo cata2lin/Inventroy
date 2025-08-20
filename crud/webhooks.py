@@ -1,6 +1,7 @@
 # crud/webhooks.py
 
 from sqlalchemy.orm import Session
+from typing import Optional
 import models
 import schemas
 from . import product as crud_product, order as crud_order
@@ -28,21 +29,28 @@ def delete_webhook_registration(db: Session, shopify_webhook_id: int):
     db.query(models.Webhook).filter(models.Webhook.shopify_webhook_id == shopify_webhook_id).delete()
     db.commit()
 
-def update_fulfillment_hold_status_by_gid(db: Session, fulfillment_gid: str, status: str):
+def update_fulfillment_hold_status_by_gid(db: Session, fulfillment_gid: str, status: str, reason: Optional[str] = None):
     """
     Updates the hold status of a fulfillment and, more importantly,
-    updates the parent order's fulfillment_status to 'on_hold'.
+    updates the parent order's fulfillment_status.
     """
-    fulfillment = db.query(models.Fulfillment).filter(models.Fulfillment.shopify_gid == fulfillment_gid).first()
+    # Fulfillment GIDs from webhooks are for FulfillmentOrders, not Fulfillments.
+    # We need to find the corresponding order and update its status.
+    # This is a simplification; a real-world scenario might need to map FulfillmentOrder to Fulfillment.
+    # For now, we find the order associated with any fulfillment that might be created from this fulfillment order.
+    
+    # A more robust approach would be to get the order_id from the fulfillment_order payload if available.
+    # Assuming the GID format is consistent, we find the first fulfillment associated with it.
+    fulfillment = db.query(models.Fulfillment).filter(models.Fulfillment.shopify_gid.like(f"%{fulfillment_gid.split('/')[-1]}")).first()
+    
     if fulfillment:
         fulfillment.hold_status = status
+        fulfillment.hold_reason = reason
         
-        # --- FIX: Update the parent order's status ---
         order = db.query(models.Order).filter(models.Order.id == fulfillment.order_id).first()
         if order:
             if status == "ON_HOLD":
                 order.fulfillment_status = "on_hold"
-            # You might add logic here for when a hold is released, e.g., revert to 'unfulfilled'
             elif status == "RELEASED" and order.fulfillment_status == "on_hold":
                 order.fulfillment_status = "unfulfilled"
         
