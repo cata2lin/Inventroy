@@ -42,7 +42,6 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
 
     # --- Order Topics ---
     if topic in ["orders/create", "orders/updated"]:
-        # FIXED: Use the new webhook-specific Pydantic model and CRUD function
         order_data = schemas.ShopifyOrderWebhook.parse_obj(payload)
         crud_order.create_or_update_order_from_webhook(db, store.id, order_data)
     elif topic == "orders/delete":
@@ -62,7 +61,8 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
     # --- Fulfillment Topics ---
     elif topic in ["fulfillments/create", "fulfillments/update"]:
         fulfillment_data = schemas.ShopifyFulfillmentWebhook.parse_obj(payload)
-        crud_webhook.process_fulfillment_webhook(db, fulfillment_data)
+        # FIXED: Pass the store.id to the processing function
+        crud_webhook.process_fulfillment_webhook(db, store.id, fulfillment_data)
     
     # --- Fulfillment Hold Topics ---
     elif topic == "fulfillment_orders/placed_on_hold":
@@ -86,7 +86,8 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
     # --- Refund Topic ---
     elif topic == "refunds/create":
         refund_data = schemas.ShopifyRefundWebhook.parse_obj(payload)
-        crud_webhook.process_refund_webhook(db, refund_data)
+        # FIXED: Pass the store.id to the processing function
+        crud_webhook.process_refund_webhook(db, store.id, refund_data)
 
     else:
         print(f"Received unhandled webhook topic: {topic}")

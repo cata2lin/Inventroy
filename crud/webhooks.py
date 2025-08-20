@@ -53,13 +53,15 @@ def process_product_webhook(db: Session, store_id: int, product_data: schemas.Sh
     """Processes a product create/update webhook."""
     crud_product.create_or_update_product_from_webhook(db, store_id, product_data)
 
-def process_fulfillment_webhook(db: Session, fulfillment_data: schemas.ShopifyFulfillmentWebhook):
+def process_fulfillment_webhook(db: Session, store_id: int, fulfillment_data: schemas.ShopifyFulfillmentWebhook):
     """Processes a fulfillment create/update webhook."""
-    crud_order.create_or_update_fulfillment_from_webhook(db, fulfillment_data)
+    # FIXED: Pass the store_id to the next function.
+    crud_order.create_or_update_fulfillment_from_webhook(db, store_id, fulfillment_data)
 
-def process_refund_webhook(db: Session, refund_data: schemas.ShopifyRefundWebhook):
+def process_refund_webhook(db: Session, store_id: int, refund_data: schemas.ShopifyRefundWebhook):
     """Processes a refund create webhook."""
-    crud_order.create_refund_from_webhook(db, refund_data)
+    # FIXED: Pass the store_id to the next function.
+    crud_order.create_refund_from_webhook(db, store_id, refund_data)
 
 def process_inventory_level_update(db: Session, payload: dict):
     """Processes an inventory level update webhook."""
