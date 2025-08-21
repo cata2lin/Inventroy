@@ -36,10 +36,11 @@ def trigger_order_sync(request: SyncRequest, background_tasks: BackgroundTasks, 
     for store in stores_to_sync:
         task_id = sync_tracker.create_task(f"Orders for {store.name}")
         task_ids.append(task_id)
+        # --- FIX: Create a new session and pass it directly to the background task ---
         background_tasks.add_task(
             sync_service.run_sync_in_background,
             target_function=sync_service.run_full_order_sync,
-            db=SessionLocal(),
+            db=SessionLocal(), # Create a new session for the task
             store_id=store.id,
             task_id=task_id,
             start_date=request.start_date,
@@ -55,10 +56,11 @@ def trigger_product_sync(background_tasks: BackgroundTasks, db: Session = Depend
     for store in stores:
         task_id = sync_tracker.create_task(f"Products for {store.name}")
         task_ids.append(task_id)
+        # --- FIX: Create a new session and pass it directly to the background task ---
         background_tasks.add_task(
             sync_service.run_sync_in_background,
             target_function=sync_service.run_full_product_sync,
-            db=SessionLocal(),
+            db=SessionLocal(), # Create a new session for the task
             store_id=store.id,
             task_id=task_id
         )

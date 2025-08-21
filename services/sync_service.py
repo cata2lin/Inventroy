@@ -8,7 +8,7 @@ from crud import store as crud_store, order as crud_order, product as crud_produ
 def run_full_order_sync(db: Session, store_id: int, task_id: str, start_date: str = None, end_date: str = None):
     """
     Background task to sync all orders for a single store.
-    MODIFIED: Fetches its own store object.
+    Fetches its own store object using the provided session.
     """
     store = crud_store.get_store(db, store_id=store_id)
     if not store:
@@ -35,11 +35,13 @@ def run_full_order_sync(db: Session, store_id: int, task_id: str, start_date: st
         sync_tracker.complete_task(task_id, f"Successfully synced {processed_orders} orders.")
     except Exception as e:
         sync_tracker.fail_task(task_id, f"An error occurred: {str(e)}")
+    finally:
+        db.close()
 
 def run_full_product_sync(db: Session, store_id: int, task_id: str):
     """
     Background task to sync all products for a single store.
-    MODIFIED: Fetches its own store object.
+    Fetches its own store object using the provided session.
     """
     store = crud_store.get_store(db, store_id=store_id)
     if not store:
@@ -66,19 +68,30 @@ def run_full_product_sync(db: Session, store_id: int, task_id: str):
         sync_tracker.complete_task(task_id, f"Successfully synced {processed_products} products.")
     except Exception as e:
         sync_tracker.fail_task(task_id, f"An error occurred: {str(e)}")
+    finally:
+        db.close()
 
-def run_sync_in_background(target_function, db_session_factory, **kwargs):
+def run_sync_in_background(target_function, db: Session, **kwargs):
     """
     A wrapper that handles session management for any background task.
+    MODIFIED: It now expects a session to be passed in, and it ensures it's closed.
     """
-    db = db_session_factory()
     try:
+        # The session is already created and passed in, so we just use it.
         target_function(db=db, **kwargs)
     except Exception as e:
         task_id = kwargs.get("task_id")
         if task_id:
-            sync_tracker.fail_task(task_id, f"A critical background error occurred: {str(e)}")
-        # It's important to log this error to your server logs as well
+            # Note: The target_function is responsible for closing the session
+            # even on failure now, but we'll ensure it's closed here as a safeguard.
+            try:
+                sync_tracker.fail_task(task_id, f"A critical background error occurred: {str(e)}")
+            except Exception as tracker_e:
+                print(f"Error updating sync tracker: {tracker_e}")
+        
         print(f"CRITICAL BACKGROUND ERROR in task {task_id}: {e}")
     finally:
-        db.close()
+        # The session is now managed and closed by the individual sync functions
+        # (run_full_order_sync, run_full_product_sync), so this wrapper
+        # no longer needs to close it.
+        pass
