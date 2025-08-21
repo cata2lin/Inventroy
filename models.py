@@ -20,7 +20,8 @@ class Store(Base):
     enabled = Column(BOOLEAN, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
-    
+    api_secret = Column(String(255), nullable=True)
+    webhook_secret = Column(String(255), nullable=True)
     products = relationship("Product", back_populates="store", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="store", cascade="all, delete-orphan")
     locations = relationship("Location", back_populates="store", cascade="all, delete-orphan")
