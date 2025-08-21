@@ -11,7 +11,8 @@ from services.inventory_sync_service import _acquire_lock
 
 def run_reconciliation(db_factory):
     """
-    Re-read truth for every active group, recompute pool, and repair members.
+    Re-read truth for every active group, recompute a SAFE pool (min across members),
+    and repair members by setting absolute 'available' targets.
     """
     db: Session = db_factory()
     try:
@@ -36,7 +37,6 @@ def run_reconciliation(db_factory):
                 )
 
                 # Re-read truth for all members & refresh snapshots
-                sums = 0
                 truths = []  # [(member, store, avail, on_hand)]
                 for m in members:
                     s = m.product.store
@@ -44,13 +44,17 @@ def run_reconciliation(db_factory):
                         continue
                     svc = ShopifyService(store_url=s.shopify_url, token=s.api_token)
                     data = svc.get_inventory_levels_for_items([m.inventory_item_id]) or []
-                    lvl = next((it for it in data if int(it["id"]) == int(m.inventory_item_id) and int(it["location_id"]) == int(s.sync_location_id)), None)
+                    lvl = next(
+                        (it for it in data
+                         if int(it["id"]) == int(m.inventory_item_id)
+                         and int(it["location_id"]) == int(s.sync_location_id)),
+                        None
+                    )
                     if not lvl:
                         continue
                     avail = int(lvl["available"])
                     on_hand = int(lvl.get("on_hand", avail))
                     truths.append((m, s, avail, on_hand))
-                    sums += avail
 
                     # refresh snapshot
                     snap = next((x for x in m.inventory_levels if int(x.location_id) == int(s.sync_location_id)), None)
@@ -67,12 +71,20 @@ def run_reconciliation(db_factory):
                             last_fetched_at=datetime.utcnow(),
                         ))
 
-                # Correct pool if needed
-                if int(group.pool_available) != int(sums):
-                    group.pool_available = int(sums)
+                # --- THIS IS THE CHANGED PART ---
+                # OLD (remove/replace if you see it):
+                # new_pool = sum(avail for _m, _s, avail, _oh in truths)
+                #
+                # NEW (safe, mirrors bootstrap policy):
+                avail_list = [avail for _m, _s, avail, _oh in truths]
+                new_pool = min(avail_list) if avail_list else 0
+                # ---------------------------------
+
+                if int(group.pool_available) != int(new_pool):
+                    group.pool_available = int(new_pool)
                 group.last_reconciled_at = datetime.utcnow()
 
-                # Plan targets
+                # Plan targets using the corrected pool
                 for m, s, avail, on_hand in truths:
                     target = max(0, int(group.pool_available) - int(s.safety_buffer))
                     target = min(target, on_hand)
