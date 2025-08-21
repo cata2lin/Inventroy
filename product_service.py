@@ -111,6 +111,38 @@ class ProductService:
             raise ValueError(f"Shopify User Error: {error_message}")
         return result.get("productVariants", [{}])[0]
 
+    def set_inventory_available(self, inventory_item_id: str, location_id: str, target_available: int):
+        """
+        ABSOLUTE set of 'available' quantity via inventorySetQuantities.
+        inventory_item_id / location_id are GIDs (gid://shopify/...).
+        """
+        MUTATION_SET_INVENTORY = """
+        mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
+          inventorySetQuantities(input: $input) {
+            inventoryAdjustmentGroup { id reason }
+            userErrors { field message }
+          }
+        }
+        """
+        variables = {
+            "input": {
+                "name": "available",
+                "ignoreCompareQuantity": True,  # compare-and-set off; turn off contention errors
+                "changes": [{
+                    "inventoryItemId": inventory_item_id,
+                    "locationId": location_id,
+                    "quantity": int(target_available)
+                }]
+            }
+        }
+        print(f"[set-available] {inventory_item_id} @ {location_id} -> {target_available}")
+        data = self._execute_mutation(MUTATION_SET_INVENTORY, variables)
+        result = data.get("inventorySetQuantities", {})
+        if result.get("userErrors"):
+            msg = ", ".join([f"{e.get('field')}: {e.get('message')}" for e in result["userErrors"]])
+            raise ValueError(f"Shopify Inventory Error: {msg}")
+        return result.get("inventoryAdjustmentGroup", {})
+
     def adjust_inventory_quantity(self, inventory_item_id: str, location_id: str, available_delta: int) -> Dict[str, Any]:
         """
         Adjusts the 'available' inventory quantity for an inventory item at a location.

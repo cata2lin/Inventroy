@@ -1,60 +1,103 @@
 # jobs/reconciliation.py
 
-from sqlalchemy.orm import Session
+import uuid
 from datetime import datetime
+from sqlalchemy.orm import Session, joinedload
 import models
-from services import inventory_sync_service
+from shopify_service import ShopifyService
+from product_service import ProductService
+from services.inventory_sync_service import _acquire_lock
 
-def run_reconciliation(db: Session):
+
+def run_reconciliation(db_factory):
     """
-    The main reconciliation job. Iterates through barcode groups,
-    re-calculates the pool from truth, and corrects any discrepancies.
+    Re-read truth for every active group, recompute pool, and repair members.
     """
-    print("--- Starting Reconciliation Job ---")
-    
-    groups_to_reconcile = db.query(models.BarcodeGroup).filter(
-        models.BarcodeGroup.status == 'active'
-    ).all()
+    db: Session = db_factory()
+    try:
+        print("--- Recon start ---")
+        groups = db.query(models.BarcodeGroup).filter(models.BarcodeGroup.status == 'active').all()
 
-    for group in groups_to_reconcile:
-        print(f"Reconciling group: {group.id}")
-        
-        # This is a simplified version. The full version would need to acquire a lock.
-        if not inventory_sync_service._acquire_lock(db, group.id):
-            print(f"Could not acquire lock for group {group.id}, skipping reconciliation.")
-            continue
-
-        try:
-            members = group.members
-            if not members:
-                continue
-
-            # Re-read truth for all members
-            # In a real-world scenario, you'd batch these API calls.
-            new_pool_available = 0
-            for membership in members:
-                variant = membership.variant
-                store = variant.product.store
-                
-                if not store.enabled or not store.sync_location_id:
+        for group in groups:
+            planned = []  # [(member_variant, target)]
+            with db.begin():
+                if not _acquire_lock(db, group.id):
                     continue
-                
-                # ... (Logic to call Shopify API and get fresh `available`)
-                # For this example, we'll simulate this part
-                # fresh_available = shopify_service.get_inventory_levels_for_items(...)
-                # new_pool_available += fresh_available
 
-            if group.pool_available != new_pool_available:
-                print(f"Discrepancy found for group {group.id}. DB Pool: {group.pool_available}, Truth Pool: {new_pool_available}. Correcting.")
-                group.pool_available = new_pool_available
-                # Now, re-propagate this correct value
-                # ... (propagation logic similar to the sync service) ...
+                members = (
+                    db.query(models.ProductVariant)
+                    .options(
+                        joinedload(models.ProductVariant.product).joinedload(models.Product.store),
+                        joinedload(models.ProductVariant.inventory_levels),
+                    )
+                    .join(models.GroupMembership)
+                    .filter(models.GroupMembership.group_id == group.id)
+                    .all()
+                )
 
-            group.last_reconciled_at = datetime.utcnow()
-            db.commit()
+                # Re-read truth for all members & refresh snapshots
+                sums = 0
+                truths = []  # [(member, store, avail, on_hand)]
+                for m in members:
+                    s = m.product.store
+                    if not s.enabled or not s.sync_location_id or getattr(m, "tracked", True) is False:
+                        continue
+                    svc = ShopifyService(store_url=s.shopify_url, token=s.api_token)
+                    data = svc.get_inventory_levels_for_items([m.inventory_item_id]) or []
+                    lvl = next((it for it in data if int(it["id"]) == int(m.inventory_item_id) and int(it["location_id"]) == int(s.sync_location_id)), None)
+                    if not lvl:
+                        continue
+                    avail = int(lvl["available"])
+                    on_hand = int(lvl.get("on_hand", avail))
+                    truths.append((m, s, avail, on_hand))
+                    sums += avail
 
-        except Exception as e:
-            print(f"Error reconciling group {group.id}: {e}")
-            db.rollback()
-        
-    print("--- Reconciliation Job Finished ---")
+                    # refresh snapshot
+                    snap = next((x for x in m.inventory_levels if int(x.location_id) == int(s.sync_location_id)), None)
+                    if snap:
+                        snap.available = avail
+                        snap.on_hand = on_hand
+                        snap.last_fetched_at = datetime.utcnow()
+                    else:
+                        db.add(models.InventoryLevel(
+                            inventory_item_id=m.inventory_item_id,
+                            location_id=s.sync_location_id,
+                            available=avail,
+                            on_hand=on_hand,
+                            last_fetched_at=datetime.utcnow(),
+                        ))
+
+                # Correct pool if needed
+                if int(group.pool_available) != int(sums):
+                    group.pool_available = int(sums)
+                group.last_reconciled_at = datetime.utcnow()
+
+                # Plan targets
+                for m, s, avail, on_hand in truths:
+                    target = max(0, int(group.pool_available) - int(s.safety_buffer))
+                    target = min(target, on_hand)
+                    if avail != target:
+                        planned.append((m, s, target))
+
+            # Outside lock: write & push_log
+            corr = uuid.uuid4()
+            for m, s, target in planned:
+                ps = ProductService(store_url=s.shopify_url, token=s.api_token)
+                inv_gid = f"gid://shopify/InventoryItem/{m.inventory_item_id}"
+                loc_gid = f"gid://shopify/Location/{s.sync_location_id}"
+                try:
+                    ps.set_inventory_available(inv_gid, loc_gid, int(target))
+                    with db.begin():
+                        db.add(models.PushLog(
+                            variant_id=m.id,
+                            target_available=int(target),
+                            correlation_id=str(corr),
+                            write_source='recon',
+                            written_at=datetime.utcnow(),
+                        ))
+                except Exception as e:
+                    print(f"[recon write-fail] store={s.name} variant={m.id} target={target}: {e}")
+
+        print("--- Recon done ---")
+    finally:
+        db.close()

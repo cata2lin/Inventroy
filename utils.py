@@ -7,12 +7,10 @@ from sqlalchemy.orm import Session
 import models
 
 def verify_hmac(secret, data, hmac_header):
-    calculated_hmac = hmac.new(
-        secret.encode("utf-8"),
-        data,
-        hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(calculated_hmac, hmac_header)
+    mac = hmac.new(secret.encode("utf-8"), data, hashlib.sha256).digest()
+    calc_b64 = base64.b64encode(mac).decode()
+    # accept exact base64; allow hex as legacy
+    return hmac.compare_digest(calc_b64, hmac_header) or hmac.compare_digest(mac.hex(), hmac_header)
 
 # --- ADDED: Barcode Generation Logic ---
 
