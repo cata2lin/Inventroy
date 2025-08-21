@@ -1,7 +1,7 @@
 # models.py
 
 from sqlalchemy import (Column, Integer, String, Float, DateTime, Text,
-                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index)
+                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index, UniqueConstraint)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -12,8 +12,7 @@ class Store(Base):
     name = Column(String(255), unique=True, index=True, nullable=False)
     shopify_url = Column(String(255), unique=True, nullable=False)
     api_token = Column(String(255), nullable=False)
-    api_secret = Column(String(255), nullable=True)
-    # ADDED: The primary location ID used for inventory synchronization for this store.
+    api_secret = Column(String(255), nullable=True) 
     sync_location_id = Column(BIGINT, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -21,13 +20,12 @@ class Store(Base):
     orders = relationship("Order", back_populates="store", cascade="all, delete-orphan")
     locations = relationship("Location", back_populates="store", cascade="all, delete-orphan")
     webhooks = relationship("Webhook", back_populates="store", cascade="all, delete-orphan")
-
-# --- NEW: Barcode-based Syncing Models ---
+    variants = relationship("ProductVariant", back_populates="store", cascade="all, delete-orphan")
 
 class BarcodeGroup(Base):
     __tablename__ = "barcode_groups"
-    id = Column(String(255), primary_key=True, index=True) # The normalized barcode
-    status = Column(String(50), default='active', nullable=False) # e.g., active, conflicted
+    id = Column(String(255), primary_key=True, index=True)
+    status = Column(String(50), default='active', nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
     members = relationship("GroupMembership", back_populates="group", cascade="all, delete-orphan")
@@ -46,7 +44,7 @@ class PushLog(Base):
     variant_id = Column(BIGINT, ForeignKey("product_variants.id"), nullable=False, index=True)
     target_available = Column(Integer, nullable=False)
     written_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
-    correlation_id = Column(String(255), index=True) # To trace a single sync operation
+    correlation_id = Column(String(255), index=True)
 
 class CommittedStock(Base):
     __tablename__ = "committed_stock"
@@ -57,8 +55,6 @@ class CommittedStock(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     group = relationship("BarcodeGroup", back_populates="committed_stock")
     store = relationship("Store")
-
-# --- END: New Models ---
 
 class Webhook(Base):
     __tablename__ = "webhooks"
@@ -105,9 +101,11 @@ class ProductVariant(Base):
     id = Column(BIGINT, primary_key=True, index=True)
     shopify_gid = Column(String(255), unique=True, nullable=False)
     product_id = Column(BIGINT, ForeignKey("products.id"), nullable=False)
+    # --- MODIFIED: Added store_id directly to the variant for the composite key ---
+    store_id = Column(Integer, ForeignKey("stores.id"), nullable=False, index=True)
     title = Column(String(255))
     price = Column(NUMERIC(10, 2))
-    sku = Column(String(255), unique=True, index=True)
+    sku = Column(String(255), index=True)
     position = Column(Integer)
     inventory_policy = Column(String(50))
     compare_at_price = Column(NUMERIC(10, 2))
@@ -115,7 +113,6 @@ class ProductVariant(Base):
     fulfillment_service = Column(String(255))
     inventory_management = Column(String(255))
     barcode = Column(String(255), index=True)
-    # ADDED: Normalized barcode for grouping.
     barcode_normalized = Column(String(255), index=True, nullable=True)
     is_primary_variant = Column(BOOLEAN, default=False, nullable=False)
     grams = Column(BIGINT)
@@ -128,10 +125,16 @@ class ProductVariant(Base):
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     product = relationship("Product", back_populates="variants")
+    store = relationship("Store", back_populates="variants")
     inventory_levels = relationship("InventoryLevel", back_populates="variant", cascade="all, delete-orphan")
     line_items = relationship("LineItem", back_populates="variant")
-    # ADDED: Relationship to group membership.
     group_membership = relationship("GroupMembership", uselist=False, back_populates="variant", cascade="all, delete-orphan")
+
+    # --- MODIFIED: Define the composite unique constraint in the model ---
+    __table_args__ = (
+        UniqueConstraint('sku', 'store_id', name='uq_product_variants_sku_store_id'),
+    )
+
 
 class InventoryLevel(Base):
     __tablename__ = "inventory_levels"
@@ -215,7 +218,7 @@ class Fulfillment(Base):
 
 class FulfillmentEvent(Base):
     __tablename__ = "fulfillment_events"
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(BIGINT, primary_key=True, index=True)
     shopify_gid = Column(String(255), unique=True, nullable=False)
     fulfillment_id = Column(BIGINT, ForeignKey("fulfillments.id"), nullable=False)
     status = Column(String(50))

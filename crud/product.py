@@ -12,7 +12,6 @@ from .sync import normalize_barcode, update_variant_group_membership
 def create_or_update_product_from_webhook(db: Session, store_id: int, product_data: schemas.ShopifyProductWebhook):
     """
     Upserts a single product and its variants from a webhook payload.
-    MODIFIED: Also handles SKU uniqueness and updates barcode group membership.
     """
     product_dict = {
         "id": product_data.id,
@@ -33,28 +32,13 @@ def create_or_update_product_from_webhook(db: Session, store_id: int, product_da
 
     variants_list = []
     variant_ids_to_process = []
-
-    # --- FIX STARTS HERE: Proactively handle unique SKU constraint violations ---
-    for variant_data in product_data.variants:
-        if variant_data['sku']:
-            # Find if another variant is already using this SKU
-            existing_variant_with_sku = db.query(models.ProductVariant).filter(
-                models.ProductVariant.sku == variant_data['sku'],
-                models.ProductVariant.id != variant_data['id'] 
-            ).first()
-            
-            if existing_variant_with_sku:
-                # If so, nullify the SKU on the old variant to "free it up"
-                print(f"SKU '{variant_data['sku']}' already exists on variant {existing_variant_with_sku.id}. Clearing it before update.")
-                existing_variant_with_sku.sku = None
-                db.commit()
-    # --- FIX ENDS HERE ---
-
+    
     for variant_data in product_data.variants:
         variant_ids_to_process.append(variant_data['id'])
         variants_list.append({
             "id": variant_data['id'],
             "product_id": product_data.id,
+            "store_id": store_id, # ADDED
             "title": variant_data['title'],
             "price": variant_data['price'],
             "sku": variant_data['sku'],
@@ -132,7 +116,9 @@ def create_or_update_products(db: Session, products_data: List[Dict[str, Any]], 
             inv_item = variant.inventory_item
             all_variants.append({
                 "id": variant.legacy_resource_id, "shopify_gid": variant.id, 
-                "product_id": product.legacy_resource_id, "title": variant.title, 
+                "product_id": product.legacy_resource_id,
+                "store_id": store_id, # ADDED
+                "title": variant.title, 
                 "price": variant.price, "sku": variant.sku, "position": variant.position, 
                 "inventory_policy": variant.inventory_policy, 
                 "compare_at_price": variant.compare_at_price, "barcode": variant.barcode, 
