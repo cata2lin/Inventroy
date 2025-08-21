@@ -131,6 +131,7 @@ query GetInventoryDetails($cursor: String) {
 }
 """
 
+# NOTE: Kept for reference, but NOT used anymore (inventoryItems(ids: ...) is invalid).
 GET_INVENTORY_LEVELS_QUERY = """
 query getInventoryLevels($itemIds: [ID!]!) {
   inventoryItems(ids: $itemIds) {
@@ -167,43 +168,95 @@ class ShopifyService:
         self.rest_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
         
     def get_inventory_levels_for_items(self, item_legacy_ids: List[int]) -> List[Dict[str, Any]]:
+        """
+        Returns:
+          List of dicts: {"id": <inventory_item_legacy_id>, "location_id": <legacy_location_id>,
+                          "available": <int>, "on_hand": <int>}
+        Implementation uses GraphQL `nodes(ids: [...])` (correct way to fetch specific InventoryItems).
+        """
         if not item_legacy_ids:
             return []
-            
-        item_gids = [f"gid://shopify/InventoryItem/{item_id}" for item_id in item_legacy_ids]
         
-        try:
-            variables = {"itemIds": item_gids}
-            data = self._execute_query(GET_INVENTORY_LEVELS_QUERY, variables)
-            
-            if not data or "inventoryItems" not in data:
-                print("Received no data or malformed inventoryItems data from get_inventory_levels.")
-                return []
+        # Build GIDs for nodes(ids: ...)
+        item_gids = [f"gid://shopify/InventoryItem/{item_id}" for item_id in item_legacy_ids]
 
-            results = []
-            item_edges = data["inventoryItems"].get("edges", [])
-            for item_edge in item_edges:
-                item_node = item_edge.get("node", {})
-                item_id = item_node.get("legacyResourceId")
-                level_edges = item_node.get("inventoryLevels", {}).get("edges", [])
-                
-                for level_edge in level_edges:
-                    level_node = level_edge.get("node", {})
-                    location_id = level_node.get("location", {}).get("legacyResourceId")
-                    
-                    available = next((q['quantity'] for q in level_node['quantities'] if q['name'] == 'available'), 0)
-                    on_hand = next((q['quantity'] for q in level_node['quantities'] if q['name'] == 'on_hand'), 0)
-                    
-                    results.append({
-                        "id": item_id,
-                        "location_id": location_id,
-                        "available": available,
-                        "on_hand": on_hand
-                    })
-            return results
-        except Exception as e:
-            print(f"An error occurred during inventory level fetch: {e}")
-            return []
+        QUERY = """
+        query GetInventory($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            __typename
+            ... on InventoryItem {
+              id
+              legacyResourceId
+              inventoryLevels(first: 100) {
+                edges {
+                  node {
+                    location { id legacyResourceId }
+                    quantities(names: ["available", "on_hand"]) {
+                      name
+                      quantity
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+
+        results: List[Dict[str, Any]] = []
+        CHUNK_SIZE = 50  # conservative; nodes() can accept more but this stays safe
+
+        for i in range(0, len(item_gids), CHUNK_SIZE):
+            chunk = item_gids[i:i + CHUNK_SIZE]
+            variables = {"ids": chunk}
+            try:
+                data = self._execute_query(QUERY, variables)
+            except Exception as e:
+                print(f"An error occurred during inventory level fetch: {e}")
+                continue
+
+            if not data or "nodes" not in data:
+                print("Received no data or malformed nodes data. Skipping chunk.")
+                continue
+
+            for node in data["nodes"]:
+                # nodes can contain nulls or other types
+                if not node or node.get("__typename") != "InventoryItem":
+                    continue
+
+                item_legacy_id = node.get("legacyResourceId")
+                inv_levels = node.get("inventoryLevels", {}) or {}
+                edges = inv_levels.get("edges", []) or []
+
+                for edge in edges:
+                    lvl = edge.get("node") or {}
+                    loc = (lvl.get("location") or {})
+                    loc_legacy_id = loc.get("legacyResourceId")
+                    qtys = (lvl.get("quantities") or [])
+
+                    available = 0
+                    on_hand = 0
+                    for q in qtys:
+                        if q.get("name") == "available":
+                            try:
+                                available = int(q.get("quantity") or 0)
+                            except Exception:
+                                available = 0
+                        elif q.get("name") == "on_hand":
+                            try:
+                                on_hand = int(q.get("quantity") or 0)
+                            except Exception:
+                                on_hand = 0
+
+                    if item_legacy_id is not None and loc_legacy_id is not None:
+                        results.append({
+                            "id": int(item_legacy_id),
+                            "location_id": int(loc_legacy_id),
+                            "available": int(available),
+                            "on_hand": int(on_hand),
+                        })
+
+        return results
 
     def get_order_id_from_fulfillment_order_gid(self, fulfillment_order_gid: str) -> Optional[int]:
         query = """
@@ -340,9 +393,7 @@ class ShopifyService:
 
             except (ValueError, requests.exceptions.RequestException) as e:
                 print(f"An error occurred during order page fetch: {e}. Attempting to continue.")
-                # When an error occurs on one page, we will try to jump to the next
-                # This is a basic form of resilience. In a real-world scenario, you might have more sophisticated retries.
-                has_next_page = False # Stop if a page fails to prevent infinite loops on a failing cursor
+                has_next_page = False
 
         print("Finished fetching all order pages from Shopify.")
     
