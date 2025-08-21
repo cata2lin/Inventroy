@@ -8,7 +8,6 @@ import models
 import schemas
 from shopify_service import gid_to_id
 from .utils import upsert_batch
-# MODIFIED: Import for committed stock logic
 from sqlalchemy.dialects.postgresql import insert
 
 def update_committed_stock_for_order(db: Session, order: models.Order):
@@ -57,7 +56,7 @@ def update_committed_stock_for_order(db: Session, order: models.Order):
 def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: schemas.ShopifyOrderWebhook):
     """
     Upserts a single order and its line items from a webhook payload.
-    MODIFIED: Also updates committed stock.
+    MODIFIED: Creates placeholder products and variants to prevent foreign key errors.
     """
     financial_status_from_payload = order_data.financial_status
     fulfillment_status_from_payload = order_data.fulfillment_status
@@ -95,6 +94,39 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     }
     upsert_batch(db, models.Order, [order_dict], ['id'])
 
+    # --- FIX STARTS HERE: Ensure parent products/variants exist before creating line items ---
+    products_to_create, variants_to_create = [], []
+    required_variant_ids = {item.variant_id for item in order_data.line_items if item.variant_id}
+    required_product_ids = {item.product_id for item in order_data.line_items if item.product_id}
+
+    if required_variant_ids:
+        existing_variants = {v[0] for v in db.query(models.ProductVariant.id).filter(models.ProductVariant.id.in_(required_variant_ids)).all()}
+        existing_products = {p[0] for p in db.query(models.Product.id).filter(models.Product.id.in_(required_product_ids)).all()}
+
+        for item in order_data.line_items:
+            if not item.product_id or not item.variant_id:
+                continue
+
+            if item.product_id not in existing_products:
+                products_to_create.append({
+                    "id": item.product_id, "store_id": store_id, "title": item.title.split(' - ')[0],
+                    "shopify_gid": f"gid://shopify/Product/{item.product_id}", "status": "active"
+                })
+                existing_products.add(item.product_id)
+
+            if item.variant_id not in existing_variants:
+                variants_to_create.append({
+                    "id": item.variant_id, "product_id": item.product_id, "title": item.title, "sku": item.sku,
+                    "shopify_gid": f"gid://shopify/ProductVariant/{item.variant_id}"
+                })
+                existing_variants.add(item.variant_id)
+
+    if products_to_create:
+        upsert_batch(db, models.Product, products_to_create, ['id'])
+    if variants_to_create:
+        upsert_batch(db, models.ProductVariant, variants_to_create, ['id'])
+    # --- FIX ENDS HERE ---
+
     line_items_list = []
     for item in order_data.line_items:
         line_items_list.append({
@@ -116,7 +148,6 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
         upsert_batch(db, models.LineItem, line_items_list, ['id'])
 
     db.flush()
-    # MODIFIED: After order data is saved, update committed stock
     order = db.query(models.Order).filter(models.Order.id == order_data.id).one_or_none()
     if order:
         update_committed_stock_for_order(db, order)
@@ -127,7 +158,7 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
 def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfillment_data: schemas.ShopifyFulfillmentWebhook):
     """
     Upserts a single fulfillment from a webhook payload. If the parent order does not
-    exist, a placeholder is created.
+    exist, a placeholder is created to prevent foreign key violations.
     """
     order = db.query(models.Order).filter(models.Order.id == fulfillment_data.order_id).first()
     if not order:
@@ -250,7 +281,6 @@ def create_refund_from_webhook(db: Session, store_id: int, refund_data: schemas.
 def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder], store_id: int):
     """
     Takes a list of Pydantic ShopifyOrder objects from GraphQL and upserts them.
-    MODIFIED: Also updates committed stock.
     """
     if not orders_data: return
 
@@ -316,16 +346,7 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
                         available_qty = next((q['quantity'] for q in level.quantities if q['name'] == 'available'), None)
                         on_hand_qty = next((q['quantity'] for q in level.quantities if q['name'] == 'on_hand'), None)
                         all_inventory_levels.append({"inventory_item_id": inv_item.legacy_resource_id, "location_id": loc.legacy_resource_id, "available": available_qty, "on_hand": on_hand_qty, "updated_at": level.updated_at})
-            
-            all_line_items.append({
-                "id": line_item_id, "shopify_gid": item.id, "order_id": order.legacy_resource_id, 
-                "variant_id": item.variant.legacy_resource_id if item.variant else None, 
-                "product_id": item.variant.product.legacy_resource_id if item.variant and item.variant.product else None, 
-                "title": item.title, "quantity": item.quantity, "sku": item.sku, "vendor": item.vendor, 
-                "price": item.price.amount if item.price else None, 
-                "total_discount": item.total_discount.amount if item.total_discount else None, 
-                "taxable": item.taxable
-            })
+            all_line_items.append({"id": line_item_id, "shopify_gid": item.id, "order_id": order.legacy_resource_id, "variant_id": item.variant.legacy_resource_id if item.variant else None, "product_id": item.variant.product.legacy_resource_id if item.variant and item.variant.product else None, "title": item.title, "quantity": item.quantity, "sku": item.sku, "vendor": item.vendor, "price": item.price.amount if item.price else None, "total_discount": item.total_discount.amount if item.total_discount else None, "taxable": item.taxable})
         
         for fulfillment in order.fulfillments:
             all_fulfillments.append({"id": fulfillment.legacy_resource_id, "shopify_gid": fulfillment.id, "order_id": order.legacy_resource_id, "status": fulfillment.status, "created_at": fulfillment.created_at, "updated_at": fulfillment.updated_at, "tracking_company": fulfillment.tracking_company, "tracking_number": fulfillment.tracking_number, "tracking_url": str(fulfillment.tracking_url) if fulfillment.tracking_url else None})
@@ -345,7 +366,6 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
     
     db.flush()
 
-    # MODIFIED: After all data is saved, update committed stock for all processed orders
     print(f"Updating committed stock for {len(order_ids_to_process)} orders...")
     orders_to_update = db.query(models.Order).filter(models.Order.id.in_(order_ids_to_process)).all()
     for order_obj in orders_to_update:

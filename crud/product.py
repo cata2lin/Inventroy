@@ -6,14 +6,13 @@ from typing import List, Dict, Any
 import models
 import schemas
 from .utils import upsert_batch
-# MODIFIED: Import the new sync utility
 from .sync import normalize_barcode, update_variant_group_membership
 
 
 def create_or_update_product_from_webhook(db: Session, store_id: int, product_data: schemas.ShopifyProductWebhook):
     """
     Upserts a single product and its variants from a webhook payload.
-    MODIFIED: Also updates barcode group membership.
+    MODIFIED: Also handles SKU uniqueness and updates barcode group membership.
     """
     product_dict = {
         "id": product_data.id,
@@ -34,6 +33,23 @@ def create_or_update_product_from_webhook(db: Session, store_id: int, product_da
 
     variants_list = []
     variant_ids_to_process = []
+
+    # --- FIX STARTS HERE: Proactively handle unique SKU constraint violations ---
+    for variant_data in product_data.variants:
+        if variant_data['sku']:
+            # Find if another variant is already using this SKU
+            existing_variant_with_sku = db.query(models.ProductVariant).filter(
+                models.ProductVariant.sku == variant_data['sku'],
+                models.ProductVariant.id != variant_data['id'] 
+            ).first()
+            
+            if existing_variant_with_sku:
+                # If so, nullify the SKU on the old variant to "free it up"
+                print(f"SKU '{variant_data['sku']}' already exists on variant {existing_variant_with_sku.id}. Clearing it before update.")
+                existing_variant_with_sku.sku = None
+                db.commit()
+    # --- FIX ENDS HERE ---
+
     for variant_data in product_data.variants:
         variant_ids_to_process.append(variant_data['id'])
         variants_list.append({
@@ -46,7 +62,7 @@ def create_or_update_product_from_webhook(db: Session, store_id: int, product_da
             "inventory_policy": variant_data['inventory_policy'],
             "compare_at_price": variant_data.get('compare_at_price'),
             "barcode": variant_data.get('barcode'),
-            "barcode_normalized": normalize_barcode(variant_data.get('barcode')), # ADDED
+            "barcode_normalized": normalize_barcode(variant_data.get('barcode')),
             "inventory_item_id": variant_data['inventory_item_id'],
             "inventory_quantity": variant_data['inventory_quantity'],
             "created_at": variant_data['created_at'],
@@ -58,7 +74,6 @@ def create_or_update_product_from_webhook(db: Session, store_id: int, product_da
     
     db.flush()
 
-    # After upserting, process group memberships
     variants_to_update = db.query(models.ProductVariant).filter(models.ProductVariant.id.in_(variant_ids_to_process)).all()
     for variant in variants_to_update:
         update_variant_group_membership(db, variant)
@@ -95,7 +110,6 @@ def update_inventory_details(db: Session, inventory_data: List[Dict[str, Any]]):
 def create_or_update_products(db: Session, products_data: List[Dict[str, Any]], store_id: int):
     """
     Takes a list of product and variant data from the Shopify service and upserts them.
-    MODIFIED: Also updates barcode group membership.
     """
     all_products, all_variants, all_inventory_levels, all_locations = [], [], [], []
     variant_ids_to_process = []
@@ -121,8 +135,8 @@ def create_or_update_products(db: Session, products_data: List[Dict[str, Any]], 
                 "product_id": product.legacy_resource_id, "title": variant.title, 
                 "price": variant.price, "sku": variant.sku, "position": variant.position, 
                 "inventory_policy": variant.inventory_policy, 
-                "compare_at_price": variant.compare_at_price, "barcode": variant.barcode,
-                "barcode_normalized": normalize_barcode(variant.barcode), # ADDED
+                "compare_at_price": variant.compare_at_price, "barcode": variant.barcode, 
+                "barcode_normalized": normalize_barcode(variant.barcode),
                 "inventory_item_id": inv_item.legacy_resource_id, 
                 "inventory_quantity": variant.inventory_quantity, 
                 "created_at": variant.created_at, "updated_at": variant.updated_at,
@@ -149,7 +163,6 @@ def create_or_update_products(db: Session, products_data: List[Dict[str, Any]], 
     
     db.flush()
 
-    # After upserting, process group memberships
     print(f"Updating group memberships for {len(variant_ids_to_process)} variants...")
     variants_to_update = db.query(models.ProductVariant).filter(models.ProductVariant.id.in_(variant_ids_to_process)).all()
     for variant in variants_to_update:
