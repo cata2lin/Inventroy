@@ -131,6 +131,33 @@ query GetInventoryDetails($cursor: String) {
 }
 """
 
+# --- NEW: GraphQL Query to get inventory levels for specific items ---
+GET_INVENTORY_LEVELS_QUERY = """
+query getInventoryLevels($itemIds: [ID!]!) {
+  inventoryItems(ids: $itemIds) {
+    edges {
+      node {
+        legacyResourceId
+        inventoryLevels {
+          edges {
+            node {
+              location {
+                legacyResourceId
+              }
+              quantities(names: ["available", "on_hand"]) {
+                name
+                quantity
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
 class ShopifyService:
     def __init__(self, store_url: str, token: str, api_version: str = "2025-04"):
         if not all([store_url, token]):
@@ -139,8 +166,52 @@ class ShopifyService:
         self.rest_api_endpoint = f"https://{store_url}/admin/api/{api_version}"
         self.headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": token}
         self.rest_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+        
+    # --- NEW: Method to get inventory levels for a list of items ---
+    def get_inventory_levels_for_items(self, item_legacy_ids: List[int]) -> List[Dict[str, Any]]:
+        """
+        Fetches the current available and on_hand quantities for a list of inventory items.
+        Returns a flattened list of inventory level data.
+        """
+        if not item_legacy_ids:
+            return []
+            
+        # GraphQL IDs are required, so we construct them.
+        item_gids = [f"gid://shopify/InventoryItem/{item_id}" for item_id in item_legacy_ids]
+        
+        try:
+            variables = {"itemIds": item_gids}
+            data = self._execute_query(GET_INVENTORY_LEVELS_QUERY, variables)
+            
+            if not data or "inventoryItems" not in data:
+                print("Received no data or malformed inventoryItems data from get_inventory_levels.")
+                return []
 
-    # --- ADDED: New method to resolve order ID from fulfillment order GID ---
+            results = []
+            item_edges = data["inventoryItems"].get("edges", [])
+            for item_edge in item_edges:
+                item_node = item_edge.get("node", {})
+                item_id = item_node.get("legacyResourceId")
+                level_edges = item_node.get("inventoryLevels", {}).get("edges", [])
+                
+                for level_edge in level_edges:
+                    level_node = level_edge.get("node", {})
+                    location_id = level_node.get("location", {}).get("legacyResourceId")
+                    
+                    available = next((q['quantity'] for q in level_node['quantities'] if q['name'] == 'available'), 0)
+                    on_hand = next((q['quantity'] for q in level_node['quantities'] if q['name'] == 'on_hand'), 0)
+                    
+                    results.append({
+                        "id": item_id,
+                        "location_id": location_id,
+                        "available": available,
+                        "on_hand": on_hand
+                    })
+            return results
+        except Exception as e:
+            print(f"An error occurred during inventory level fetch: {e}")
+            return []
+
     def get_order_id_from_fulfillment_order_gid(self, fulfillment_order_gid: str) -> Optional[int]:
         """
         Queries the GraphQL API to find the parent order's legacy ID from a fulfillment order GID.

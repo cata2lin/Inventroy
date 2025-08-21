@@ -6,10 +6,14 @@ from typing import List, Dict, Any
 import models
 import schemas
 from .utils import upsert_batch
+# MODIFIED: Import the new sync utility
+from .sync import normalize_barcode, update_variant_group_membership
+
 
 def create_or_update_product_from_webhook(db: Session, store_id: int, product_data: schemas.ShopifyProductWebhook):
     """
     Upserts a single product and its variants from a webhook payload.
+    MODIFIED: Also updates barcode group membership.
     """
     product_dict = {
         "id": product_data.id,
@@ -29,7 +33,9 @@ def create_or_update_product_from_webhook(db: Session, store_id: int, product_da
     upsert_batch(db, models.Product, [product_dict], ['id'])
 
     variants_list = []
+    variant_ids_to_process = []
     for variant_data in product_data.variants:
+        variant_ids_to_process.append(variant_data['id'])
         variants_list.append({
             "id": variant_data['id'],
             "product_id": product_data.id,
@@ -40,6 +46,7 @@ def create_or_update_product_from_webhook(db: Session, store_id: int, product_da
             "inventory_policy": variant_data['inventory_policy'],
             "compare_at_price": variant_data.get('compare_at_price'),
             "barcode": variant_data.get('barcode'),
+            "barcode_normalized": normalize_barcode(variant_data.get('barcode')), # ADDED
             "inventory_item_id": variant_data['inventory_item_id'],
             "inventory_quantity": variant_data['inventory_quantity'],
             "created_at": variant_data['created_at'],
@@ -49,7 +56,15 @@ def create_or_update_product_from_webhook(db: Session, store_id: int, product_da
     if variants_list:
         upsert_batch(db, models.ProductVariant, variants_list, ['id'])
     
+    db.flush()
+
+    # After upserting, process group memberships
+    variants_to_update = db.query(models.ProductVariant).filter(models.ProductVariant.id.in_(variant_ids_to_process)).all()
+    for variant in variants_to_update:
+        update_variant_group_membership(db, variant)
+
     db.commit()
+
 
 def update_inventory_details(db: Session, inventory_data: List[Dict[str, Any]]):
     """
@@ -76,11 +91,14 @@ def update_inventory_details(db: Session, inventory_data: List[Dict[str, Any]]):
     db.commit()
     print("Finished enriching variant data.")
 
+
 def create_or_update_products(db: Session, products_data: List[Dict[str, Any]], store_id: int):
     """
     Takes a list of product and variant data from the Shopify service and upserts them.
+    MODIFIED: Also updates barcode group membership.
     """
     all_products, all_variants, all_inventory_levels, all_locations = [], [], [], []
+    variant_ids_to_process = []
     
     for item in products_data:
         product = item['product']
@@ -96,13 +114,15 @@ def create_or_update_products(db: Session, products_data: List[Dict[str, Any]], 
         })
 
         for variant in item['variants']:
+            variant_ids_to_process.append(variant.legacy_resource_id)
             inv_item = variant.inventory_item
             all_variants.append({
                 "id": variant.legacy_resource_id, "shopify_gid": variant.id, 
                 "product_id": product.legacy_resource_id, "title": variant.title, 
                 "price": variant.price, "sku": variant.sku, "position": variant.position, 
                 "inventory_policy": variant.inventory_policy, 
-                "compare_at_price": variant.compare_at_price, "barcode": variant.barcode, 
+                "compare_at_price": variant.compare_at_price, "barcode": variant.barcode,
+                "barcode_normalized": normalize_barcode(variant.barcode), # ADDED
                 "inventory_item_id": inv_item.legacy_resource_id, 
                 "inventory_quantity": variant.inventory_quantity, 
                 "created_at": variant.created_at, "updated_at": variant.updated_at,
@@ -127,7 +147,17 @@ def create_or_update_products(db: Session, products_data: List[Dict[str, Any]], 
     print("Upserting inventory levels from product sync...")
     upsert_batch(db, models.InventoryLevel, all_inventory_levels, ['inventory_item_id', 'location_id'])
     
+    db.flush()
+
+    # After upserting, process group memberships
+    print(f"Updating group memberships for {len(variant_ids_to_process)} variants...")
+    variants_to_update = db.query(models.ProductVariant).filter(models.ProductVariant.id.in_(variant_ids_to_process)).all()
+    for variant in variants_to_update:
+        update_variant_group_membership(db, variant)
+
     db.commit()
+    print("Finished updating group memberships.")
+
 
 def get_variants_by_store(db: Session, store_id: int):
     """

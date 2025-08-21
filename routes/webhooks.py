@@ -3,11 +3,13 @@
 import hmac
 import hashlib
 import base64
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, BackgroundTasks
 from sqlalchemy.orm import Session
 from database import get_db
 import schemas
 from crud import store as crud_store, webhooks as crud_webhook, order as crud_order
+# MODIFIED: Import the new sync logic
+from crud import sync as crud_sync
 from shopify_service import ShopifyService
 
 router = APIRouter(
@@ -17,7 +19,7 @@ router = APIRouter(
 )
 
 @router.post("/{store_id}", include_in_schema=False)
-async def receive_webhook(store_id: int, request: Request, db: Session = Depends(get_db)):
+async def receive_webhook(store_id: int, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
     Receives, verifies, and processes all webhooks from Shopify.
     """
@@ -56,8 +58,22 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
     elif topic == "products/delete":
         delete_data = schemas.DeletePayload.parse_obj(payload)
         crud_webhook.mark_product_as_deleted(db, product_id=delete_data.id)
+
+    # --- MODIFIED: This is the primary trigger for the new sync logic ---
     elif topic == "inventory_levels/update":
-        crud_webhook.process_inventory_level_update(db, payload)
+        inventory_item_id = payload.get("inventory_item_id")
+        location_id = payload.get("location_id")
+        if inventory_item_id and location_id:
+            # Run the golden loop in the background to avoid blocking the webhook response
+            background_tasks.add_task(
+                crud_sync.process_inventory_update_event,
+                db=db,
+                store_id=store_id,
+                inventory_item_id=inventory_item_id,
+                location_id=location_id
+            )
+        else:
+            print("Ignoring inventory_levels/update webhook with missing payload.")
 
     # --- Fulfillment Topics ---
     elif topic in ["fulfillments/create", "fulfillments/update"]:
@@ -74,7 +90,6 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
         order_id = service.get_order_id_from_fulfillment_order_gid(fulfillment_order_gid)
         
         if order_id:
-            # --- FIXED: Pass all arguments in the correct order ---
             crud_webhook.update_order_fulfillment_status_from_hold(db, order_id, fulfillment_order_gid, "ON_HOLD", reason)
             
     elif topic == "fulfillment_orders/hold_released":
@@ -85,7 +100,6 @@ async def receive_webhook(store_id: int, request: Request, db: Session = Depends
         order_id = service.get_order_id_from_fulfillment_order_gid(fulfillment_order_gid)
 
         if order_id:
-            # --- FIXED: Pass all arguments in the correct order ---
             crud_webhook.update_order_fulfillment_status_from_hold(db, order_id, fulfillment_order_gid, "RELEASED")
 
     elif topic == "fulfillment_orders/cancellation_request_accepted":

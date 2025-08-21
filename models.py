@@ -1,7 +1,7 @@
 # models.py
 
 from sqlalchemy import (Column, Integer, String, Float, DateTime, Text,
-                        ForeignKey, BIGINT, NUMERIC, BOOLEAN)
+                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -12,13 +12,53 @@ class Store(Base):
     name = Column(String(255), unique=True, index=True, nullable=False)
     shopify_url = Column(String(255), unique=True, nullable=False)
     api_token = Column(String(255), nullable=False)
-    api_secret = Column(String(255), nullable=True) 
+    api_secret = Column(String(255), nullable=True)
+    # ADDED: The primary location ID used for inventory synchronization for this store.
+    sync_location_id = Column(BIGINT, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
     products = relationship("Product", back_populates="store", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="store", cascade="all, delete-orphan")
     locations = relationship("Location", back_populates="store", cascade="all, delete-orphan")
     webhooks = relationship("Webhook", back_populates="store", cascade="all, delete-orphan")
+
+# --- NEW: Barcode-based Syncing Models ---
+
+class BarcodeGroup(Base):
+    __tablename__ = "barcode_groups"
+    id = Column(String(255), primary_key=True, index=True) # The normalized barcode
+    status = Column(String(50), default='active', nullable=False) # e.g., active, conflicted
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
+    members = relationship("GroupMembership", back_populates="group", cascade="all, delete-orphan")
+    committed_stock = relationship("CommittedStock", back_populates="group", cascade="all, delete-orphan")
+
+class GroupMembership(Base):
+    __tablename__ = "group_membership"
+    variant_id = Column(BIGINT, ForeignKey("product_variants.id"), primary_key=True)
+    group_id = Column(String(255), ForeignKey("barcode_groups.id"), primary_key=True)
+    variant = relationship("ProductVariant", back_populates="group_membership")
+    group = relationship("BarcodeGroup", back_populates="members")
+
+class PushLog(Base):
+    __tablename__ = "push_log"
+    id = Column(Integer, primary_key=True, index=True)
+    variant_id = Column(BIGINT, ForeignKey("product_variants.id"), nullable=False, index=True)
+    target_available = Column(Integer, nullable=False)
+    written_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    correlation_id = Column(String(255), index=True) # To trace a single sync operation
+
+class CommittedStock(Base):
+    __tablename__ = "committed_stock"
+    group_id = Column(String(255), ForeignKey("barcode_groups.id"), primary_key=True)
+    store_id = Column(Integer, ForeignKey("stores.id"), primary_key=True)
+    committed_units = Column(Integer, default=0, nullable=False)
+    open_orders_count = Column(Integer, default=0, nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    group = relationship("BarcodeGroup", back_populates="committed_stock")
+    store = relationship("Store")
+
+# --- END: New Models ---
 
 class Webhook(Base):
     __tablename__ = "webhooks"
@@ -75,6 +115,8 @@ class ProductVariant(Base):
     fulfillment_service = Column(String(255))
     inventory_management = Column(String(255))
     barcode = Column(String(255), index=True)
+    # ADDED: Normalized barcode for grouping.
+    barcode_normalized = Column(String(255), index=True, nullable=True)
     is_primary_variant = Column(BOOLEAN, default=False, nullable=False)
     grams = Column(BIGINT)
     weight = Column(NUMERIC(10, 2))
@@ -88,6 +130,8 @@ class ProductVariant(Base):
     product = relationship("Product", back_populates="variants")
     inventory_levels = relationship("InventoryLevel", back_populates="variant", cascade="all, delete-orphan")
     line_items = relationship("LineItem", back_populates="variant")
+    # ADDED: Relationship to group membership.
+    group_membership = relationship("GroupMembership", uselist=False, back_populates="variant", cascade="all, delete-orphan")
 
 class InventoryLevel(Base):
     __tablename__ = "inventory_levels"
@@ -164,7 +208,6 @@ class Fulfillment(Base):
     shipment_status = Column(String(50))
     location_id = Column(BIGINT)
     hold_status = Column(String(50), nullable=True)
-    # ADDED: A field to store the reason for the hold.
     hold_reason = Column(String(255), nullable=True)
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     order = relationship("Order", back_populates="fulfillments")
@@ -172,7 +215,7 @@ class Fulfillment(Base):
 
 class FulfillmentEvent(Base):
     __tablename__ = "fulfillment_events"
-    id = Column(BIGINT, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True)
     shopify_gid = Column(String(255), unique=True, nullable=False)
     fulfillment_id = Column(BIGINT, ForeignKey("fulfillments.id"), nullable=False)
     status = Column(String(50))
