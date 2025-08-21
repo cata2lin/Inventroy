@@ -11,7 +11,6 @@ import models
 from shopify_service import ShopifyService
 from product_service import ProductService
 
-
 # Transaction-scoped advisory lock for a barcode group (Postgres)
 LOCK_SQL = text("SELECT pg_try_advisory_xact_lock(hashtext(:k))")
 
@@ -75,6 +74,17 @@ def _set_available_abs_or_delta(
     return ps.adjust_inventory_quantity(inv_gid, loc_gid, delta)
 
 
+def _ensure_no_open_tx(db: Session):
+    """Commit any implicit (autobegun) transaction before starting an explicit one."""
+    try:
+        # SA 1.4/2.0: in_transaction() returns Transaction or None-ish
+        if db.in_transaction():
+            db.commit()
+    except Exception:
+        # If anything odd, roll back to clear the session state
+        db.rollback()
+
+
 def process_inventory_update_event(
     shop_domain: str,
     event_id: str,
@@ -90,9 +100,9 @@ def process_inventory_update_event(
       3) Auto-learn store.sync_location_id on first event
       4) Fetch truth for triggering variant
       5) Echo suppression
-      6) LOCK: delta vs snapshot → update pool; plan targets for members
+      6) TX-LOCK: delta vs snapshot → update pool; plan targets
       7) OUTSIDE LOCK: write absolute 'available', record PushLog, refresh snapshot
-    The function supports either a passed Session or a db_factory to create one.
+    Accepts either a Session or a db_factory to create one.
     """
     owns_session = False
     if db is None:
@@ -109,9 +119,10 @@ def process_inventory_update_event(
             print(f"[idempotent] {event_id} already processed")
             return
         db.add(models.DeliveredEvent(shop_domain=shop_domain, event_id=event_id))
-        db.commit()
+        db.commit()  # end TX
 
         # 2) Resolve variant → group → store
+        # (Queries autobegin a transaction; fine. We'll close it before starting explicit ones.)
         variant = (
             db.query(models.ProductVariant)
             .options(
@@ -135,8 +146,8 @@ def process_inventory_update_event(
 
         # 3) ✅ Auto-learn the sync location on the first inventory event for a store
         if not store.sync_location_id:
-            with db.begin():
-                store.sync_location_id = int(location_id)
+            store.sync_location_id = int(location_id)
+            db.commit()  # persist auto-learn immediately (no context manager needed)
             print(f"[init] store '{store.name}' sync_location_id set to {store.sync_location_id}")
         elif int(location_id) != int(store.sync_location_id):
             print(f"[skip] event not for store's sync location (event={location_id}, sync={store.sync_location_id})")
@@ -168,11 +179,15 @@ def process_inventory_update_event(
             print("[echo] drop")
             return
 
-        # 6) LOCKED SECTION — delta vs. snapshot, pool math, plan targets
+        # 6) TX-LOCK — delta vs. snapshot, pool math, plan targets
         planned_writes: List[Tuple[models.ProductVariant, int]] = []
 
-        with db.begin():  # lock is scoped to this transaction
+        # Make sure there is no open (autobegun) TX before we open our explicit one
+        _ensure_no_open_tx(db)
+        tx = db.begin()
+        try:
             if not _acquire_lock(db, group.id):
+                tx.rollback()
                 print(f"[lock-miss] group={group.id}")
                 return
 
@@ -206,6 +221,7 @@ def process_inventory_update_event(
                 )
 
             if delta == 0:
+                tx.commit()
                 print("[delta=0] nothing to propagate")
                 return
 
@@ -271,6 +287,11 @@ def process_inventory_update_event(
                 if int(m_snap.available or 0) != target:
                     planned_writes.append((member, target))
 
+            tx.commit()
+        except Exception:
+            tx.rollback()
+            raise
+
         # 7) OUTSIDE LOCK — perform writes; record push_log; refresh snapshot
         correlation_id = uuid.uuid4()
         for member, target in planned_writes:
@@ -284,7 +305,9 @@ def process_inventory_update_event(
                     location_id=m_store.sync_location_id,
                     target_available=int(target),
                 )
-                with db.begin():
+                _ensure_no_open_tx(db)
+                tx2 = db.begin()
+                try:
                     db.add(
                         models.PushLog(
                             variant_id=member.id,
@@ -306,6 +329,10 @@ def process_inventory_update_event(
                     if snap2:
                         snap2.available = int(target)
                         snap2.last_fetched_at = datetime.utcnow()
+                    tx2.commit()
+                except Exception:
+                    tx2.rollback()
+                    raise
             except Exception as e:
                 print(f"[write-fail] store={m_store.name} variant={member.id} target={target}: {e}")
 
