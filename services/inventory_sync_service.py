@@ -2,168 +2,294 @@
 
 import uuid
 from datetime import datetime, timedelta
+from typing import List, Tuple, Optional
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, text
+from sqlalchemy import text
 
 import models
 from shopify_service import ShopifyService
 from product_service import ProductService
 
+LOCK_SQL = text("SELECT pg_try_advisory_xact_lock(hashtext(:k))")
+
+
 def _acquire_lock(db: Session, group_id: str) -> bool:
-    """
-    Tries to acquire a session-level advisory lock for a given group_id.
-    Uses a hashed integer representation of the string for the lock key.
-    Returns True if the lock was acquired, False otherwise.
-    """
+    """Transaction-level advisory lock for a barcode group."""
     try:
-        # Postgres advisory locks work with integers. We'll use a hashed value.
-        lock_id = func.hashtext(group_id)
-        result = db.execute(text(f"SELECT pg_try_advisory_xact_lock({lock_id})")).scalar()
-        return result
+        return bool(db.execute(LOCK_SQL, {"k": group_id}).scalar())
     except Exception as e:
-        print(f"Error acquiring advisory lock for group {group_id}: {e}")
+        print(f"[lock] failed group={group_id}: {e}")
         return False
 
-def process_inventory_update_event(db: Session, shop_domain: str, event_id: str, inventory_item_id: int, location_id: int):
+
+def _is_recent_echo(db: Session, variant_id: int, current_available: int, window_s: int = 60) -> bool:
+    """Drop events that are echoes of our own recent writes."""
+    since = datetime.utcnow() - timedelta(seconds=window_s)
+    row = (
+        db.query(models.PushLog)
+        .filter(models.PushLog.variant_id == variant_id, models.PushLog.written_at >= since)
+        .order_by(models.PushLog.written_at.desc())
+        .first()
+    )
+    return bool(row and int(row.target_available) == int(current_available))
+
+
+def _set_available_abs_or_delta(
+    db: Session,
+    store_url: str,
+    token: str,
+    inventory_item_id: int,
+    location_id: int,
+    target_available: int,
+):
     """
-    The "Golden Sync Loop" for processing an inventory level update, using a delta-based approach.
+    Prefer absolute setter (inventorySetQuantities). If not implemented in ProductService,
+    compute a fresh delta and call adjust_inventory_quantity as a safe fallback.
     """
-    # 1. Idempotency Check
-    if db.query(models.DeliveredEvent).filter_by(shop_domain=shop_domain, event_id=event_id).first():
-        print(f"Event {event_id} already processed. Skipping.")
-        return
-    db.add(models.DeliveredEvent(shop_domain=shop_domain, event_id=event_id))
-    db.commit()
+    ps = ProductService(store_url=store_url, token=token)
 
-    print(f"--- Golden Loop triggered for item {inventory_item_id} from {shop_domain} ---")
+    inv_gid = f"gid://shopify/InventoryItem/{inventory_item_id}"
+    loc_gid = f"gid://shopify/Location/{location_id}"
 
-    # 2. Resolve Variant & Group
-    variant = db.query(models.ProductVariant).options(
-        joinedload(models.ProductVariant.product).joinedload(models.Product.store),
-        joinedload(models.ProductVariant.group_membership).joinedload(models.GroupMembership.group)
-    ).filter(models.ProductVariant.inventory_item_id == inventory_item_id).first()
+    if hasattr(ps, "set_inventory_available"):
+        # Absolute set (best)
+        return ps.set_inventory_available(inv_gid, loc_gid, int(target_available))
 
-    if not variant or not variant.group_membership or not variant.group_membership.group:
-        print(f"Variant for item {inventory_item_id} not found or has no barcode group. Exiting sync.")
-        return
+    # Fallback: compute delta against live truth and adjust
+    svc = ShopifyService(store_url=store_url, token=token)
+    data = svc.get_inventory_levels_for_items([inventory_item_id]) or []
+    lvl = next((it for it in data if int(it["id"]) == int(inventory_item_id) and int(it["location_id"]) == int(location_id)), None)
+    if not lvl:
+        raise RuntimeError("Could not fetch current available for delta write fallback")
+    current = int(lvl["available"])
+    delta = int(target_available) - current
+    if delta == 0:
+        return None
+    return ps.adjust_inventory_quantity(inv_gid, loc_gid, delta)
 
-    group = variant.group_membership.group
-    origin_store = variant.product.store
 
-    if not origin_store.enabled:
-        print(f"Store '{origin_store.name}' is disabled. Exiting sync.")
-        return
+def process_inventory_update_event(
+    shop_domain: str,
+    event_id: str,
+    inventory_item_id: int,
+    location_id: int,
+    db_factory=None,
+    db: Optional[Session] = None,
+):
+    """
+    GOLDEN SYNC LOOP (resilient signature):
+    - If passed a Session, uses it.
+    - Else, creates one from db_factory (or imports SessionLocal on demand).
+    """
+    owns_session = False
+    if db is None:
+        if db_factory is None:
+            # late import to avoid cycles
+            from database import SessionLocal  # type: ignore
+            db_factory = SessionLocal
+        db = db_factory()
+        owns_session = True
 
-    if not origin_store.sync_location_id or location_id != origin_store.sync_location_id:
-        print(f"Inventory update is not for the designated sync location. Ignoring.")
-        return
-    
-    # 3. Read Truth for the triggering variant from Shopify
-    shopify_service = ShopifyService(store_url=origin_store.shopify_url, token=origin_store.api_token)
-    inventory_data = shopify_service.get_inventory_levels_for_items([inventory_item_id])
-    
-    if not inventory_data:
-        print(f"Could not fetch live inventory for item {inventory_item_id}. Aborting.")
-        return
-        
-    current_level = next((item for item in inventory_data if item['id'] == variant.inventory_item_id and item['location_id'] == origin_store.sync_location_id), None)
-    
-    if not current_level:
-        print(f"Live inventory data for item {inventory_item_id} at sync location not found. Aborting.")
-        return
-        
-    current_available = current_level['available']
-    
-    # 4. Echo Suppression
-    recent_push = db.query(models.PushLog).filter(
-        models.PushLog.variant_id == variant.id,
-        models.PushLog.written_at >= datetime.utcnow() - timedelta(seconds=60)
-    ).order_by(models.PushLog.written_at.desc()).first()
-
-    if recent_push and recent_push.target_available == current_available:
-        print(f"Echo detected. We recently pushed {current_available} to this variant. Ignoring.")
-        return
-
-    # 5. Per-group Lock & Delta Calculation
-    if not _acquire_lock(db, group.id):
-        print(f"Could not acquire lock for group {group.id}. Another process is running. Event will be retried or handled by reconciliation.")
-        return
-
-    # --- CRITICAL SECTION: LOGIC INSIDE THE LOCK ---
     try:
-        # Re-read last snapshot *inside* the lock
-        last_snapshot = db.query(models.InventoryLevel).filter_by(
-            inventory_item_id=variant.inventory_item_id,
-            location_id=origin_store.sync_location_id
-        ).first()
-        
-        last_known_available = last_snapshot.available if last_snapshot else 0
-        delta = current_available - last_known_available
-        
-        if delta == 0:
-            print("Delta is 0. No change in inventory. Releasing lock.")
+        # 1) Idempotency (record early so retries are harmless)
+        if db.query(models.DeliveredEvent).filter_by(shop_domain=shop_domain, event_id=event_id).first():
+            print(f"[idempotent] {event_id} already processed")
+            return
+        db.add(models.DeliveredEvent(shop_domain=shop_domain, event_id=event_id))
+        db.commit()
+
+        # 2) Resolve variant → group → store
+        variant = (
+            db.query(models.ProductVariant)
+            .options(
+                joinedload(models.ProductVariant.product).joinedload(models.Product.store),
+                joinedload(models.ProductVariant.group_membership).joinedload(models.GroupMembership.group),
+                joinedload(models.ProductVariant.inventory_levels),
+            )
+            .filter(models.ProductVariant.inventory_item_id == inventory_item_id)
+            .first()
+        )
+        if not variant or not variant.group_membership or not variant.group_membership.group:
+            print("[skip] unknown variant or no barcode group")
             return
 
-        # Update the snapshot for this variant to the new truth
-        if last_snapshot:
-            last_snapshot.available = current_available
-            last_snapshot.on_hand = current_level['on_hand']
-            last_snapshot.last_fetched_at = datetime.utcnow()
-        else:
-            db.add(models.InventoryLevel(
-                inventory_item_id=variant.inventory_item_id,
-                location_id=origin_store.sync_location_id,
-                available=current_available,
-                on_hand=current_level['on_hand']
-            ))
-        
-        # Update the group's total pool
-        group.pool_available += delta
-        db.commit()
+        group = variant.group_membership.group
+        store = variant.product.store
 
-        # 6. Propagate to all members
-        members = db.query(models.ProductVariant).options(
-            joinedload(models.ProductVariant.product).joinedload(models.Product.store),
-            joinedload(models.ProductVariant.inventory_levels)
-        ).join(models.GroupMembership).filter(models.GroupMembership.group_id == group.id).all()
+        if not store.enabled:
+            print(f"[skip] store disabled: {store.name}")
+            return
+        if not store.sync_location_id or int(location_id) != int(store.sync_location_id):
+            print("[skip] event not for store's sync location")
+            return
+        if getattr(variant, "tracked", True) is False:
+            print("[skip] variant untracked")
+            return
+        if group.status == "conflicted":
+            print("[skip] group is conflicted")
+            return
 
+        # 3) Read truth for the triggering variant (from Shopify)
+        s = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+        truth_rows = s.get_inventory_levels_for_items([inventory_item_id]) or []
+        current_level = next(
+            (it for it in truth_rows if int(it["id"]) == int(inventory_item_id) and int(it["location_id"]) == int(store.sync_location_id)),
+            None,
+        )
+        if not current_level:
+            print("[abort] live inventory at sync location not found")
+            return
+
+        current_available = int(current_level["available"])
+        current_on_hand = int(current_level.get("on_hand", current_available))
+
+        # 4) Echo suppression
+        if _is_recent_echo(db, variant.id, current_available):
+            print("[echo] drop")
+            return
+
+        # 5) LOCKED SECTION — delta vs. snapshot, pool math, plan targets
+        planned_writes: List[Tuple[models.ProductVariant, int]] = []
+
+        from sqlalchemy import select  # local import okay
+        with db.begin():  # lock is scoped to this transaction
+            if not _acquire_lock(db, group.id):
+                print(f"[lock-miss] group={group.id}")
+                return
+
+            # Reload snapshot for this variant inside the lock
+            snap = (
+                db.query(models.InventoryLevel)
+                .filter(
+                    models.InventoryLevel.inventory_item_id == variant.inventory_item_id,
+                    models.InventoryLevel.location_id == store.sync_location_id,
+                )
+                .with_for_update(read=True)
+                .first()
+            )
+            last_available = int(snap.available) if snap and snap.available is not None else 0
+            delta = current_available - last_available
+
+            # Update / insert snapshot for the origin variant
+            if snap:
+                snap.available = current_available
+                snap.on_hand = current_on_hand
+                snap.last_fetched_at = datetime.utcnow()
+            else:
+                db.add(
+                    models.InventoryLevel(
+                        inventory_item_id=variant.inventory_item_id,
+                        location_id=store.sync_location_id,
+                        available=current_available,
+                        on_hand=current_on_hand,
+                        last_fetched_at=datetime.utcnow(),
+                    )
+                )
+
+            if delta == 0:
+                print("[delta=0] nothing to propagate")
+                return
+
+            # Update pool
+            group.pool_available = int(group.pool_available) + int(delta)
+
+            # Compute targets for all members (refresh snapshot if missing/stale)
+            members = (
+                db.query(models.ProductVariant)
+                .options(
+                    joinedload(models.ProductVariant.product).joinedload(models.Product.store),
+                    joinedload(models.ProductVariant.inventory_levels),
+                )
+                .join(models.GroupMembership)
+                .filter(models.GroupMembership.group_id == group.id)
+                .all()
+            )
+
+            for member in members:
+                m_store = member.product.store
+                if not m_store.enabled or not m_store.sync_location_id:
+                    continue
+                if getattr(member, "tracked", True) is False:
+                    continue
+
+                m_snap = next(
+                    (lvl for lvl in member.inventory_levels if int(lvl.location_id) == int(m_store.sync_location_id)),
+                    None,
+                )
+                needs_refresh = (
+                    m_snap is None
+                    or m_snap.last_fetched_at is None
+                    or (datetime.utcnow() - m_snap.last_fetched_at).total_seconds() > 10
+                )
+                if needs_refresh:
+                    svc = ShopifyService(store_url=m_store.shopify_url, token=m_store.api_token)
+                    data = svc.get_inventory_levels_for_items([member.inventory_item_id]) or []
+                    lvl = next(
+                        (it for it in data if int(it["id"]) == int(member.inventory_item_id) and int(it["location_id"]) == int(m_store.sync_location_id)),
+                        None,
+                    )
+                    if not lvl:
+                        print(f"[warn] cannot fetch member truth store={m_store.name} variant={member.id}")
+                        continue
+                    if m_snap:
+                        m_snap.available = int(lvl["available"])
+                        m_snap.on_hand = int(lvl.get("on_hand", lvl["available"]))
+                        m_snap.last_fetched_at = datetime.utcnow()
+                    else:
+                        m_snap = models.InventoryLevel(
+                            inventory_item_id=member.inventory_item_id,
+                            location_id=m_store.sync_location_id,
+                            available=int(lvl["available"]),
+                            on_hand=int(lvl.get("on_hand", lvl["available"])),
+                            last_fetched_at=datetime.utcnow(),
+                        )
+                        db.add(m_snap)
+
+                # Clamp: 0 ≤ target ≤ on_hand, minus safety buffer
+                target = max(0, int(group.pool_available) - int(m_store.safety_buffer))
+                target = min(target, int(m_snap.on_hand or 0))
+
+                if int(m_snap.available or 0) != target:
+                    planned_writes.append((member, target))
+
+        # 6) OUTSIDE LOCK — perform writes; record push_log; refresh snapshot
         correlation_id = uuid.uuid4()
-
-        for member in members:
-            member_store = member.product.store
-            if not member_store.enabled or not member_store.sync_location_id:
-                continue
-
-            member_snapshot = next((lvl for lvl in member.inventory_levels if lvl.location_id == member_store.sync_location_id), None)
-            
-            if not member_snapshot:
-                print(f"Warning: No local snapshot for member {member.id}. Cannot calculate target.")
-                continue
-
-            target_available = max(0, group.pool_available - member_store.safety_buffer)
-            target_available = min(target_available, member_snapshot.on_hand)
-            
-            if member_snapshot.available != target_available:
-                delta = target_available - member_snapshot.available
-                
-                product_service = ProductService(store_url=member_store.shopify_url, token=member_store.api_token)
-                inventory_item_gid = f"gid://shopify/InventoryItem/{member.inventory_item_id}"
-                location_gid = f"gid://shopify/Location/{member_store.sync_location_id}"
-                
-                try:
-                    product_service.adjust_inventory_quantity(inventory_item_gid, location_gid, delta)
-                    db.add(models.PushLog(
-                        variant_id=member.id,
-                        target_available=target_available,
-                        correlation_id=correlation_id,
-                        write_source='sync'
-                    ))
-                    member_snapshot.available = target_available # Update local state post-write
-                except Exception as e:
-                    print(f"FAILED to write to Shopify for variant {member.id}: {e}")
-        
-        db.commit()
+        for member, target in planned_writes:
+            m_store = member.product.store
+            try:
+                _set_available_abs_or_delta(
+                    db=db,
+                    store_url=m_store.shopify_url,
+                    token=m_store.api_token,
+                    inventory_item_id=member.inventory_item_id,
+                    location_id=m_store.sync_location_id,
+                    target_available=int(target),
+                )
+                with db.begin():
+                    db.add(
+                        models.PushLog(
+                            variant_id=member.id,
+                            target_available=int(target),
+                            correlation_id=str(correlation_id),
+                            write_source="sync",
+                            written_at=datetime.utcnow(),
+                        )
+                    )
+                    # keep our snapshot in sync right away
+                    snap = (
+                        db.query(models.InventoryLevel)
+                        .filter(
+                            models.InventoryLevel.inventory_item_id == member.inventory_item_id,
+                            models.InventoryLevel.location_id == m_store.sync_location_id,
+                        )
+                        .first()
+                    )
+                    if snap:
+                        snap.available = int(target)
+                        snap.last_fetched_at = datetime.utcnow()
+            except Exception as e:
+                print(f"[write-fail] store={m_store.name} variant={member.id} target={target}: {e}")
 
     finally:
-        # The advisory lock is released automatically when the transaction commits/rolls back.
-        print(f"Golden Loop finished for group '{group.id}'. Lock released.")
+        if owns_session:
+            db.close()
