@@ -6,6 +6,10 @@ from shopify_service import ShopifyService
 from crud import store as crud_store, order as crud_order, product as crud_product
 
 def run_full_order_sync(db: Session, store_id: int, task_id: str, start_date: str = None, end_date: str = None):
+    """
+    Background task to sync all orders for a single store.
+    MODIFIED: Fetches its own store object.
+    """
     store = crud_store.get_store(db, store_id=store_id)
     if not store:
         sync_tracker.fail_task(task_id, f"Store with ID {store_id} not found.")
@@ -33,6 +37,10 @@ def run_full_order_sync(db: Session, store_id: int, task_id: str, start_date: st
         sync_tracker.fail_task(task_id, f"An error occurred: {str(e)}")
 
 def run_full_product_sync(db: Session, store_id: int, task_id: str):
+    """
+    Background task to sync all products for a single store.
+    MODIFIED: Fetches its own store object.
+    """
     store = crud_store.get_store(db, store_id=store_id)
     if not store:
         sync_tracker.fail_task(task_id, f"Store with ID {store_id} not found.")
@@ -59,10 +67,18 @@ def run_full_product_sync(db: Session, store_id: int, task_id: str):
     except Exception as e:
         sync_tracker.fail_task(task_id, f"An error occurred: {str(e)}")
 
-def run_sync_in_background(target_function, db: Session, **kwargs):
+def run_sync_in_background(target_function, db_session_factory, **kwargs):
+    """
+    A wrapper that handles session management for any background task.
+    """
+    db = db_session_factory()
     try:
         target_function(db=db, **kwargs)
     except Exception as e:
         task_id = kwargs.get("task_id")
         if task_id:
-            sync_tracker.fail_task(task_id, f"A critical error occurred: {str(e)}")
+            sync_tracker.fail_task(task_id, f"A critical background error occurred: {str(e)}")
+        # It's important to log this error to your server logs as well
+        print(f"CRITICAL BACKGROUND ERROR in task {task_id}: {e}")
+    finally:
+        db.close()
