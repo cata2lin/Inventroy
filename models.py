@@ -137,7 +137,7 @@ class ProductVariant(Base):
     created_at = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True))
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
-
+    cost = Column(NUMERIC(10, 2), nullable=True)
     product = relationship("Product", back_populates="variants")
     store = relationship("Store", back_populates="variants")
     inventory_levels = relationship("InventoryLevel", back_populates="variant", cascade="all, delete-orphan")
