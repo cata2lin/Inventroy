@@ -101,7 +101,6 @@ class ProductVariant(Base):
     id = Column(BIGINT, primary_key=True, index=True)
     shopify_gid = Column(String(255), unique=True, nullable=False)
     product_id = Column(BIGINT, ForeignKey("products.id"), nullable=False)
-    # --- MODIFIED: Added store_id directly to the variant for the composite key ---
     store_id = Column(Integer, ForeignKey("stores.id"), nullable=False, index=True)
     title = Column(String(255))
     price = Column(NUMERIC(10, 2))
@@ -130,11 +129,9 @@ class ProductVariant(Base):
     line_items = relationship("LineItem", back_populates="variant")
     group_membership = relationship("GroupMembership", uselist=False, back_populates="variant", cascade="all, delete-orphan")
 
-    # --- MODIFIED: Define the composite unique constraint in the model ---
     __table_args__ = (
         UniqueConstraint('sku', 'store_id', name='uq_product_variants_sku_store_id'),
     )
-
 
 class InventoryLevel(Base):
     __tablename__ = "inventory_levels"

@@ -110,7 +110,7 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
 
             if item.variant_id not in existing_variants:
                 variants_to_create.append({
-                    "id": item.variant_id, "product_id": item.product_id, "store_id": store_id, # ADDED
+                    "id": item.variant_id, "product_id": item.product_id, "store_id": store_id,
                     "title": item.title, "sku": item.sku,
                     "shopify_gid": f"gid://shopify/ProductVariant/{item.variant_id}"
                 })
