@@ -15,11 +15,9 @@ def update_committed_stock_for_order(db: Session, order: models.Order):
     Recalculates and updates the committed stock counts for all barcode groups
     affected by a given order.
     """
-    # This check ensures we only count stock for orders that are 'active'
     if order.cancelled_at or order.fulfillment_status in ['fulfilled', 'restocked', 'cancelled']:
         return
 
-    # Find all line items with variants that have a barcode group
     line_items = db.query(models.LineItem).options(
         joinedload(models.LineItem.variant).joinedload(models.ProductVariant.group_membership)
     ).filter(
@@ -27,7 +25,6 @@ def update_committed_stock_for_order(db: Session, order: models.Order):
         models.LineItem.variant_id.isnot(None)
     ).all()
 
-    # Group quantities by group_id
     group_deltas = {}
     for item in line_items:
         if item.variant and item.variant.group_membership:
@@ -36,7 +33,6 @@ def update_committed_stock_for_order(db: Session, order: models.Order):
                 group_deltas[group_id] = 0
             group_deltas[group_id] += item.quantity
 
-    # Upsert the deltas into the committed_stock table
     for group_id, qty in group_deltas.items():
         stmt = insert(models.CommittedStock).values(
             group_id=group_id,
@@ -56,7 +52,7 @@ def update_committed_stock_for_order(db: Session, order: models.Order):
 def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: schemas.ShopifyOrderWebhook):
     """
     Upserts a single order and its line items from a webhook payload.
-    MODIFIED: Creates placeholder products and variants to prevent foreign key errors.
+    MODIFIED: Creates placeholder products and variants, handling SKU conflicts.
     """
     financial_status_from_payload = order_data.financial_status
     fulfillment_status_from_payload = order_data.fulfillment_status
@@ -94,7 +90,6 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     }
     upsert_batch(db, models.Order, [order_dict], ['id'])
 
-    # --- FIX STARTS HERE: Ensure parent products/variants exist before creating line items ---
     products_to_create, variants_to_create = [], []
     required_variant_ids = {item.variant_id for item in order_data.line_items if item.variant_id}
     required_product_ids = {item.product_id for item in order_data.line_items if item.product_id}
@@ -115,6 +110,18 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
                 existing_products.add(item.product_id)
 
             if item.variant_id not in existing_variants:
+                # --- FIX STARTS HERE: Proactively handle unique SKU constraint for placeholders ---
+                if item.sku:
+                    existing_variant_with_sku = db.query(models.ProductVariant).filter(
+                        models.ProductVariant.sku == item.sku,
+                        models.ProductVariant.id != item.variant_id
+                    ).first()
+                    if existing_variant_with_sku:
+                        print(f"SKU '{item.sku}' on incoming order line item is already used by variant {existing_variant_with_sku.id}. Clearing old SKU.")
+                        existing_variant_with_sku.sku = None
+                        db.commit()
+                # --- FIX ENDS HERE ---
+                
                 variants_to_create.append({
                     "id": item.variant_id, "product_id": item.product_id, "title": item.title, "sku": item.sku,
                     "shopify_gid": f"gid://shopify/ProductVariant/{item.variant_id}"
@@ -125,7 +132,6 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
         upsert_batch(db, models.Product, products_to_create, ['id'])
     if variants_to_create:
         upsert_batch(db, models.ProductVariant, variants_to_create, ['id'])
-    # --- FIX ENDS HERE ---
 
     line_items_list = []
     for item in order_data.line_items:
