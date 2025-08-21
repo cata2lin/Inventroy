@@ -1,7 +1,8 @@
 # models.py
 
 from sqlalchemy import (Column, Integer, String, Float, DateTime, Text,
-                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index, UniqueConstraint)
+                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index, UniqueConstraint, CheckConstraint)
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -14,8 +15,12 @@ class Store(Base):
     api_token = Column(String(255), nullable=False)
     api_secret = Column(String(255), nullable=True) 
     sync_location_id = Column(BIGINT, nullable=True)
+    safety_buffer = Column(Integer, nullable=False, default=0)
+    continue_selling = Column(BOOLEAN, nullable=False, default=False)
+    enabled = Column(BOOLEAN, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
     products = relationship("Product", back_populates="store", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="store", cascade="all, delete-orphan")
     locations = relationship("Location", back_populates="store", cascade="all, delete-orphan")
@@ -25,26 +30,33 @@ class Store(Base):
 class BarcodeGroup(Base):
     __tablename__ = "barcode_groups"
     id = Column(String(255), primary_key=True, index=True)
-    status = Column(String(50), default='active', nullable=False)
+    status = Column(Text, CheckConstraint("status IN ('active', 'conflicted')"), nullable=False, default='active')
+    pool_available = Column(Integer, nullable=False, default=0)
+    last_reconciled_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
     members = relationship("GroupMembership", back_populates="group", cascade="all, delete-orphan")
     committed_stock = relationship("CommittedStock", back_populates="group", cascade="all, delete-orphan")
 
 class GroupMembership(Base):
     __tablename__ = "group_membership"
-    variant_id = Column(BIGINT, ForeignKey("product_variants.id"), primary_key=True)
+    variant_id = Column(BIGINT, ForeignKey("product_variants.id", ondelete="CASCADE"), primary_key=True)
     group_id = Column(String(255), ForeignKey("barcode_groups.id"), primary_key=True)
+    
     variant = relationship("ProductVariant", back_populates="group_membership")
     group = relationship("BarcodeGroup", back_populates="members")
+
+    __table_args__ = (UniqueConstraint('variant_id', name='uq_group_membership_store_variant'),)
 
 class PushLog(Base):
     __tablename__ = "push_log"
     id = Column(Integer, primary_key=True, index=True)
     variant_id = Column(BIGINT, ForeignKey("product_variants.id"), nullable=False, index=True)
     target_available = Column(Integer, nullable=False)
+    write_source = Column(Text)
+    correlation_id = Column(UUID(as_uuid=True))
     written_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
-    correlation_id = Column(String(255), index=True)
 
 class CommittedStock(Base):
     __tablename__ = "committed_stock"
@@ -53,6 +65,7 @@ class CommittedStock(Base):
     committed_units = Column(Integer, default=0, nullable=False)
     open_orders_count = Column(Integer, default=0, nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
     group = relationship("BarcodeGroup", back_populates="committed_stock")
     store = relationship("Store")
 
@@ -92,6 +105,7 @@ class Product(Base):
     tags = Column(Text)
     image_url = Column(String(2048))
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
+    
     store = relationship("Store", back_populates="products")
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
     line_items = relationship("LineItem", back_populates="product")
@@ -101,14 +115,15 @@ class ProductVariant(Base):
     id = Column(BIGINT, primary_key=True, index=True)
     shopify_gid = Column(String(255), unique=True, nullable=False)
     product_id = Column(BIGINT, ForeignKey("products.id"), nullable=False)
-    store_id = Column(Integer, ForeignKey("stores.id"), nullable=False, index=True)
+    store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(255))
     price = Column(NUMERIC(10, 2))
     sku = Column(String(255), index=True)
     position = Column(Integer)
     inventory_policy = Column(String(50))
     compare_at_price = Column(NUMERIC(10, 2))
-    cost = Column(NUMERIC(10, 2))
+    cost_per_item = Column(NUMERIC(18, 6), nullable=True)
+    tracked = Column(BOOLEAN, nullable=False, default=True)
     fulfillment_service = Column(String(255))
     inventory_management = Column(String(255))
     barcode = Column(String(255), index=True)
@@ -239,7 +254,6 @@ class StockMovement(Base):
     new_quantity = Column(Integer, nullable=False)
     reason = Column(String(255))
     source_info = Column(String(255))
-    # ADDED: A type to categorize the source of the change.
     source_type = Column(String(50), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -267,3 +281,9 @@ class RefundLineItem(Base):
     
     refund = relationship("Refund", back_populates="refund_line_items")
     line_item = relationship("LineItem")
+
+class DeliveredEvent(Base):
+    __tablename__ = "delivered_events"
+    shop_domain = Column(Text, primary_key=True)
+    event_id = Column(Text, primary_key=True)
+    received_at = Column(DateTime(timezone=True), server_default=func.now())

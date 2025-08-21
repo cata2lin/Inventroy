@@ -5,11 +5,10 @@ import hashlib
 import base64
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, BackgroundTasks
 from sqlalchemy.orm import Session
-from database import get_db
+from database import get_db, SessionLocal
 import schemas
-from crud import store as crud_store, webhooks as crud_webhook, order as crud_order
-# MODIFIED: Import the new sync logic
-from crud import sync as crud_sync
+from crud import store as crud_store, webhooks as crud_webhook, order as crud_order, product as crud_product
+from services import inventory_sync_service, committed_projector
 from shopify_service import ShopifyService
 
 router = APIRouter(
@@ -40,77 +39,65 @@ async def receive_webhook(store_id: int, request: Request, background_tasks: Bac
         raise HTTPException(status_code=401, detail=f"HMAC verification failed: {e}")
 
     topic = request.headers.get("x-shopify-topic")
+    event_id = request.headers.get("x-shopify-webhook-id")
     payload = await request.json()
     print(f"Received webhook for store {store_id} on topic: {topic}")
-
-    # --- Order Topics ---
-    if topic in ["orders/create", "orders/updated"]:
-        order_data = schemas.ShopifyOrderWebhook.parse_obj(payload)
-        crud_order.create_or_update_order_from_webhook(db, store.id, order_data)
-    elif topic == "orders/delete":
-        delete_data = schemas.DeletePayload.parse_obj(payload)
-        crud_webhook.delete_order_by_id(db, order_id=delete_data.id)
-
-    # --- Product & Inventory Topics ---
-    elif topic in ["products/create", "products/update"]:
-        product_data = schemas.ShopifyProductWebhook.parse_obj(payload)
-        crud_webhook.process_product_webhook(db, store.id, product_data)
-    elif topic == "products/delete":
-        delete_data = schemas.DeletePayload.parse_obj(payload)
-        crud_webhook.mark_product_as_deleted(db, product_id=delete_data.id)
-
-    # --- MODIFIED: This is the primary trigger for the new sync logic ---
-    elif topic == "inventory_levels/update":
-        inventory_item_id = payload.get("inventory_item_id")
-        location_id = payload.get("location_id")
-        if inventory_item_id and location_id:
-            # Run the golden loop in the background to avoid blocking the webhook response
-            background_tasks.add_task(
-                crud_sync.process_inventory_update_event,
-                db=db,
-                store_id=store_id,
-                inventory_item_id=inventory_item_id,
-                location_id=location_id
-            )
-        else:
-            print("Ignoring inventory_levels/update webhook with missing payload.")
-
-    # --- Fulfillment Topics ---
-    elif topic in ["fulfillments/create", "fulfillments/update"]:
-        fulfillment_data = schemas.ShopifyFulfillmentWebhook.parse_obj(payload)
-        crud_webhook.process_fulfillment_webhook(db, store.id, fulfillment_data)
     
-    # --- Fulfillment Hold Topics ---
-    elif topic == "fulfillment_orders/placed_on_hold":
-        webhook_data = schemas.FulfillmentOrderWebhook.parse_obj(payload)
-        fulfillment_order_gid = webhook_data.fulfillment_order.get("id")
-        reason = webhook_data.fulfillment_hold.reason_notes if webhook_data.fulfillment_hold else None
+    # --- Idempotency check happens within the service layer now ---
+
+    # --- Routing ---
+    db_session = SessionLocal()
+    try:
+        if topic == "app/uninstalled":
+            store.enabled = False
+            db.commit()
+            print(f"Store {store.name} has uninstalled the app. Writes have been disabled.")
+
+        elif topic in ["orders/create", "orders/updated", "orders/edited", "orders/cancelled", "orders/delete"]:
+            committed_projector.process_order_event(db_session, store_id, topic, payload)
         
-        service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
-        order_id = service.get_order_id_from_fulfillment_order_gid(fulfillment_order_gid)
+        elif topic in ["fulfillments/create", "fulfillments/update"]:
+            committed_projector.process_fulfillment_event(db_session, store_id, topic, payload)
         
-        if order_id:
-            crud_webhook.update_order_fulfillment_status_from_hold(db, order_id, fulfillment_order_gid, "ON_HOLD", reason)
+        elif topic == "refunds/create":
+            # Can also trigger committed projector if restocks are counted
+            pass
+        
+        elif topic in ["products/create", "products/update"]:
+            product_data = schemas.ShopifyProductWebhook.parse_obj(payload)
+            crud_product.create_or_update_product_from_webhook(db, store.id, product_data)
+
+        elif topic == "products/delete":
+            delete_data = schemas.DeletePayload.parse_obj(payload)
+            crud_webhook.mark_product_as_deleted(db, product_id=delete_data.id)
             
-    elif topic == "fulfillment_orders/hold_released":
-        webhook_data = schemas.FulfillmentOrderWebhook.parse_obj(payload)
-        fulfillment_order_gid = webhook_data.fulfillment_order.get("id")
+        elif topic == "inventory_levels/update":
+            inventory_item_id = payload.get("inventory_item_id")
+            location_id = payload.get("location_id")
+            if inventory_item_id and location_id:
+                background_tasks.add_task(
+                    inventory_sync_service.process_inventory_update_event,
+                    db=db_session,
+                    shop_domain=store.shopify_url,
+                    event_id=event_id,
+                    inventory_item_id=inventory_item_id,
+                    location_id=location_id
+                )
+        
+        elif topic == "inventory_items/update":
+             # This can be used to update cost/tracked status
+            pass
 
-        service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
-        order_id = service.get_order_id_from_fulfillment_order_gid(fulfillment_order_gid)
+        else:
+            print(f"Received unhandled webhook topic: {topic}")
 
-        if order_id:
-            crud_webhook.update_order_fulfillment_status_from_hold(db, order_id, fulfillment_order_gid, "RELEASED")
-
-    elif topic == "fulfillment_orders/cancellation_request_accepted":
-        print(f"Fulfillment cancellation for order related to {payload.get('fulfillment_order', {}).get('id')} was accepted.")
-
-    # --- Refund Topic ---
-    elif topic == "refunds/create":
-        refund_data = schemas.ShopifyRefundWebhook.parse_obj(payload)
-        crud_webhook.process_refund_webhook(db, store.id, refund_data)
-
-    else:
-        print(f"Received unhandled webhook topic: {topic}")
+    except Exception as e:
+        db_session.rollback()
+        raise HTTPException(status_code=500, detail=f"Error processing webhook: {e}")
+    finally:
+        # For non-background tasks, we close the session here.
+        # Background tasks manage their own session lifecycle.
+        if not background_tasks.tasks:
+            db_session.close()
 
     return Response(status_code=200, content="Webhook received.")
