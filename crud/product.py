@@ -38,7 +38,7 @@ def create_or_update_product_from_webhook(db: Session, store_id: int, product_da
         variants_list.append({
             "id": variant_data['id'],
             "product_id": product_data.id,
-            "store_id": store_id, # ADDED
+            "store_id": store_id,
             "title": variant_data['title'],
             "price": variant_data['price'],
             "sku": variant_data['sku'],
@@ -114,17 +114,26 @@ def create_or_update_products(db: Session, products_data: List[Dict[str, Any]], 
         for variant in item['variants']:
             variant_ids_to_process.append(variant.legacy_resource_id)
             inv_item = variant.inventory_item
+            
+            # --- FIX: Find the correct 'on_hand' quantity from the nested structure ---
+            on_hand_qty = None
+            if inv_item.inventory_levels:
+                primary_level = inv_item.inventory_levels[0] # Assume the first location is primary for sync
+                on_hand_qty_obj = next((q for q in primary_level.quantities if q['name'] == 'on_hand'), None)
+                if on_hand_qty_obj:
+                    on_hand_qty = on_hand_qty_obj['quantity']
+
             all_variants.append({
                 "id": variant.legacy_resource_id, "shopify_gid": variant.id, 
                 "product_id": product.legacy_resource_id,
-                "store_id": store_id, # ADDED
+                "store_id": store_id,
                 "title": variant.title, 
                 "price": variant.price, "sku": variant.sku, "position": variant.position, 
                 "inventory_policy": variant.inventory_policy, 
                 "compare_at_price": variant.compare_at_price, "barcode": variant.barcode, 
                 "barcode_normalized": normalize_barcode(variant.barcode),
                 "inventory_item_id": inv_item.legacy_resource_id, 
-                "inventory_quantity": variant.inventory_quantity, 
+                "inventory_quantity": on_hand_qty, # Use the correctly extracted on_hand value
                 "created_at": variant.created_at, "updated_at": variant.updated_at,
                 "cost": inv_item.unit_cost.amount if inv_item.unit_cost else None
             })
@@ -134,9 +143,9 @@ def create_or_update_products(db: Session, products_data: List[Dict[str, Any]], 
                 all_locations.append({"id": loc.legacy_resource_id, "name": loc.name, "store_id": store_id})
                 
                 available_qty = next((q['quantity'] for q in level.quantities if q['name'] == 'available'), None)
-                on_hand_qty = next((q['quantity'] for q in level.quantities if q['name'] == 'on_hand'), None)
+                on_hand_level_qty = next((q['quantity'] for q in level.quantities if q['name'] == 'on_hand'), None)
                 
-                all_inventory_levels.append({"inventory_item_id": inv_item.legacy_resource_id, "location_id": loc.legacy_resource_id, "available": available_qty, "on_hand": on_hand_qty, "updated_at": level.updated_at})
+                all_inventory_levels.append({"inventory_item_id": inv_item.legacy_resource_id, "location_id": loc.legacy_resource_id, "available": available_qty, "on_hand": on_hand_level_qty, "updated_at": level.updated_at})
     
     print("Upserting locations from product sync...")
     upsert_batch(db, models.Location, all_locations, ['id'])

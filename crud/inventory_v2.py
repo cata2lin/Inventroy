@@ -10,7 +10,6 @@ def get_product_details_by_barcode(db: Session, barcode: str):
     """
     Gathers comprehensive details for a barcode group for the details modal.
     """
-    # 1. Get all variant SKUs in this barcode group
     variants_in_group = db.query(models.ProductVariant.sku).filter(
         models.ProductVariant.barcode_normalized == barcode
     ).all()
@@ -20,30 +19,27 @@ def get_product_details_by_barcode(db: Session, barcode: str):
     
     skus_in_group = [sku[0] for sku in variants_in_group if sku[0]]
 
-    # 2. Get Committed Orders (open orders containing these SKUs)
     committed_orders = db.query(models.Order, models.LineItem.quantity, models.Store.shopify_url).join(
         models.LineItem, models.Order.id == models.LineItem.order_id
     ).join(
         models.Store, models.Order.store_id == models.Store.id
     ).filter(
         models.LineItem.sku.in_(skus_in_group),
-        models.Order.fulfillment_status.in_(['unfulfilled', 'partially_fulfilled', 'scheduled']),
+        models.Order.fulfillment_status.in_(['unfulfilled', 'partially_fulfilled', 'scheduled', 'on_hold']),
         models.Order.cancelled_at.is_(None)
     ).order_by(models.Order.created_at.desc()).all()
 
-    # 3. Get All Orders (historical)
     all_orders = db.query(models.Order, models.LineItem.quantity, models.Store.shopify_url).join(
         models.LineItem, models.Order.id == models.LineItem.order_id
     ).join(
         models.Store, models.Order.store_id == models.Store.id
     ).filter(
         models.LineItem.sku.in_(skus_in_group)
-    ).order_by(models.Order.created_at.desc()).limit(100).all() # Limit for performance
+    ).order_by(models.Order.created_at.desc()).limit(100).all()
 
-    # 4. Get Stock Movement History
     stock_movements = db.query(models.StockMovement).filter(
         models.StockMovement.product_sku.in_(skus_in_group)
-    ).order_by(models.StockMovement.created_at.desc()).limit(100).all() # Limit for performance
+    ).order_by(models.StockMovement.created_at.desc()).limit(100).all()
 
     return {
         "committed_orders": [{**order.__dict__, "quantity": qty, "shopify_url": url} for order, qty, url in committed_orders],
@@ -72,11 +68,12 @@ def get_inventory_report(
     Fetches a comprehensively filtered, sorted, and paginated inventory report,
     supporting both individual and barcode-grouped views with accurate metrics for both.
     """
+    # --- FIX: Added 'on_hold' to the list of statuses considered as "committed" ---
     committed_sq = db.query(
         models.LineItem.sku,
         func.sum(models.LineItem.quantity).label("committed")
     ).join(models.Order).filter(
-        models.Order.fulfillment_status.in_(['unfulfilled', 'partially_fulfilled', 'scheduled']),
+        models.Order.fulfillment_status.in_(['unfulfilled', 'partially_fulfilled', 'scheduled', 'on_hold']),
         models.Order.cancelled_at.is_(None)
     ).group_by(models.LineItem.sku).subquery('committed_sq')
 
@@ -93,7 +90,6 @@ def get_inventory_report(
         committed_sq, models.ProductVariant.sku == committed_sq.c.sku
     )
 
-    # --- FILTERING ---
     if store_ids:
         base_query = base_query.filter(models.Product.store_id.in_(store_ids))
     if search:
