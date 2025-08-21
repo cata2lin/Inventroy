@@ -1,7 +1,7 @@
 # services/inventory_sync_service.py
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Tuple, Optional
 
 from sqlalchemy.orm import Session, joinedload
@@ -10,6 +10,15 @@ from sqlalchemy import text
 import models
 from shopify_service import ShopifyService
 from product_service import ProductService
+
+# ---------- time helpers (UTC-aware) ----------
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+def _ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 # Transaction-scoped advisory lock for a barcode group (Postgres)
 LOCK_SQL = text("SELECT pg_try_advisory_xact_lock(hashtext(:k))")
@@ -28,7 +37,7 @@ def _is_recent_echo(db: Session, variant_id: int, current_available: int, window
     """
     Echo suppression: if we just wrote 'current_available' to this variant within the window, drop the event.
     """
-    since = datetime.utcnow() - timedelta(seconds=window_s)
+    since = _utcnow() - timedelta(seconds=window_s)
     row = (
         db.query(models.PushLog)
         .filter(models.PushLog.variant_id == variant_id, models.PushLog.written_at >= since)
@@ -77,11 +86,9 @@ def _set_available_abs_or_delta(
 def _ensure_no_open_tx(db: Session):
     """Commit any implicit (autobegun) transaction before starting an explicit one."""
     try:
-        # SA 1.4/2.0: in_transaction() returns Transaction or None-ish
         if db.in_transaction():
             db.commit()
     except Exception:
-        # If anything odd, roll back to clear the session state
         db.rollback()
 
 
@@ -107,7 +114,6 @@ def process_inventory_update_event(
     owns_session = False
     if db is None:
         if db_factory is None:
-            # late import to avoid cycles if needed
             from database import SessionLocal  # type: ignore
             db_factory = SessionLocal
         db = db_factory()
@@ -122,7 +128,6 @@ def process_inventory_update_event(
         db.commit()  # end TX
 
         # 2) Resolve variant → group → store
-        # (Queries autobegin a transaction; fine. We'll close it before starting explicit ones.)
         variant = (
             db.query(models.ProductVariant)
             .options(
@@ -147,7 +152,7 @@ def process_inventory_update_event(
         # 3) ✅ Auto-learn the sync location on the first inventory event for a store
         if not store.sync_location_id:
             store.sync_location_id = int(location_id)
-            db.commit()  # persist auto-learn immediately (no context manager needed)
+            db.commit()  # persist auto-learn immediately
             print(f"[init] store '{store.name}' sync_location_id set to {store.sync_location_id}")
         elif int(location_id) != int(store.sync_location_id):
             print(f"[skip] event not for store's sync location (event={location_id}, sync={store.sync_location_id})")
@@ -182,7 +187,6 @@ def process_inventory_update_event(
         # 6) TX-LOCK — delta vs. snapshot, pool math, plan targets
         planned_writes: List[Tuple[models.ProductVariant, int]] = []
 
-        # Make sure there is no open (autobegun) TX before we open our explicit one
         _ensure_no_open_tx(db)
         tx = db.begin()
         try:
@@ -205,10 +209,11 @@ def process_inventory_update_event(
             delta = current_available - last_available
 
             # Update / insert snapshot for the origin variant
+            now = _utcnow()
             if snap:
                 snap.available = current_available
                 snap.on_hand = current_on_hand
-                snap.last_fetched_at = datetime.utcnow()
+                snap.last_fetched_at = now
             else:
                 db.add(
                     models.InventoryLevel(
@@ -216,7 +221,7 @@ def process_inventory_update_event(
                         location_id=store.sync_location_id,
                         available=current_available,
                         on_hand=current_on_hand,
-                        last_fetched_at=datetime.utcnow(),
+                        last_fetched_at=now,
                     )
                 )
 
@@ -251,11 +256,15 @@ def process_inventory_update_event(
                     (lvl for lvl in member.inventory_levels if int(lvl.location_id) == int(m_store.sync_location_id)),
                     None,
                 )
+
+                # Normalize timestamp (handles legacy naive datetimes)
+                last_ts = _ensure_aware(m_snap.last_fetched_at) if m_snap else None
                 needs_refresh = (
                     m_snap is None
-                    or m_snap.last_fetched_at is None
-                    or (datetime.utcnow() - m_snap.last_fetched_at).total_seconds() > 10
+                    or last_ts is None
+                    or (_utcnow() - last_ts).total_seconds() > 10
                 )
+
                 if needs_refresh:
                     svc = ShopifyService(store_url=m_store.shopify_url, token=m_store.api_token)
                     data = svc.get_inventory_levels_for_items([member.inventory_item_id]) or []
@@ -266,17 +275,18 @@ def process_inventory_update_event(
                     if not lvl:
                         print(f"[warn] cannot fetch member truth store={m_store.name} variant={member.id}")
                         continue
+                    now2 = _utcnow()
                     if m_snap:
                         m_snap.available = int(lvl["available"])
                         m_snap.on_hand = int(lvl.get("on_hand", lvl["available"]))
-                        m_snap.last_fetched_at = datetime.utcnow()
+                        m_snap.last_fetched_at = now2
                     else:
                         m_snap = models.InventoryLevel(
                             inventory_item_id=member.inventory_item_id,
                             location_id=m_store.sync_location_id,
                             available=int(lvl["available"]),
                             on_hand=int(lvl.get("on_hand", lvl["available"])),
-                            last_fetched_at=datetime.utcnow(),
+                            last_fetched_at=now2,
                         )
                         db.add(m_snap)
 
@@ -314,7 +324,7 @@ def process_inventory_update_event(
                             target_available=int(target),
                             correlation_id=str(correlation_id),
                             write_source="sync",
-                            written_at=datetime.utcnow(),
+                            written_at=_utcnow(),
                         )
                     )
                     # keep our snapshot in sync right away
@@ -328,7 +338,7 @@ def process_inventory_update_event(
                     )
                     if snap2:
                         snap2.available = int(target)
-                        snap2.last_fetched_at = datetime.utcnow()
+                        snap2.last_fetched_at = _utcnow()
                     tx2.commit()
                 except Exception:
                     tx2.rollback()
