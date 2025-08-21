@@ -68,14 +68,15 @@ def get_inventory_report(
     Fetches a comprehensively filtered, sorted, and paginated inventory report,
     supporting both individual and barcode-grouped views with accurate metrics for both.
     """
-    # --- FIX: Added 'on_hold' to the list of statuses considered as "committed" ---
+    # --- FIX: The subquery now groups by store_id as well as sku ---
     committed_sq = db.query(
         models.LineItem.sku,
+        models.Order.store_id, # Add store_id to the selection
         func.sum(models.LineItem.quantity).label("committed")
     ).join(models.Order).filter(
         models.Order.fulfillment_status.in_(['unfulfilled', 'partially_fulfilled', 'scheduled', 'on_hold']),
         models.Order.cancelled_at.is_(None)
-    ).group_by(models.LineItem.sku).subquery('committed_sq')
+    ).group_by(models.LineItem.sku, models.Order.store_id).subquery('committed_sq') # Group by both
 
     base_query = db.query(
         models.ProductVariant,
@@ -87,7 +88,10 @@ def get_inventory_report(
     ).join(
         models.Store, models.Product.store_id == models.Store.id
     ).outerjoin(
-        committed_sq, models.ProductVariant.sku == committed_sq.c.sku
+        # --- FIX: The join now uses both sku and store_id to get the correct committed value ---
+        committed_sq, 
+        (models.ProductVariant.sku == committed_sq.c.sku) & 
+        (models.Product.store_id == committed_sq.c.store_id)
     )
 
     if store_ids:
