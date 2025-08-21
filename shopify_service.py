@@ -76,7 +76,7 @@ GET_ALL_ORDERS_QUERY = f"""
 {FULFILLMENT_EVENT_FRAGMENT}
 {FULFILLMENT_FRAGMENT}
 query GetAllData($cursor: String, $query: String) {{
-  orders(first: 5, after: $cursor, sortKey: UPDATED_AT, reverse: false, query: $query) {{
+  orders(first: 5, after: $cursor, sortKey: CREATED_AT, reverse: true, query: $query) {{
     pageInfo {{ hasNextPage endCursor }}
     edges {{
       node {{
@@ -131,7 +131,6 @@ query GetInventoryDetails($cursor: String) {
 }
 """
 
-# --- NEW: GraphQL Query to get inventory levels for specific items ---
 GET_INVENTORY_LEVELS_QUERY = """
 query getInventoryLevels($itemIds: [ID!]!) {
   inventoryItems(ids: $itemIds) {
@@ -167,7 +166,6 @@ class ShopifyService:
         self.headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": token}
         self.rest_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
         
-    # --- NEW: Method to get inventory levels for a list of items ---
     def get_inventory_levels_for_items(self, item_legacy_ids: List[int]) -> List[Dict[str, Any]]:
         """
         Fetches the current available and on_hand quantities for a list of inventory items.
@@ -176,7 +174,6 @@ class ShopifyService:
         if not item_legacy_ids:
             return []
             
-        # GraphQL IDs are required, so we construct them.
         item_gids = [f"gid://shopify/InventoryItem/{item_id}" for item_id in item_legacy_ids]
         
         try:
@@ -234,7 +231,6 @@ class ShopifyService:
             print(f"Could not resolve order ID for fulfillment order {fulfillment_order_gid}: {e}")
         return None
 
-    # --- Webhook Management Methods (REST API) ---
     def get_webhooks(self) -> List[Dict[str, Any]]:
         """Retrieves all webhooks for the store."""
         url = f"{self.rest_api_endpoint}/webhooks.json"
