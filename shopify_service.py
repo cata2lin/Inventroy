@@ -167,10 +167,6 @@ class ShopifyService:
         self.rest_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
         
     def get_inventory_levels_for_items(self, item_legacy_ids: List[int]) -> List[Dict[str, Any]]:
-        """
-        Fetches the current available and on_hand quantities for a list of inventory items.
-        Returns a flattened list of inventory level data.
-        """
         if not item_legacy_ids:
             return []
             
@@ -210,9 +206,6 @@ class ShopifyService:
             return []
 
     def get_order_id_from_fulfillment_order_gid(self, fulfillment_order_gid: str) -> Optional[int]:
-        """
-        Queries the GraphQL API to find the parent order's legacy ID from a fulfillment order GID.
-        """
         query = """
         query($id: ID!) {
           fulfillmentOrder(id: $id) {
@@ -232,14 +225,12 @@ class ShopifyService:
         return None
 
     def get_webhooks(self) -> List[Dict[str, Any]]:
-        """Retrieves all webhooks for the store."""
         url = f"{self.rest_api_endpoint}/webhooks.json"
         response = requests.get(url, headers=self.rest_headers)
         response.raise_for_status()
         return response.json().get("webhooks", [])
 
     def create_webhook(self, topic: str, address: str) -> Dict[str, Any]:
-        """Creates a new webhook subscription."""
         url = f"{self.rest_api_endpoint}/webhooks.json"
         payload = {"webhook": {"topic": topic, "address": address, "format": "json"}}
         response = requests.post(url, headers=self.rest_headers, json=payload)
@@ -247,7 +238,6 @@ class ShopifyService:
         return response.json().get("webhook")
 
     def delete_webhook(self, webhook_id: int):
-        """Deletes a webhook subscription."""
         url = f"{self.rest_api_endpoint}/webhooks/{webhook_id}.json"
         response = requests.delete(url, headers=self.rest_headers)
         response.raise_for_status()
@@ -258,20 +248,13 @@ class ShopifyService:
             params = {"status": "any"}
             if created_at_min: params["created_at_min"] = created_at_min
             if created_at_max: params["created_at_max"] = created_at_max
-            
             order_count_url = f"{self.rest_api_endpoint}/orders/count.json"
             product_count_url = f"{self.rest_api_endpoint}/products/count.json"
-            
             order_response = requests.get(order_count_url, headers=self.rest_headers, params=params, timeout=10)
             order_response.raise_for_status()
-            
             product_response = requests.get(product_count_url, headers=self.rest_headers, timeout=10)
             product_response.raise_for_status()
-
-            return {
-                "orders": order_response.json().get("count", 0),
-                "products": product_response.json().get("count", 0)
-            }
+            return { "orders": order_response.json().get("count", 0), "products": product_response.json().get("count", 0) }
         except requests.exceptions.RequestException as e:
             print(f"An error occurred while fetching counts via REST API: {e}")
             return {"orders": 0, "products": 0}
@@ -310,7 +293,6 @@ class ShopifyService:
     def get_all_orders_and_related_data(self, created_at_min: Optional[str] = None, created_at_max: Optional[str] = None) -> Generator[List[schemas.ShopifyOrder], None, None]:
         has_next_page = True
         cursor = None
-        
         query_parts = []
         if created_at_min: query_parts.append(f"created_at:>{created_at_min}")
         if created_at_max: query_parts.append(f"created_at:<{created_at_max}")
@@ -321,14 +303,18 @@ class ShopifyService:
             try:
                 variables = {"cursor": cursor, "query": query_string}
                 data = self._execute_query(GET_ALL_ORDERS_QUERY, variables)
+                
                 if not data or "orders" not in data:
                     print("Received no data or malformed orders data from API. Stopping.")
-                    return
+                    has_next_page = False
+                    continue
+
                 order_connection = data["orders"]
                 page_info = order_connection.get("pageInfo", {})
                 has_next_page = page_info.get("hasNextPage", False)
                 cursor = page_info.get("endCursor")
                 orders_on_page = []
+                
                 for order_node in self._flatten_edges(order_connection):
                     order_node["lineItems"] = self._flatten_edges(order_node.get("lineItems"))
                     for item in order_node["lineItems"]:
@@ -349,10 +335,15 @@ class ShopifyService:
                         if order_node.get(key):
                             order_node[key] = order_node[key]["shopMoney"]
                     orders_on_page.append(schemas.ShopifyOrder.parse_obj(order_node))
+                
                 yield orders_on_page
+
             except (ValueError, requests.exceptions.RequestException) as e:
-                print(f"An error occurred during order fetch: {e}. Stopping.")
-                return
+                print(f"An error occurred during order page fetch: {e}. Attempting to continue.")
+                # When an error occurs on one page, we will try to jump to the next
+                # This is a basic form of resilience. In a real-world scenario, you might have more sophisticated retries.
+                has_next_page = False # Stop if a page fails to prevent infinite loops on a failing cursor
+
         print("Finished fetching all order pages from Shopify.")
     
     def get_all_products_and_variants(self) -> Generator[List[Dict[str, Any]], None, None]:

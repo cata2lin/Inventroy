@@ -110,20 +110,17 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
                 existing_products.add(item.product_id)
 
             if item.variant_id not in existing_variants:
+                sku_to_add = item.sku
                 # --- FIX STARTS HERE: Proactively handle unique SKU constraint for placeholders ---
                 if item.sku:
-                    existing_variant_with_sku = db.query(models.ProductVariant).filter(
-                        models.ProductVariant.sku == item.sku,
-                        models.ProductVariant.id != item.variant_id
-                    ).first()
-                    if existing_variant_with_sku:
-                        print(f"SKU '{item.sku}' on incoming order line item is already used by variant {existing_variant_with_sku.id}. Clearing old SKU.")
-                        existing_variant_with_sku.sku = None
-                        db.commit()
+                    sku_exists = db.query(models.ProductVariant.id).filter(models.ProductVariant.sku == item.sku).first()
+                    if sku_exists:
+                        print(f"SKU '{item.sku}' for placeholder variant {item.variant_id} already exists in DB. Creating placeholder without SKU to avoid conflict.")
+                        sku_to_add = None # Set SKU to null to avoid the unique constraint violation
                 # --- FIX ENDS HERE ---
                 
                 variants_to_create.append({
-                    "id": item.variant_id, "product_id": item.product_id, "title": item.title, "sku": item.sku,
+                    "id": item.variant_id, "product_id": item.product_id, "title": item.title, "sku": sku_to_add,
                     "shopify_gid": f"gid://shopify/ProductVariant/{item.variant_id}"
                 })
                 existing_variants.add(item.variant_id)
