@@ -3,6 +3,7 @@
 import uuid
 from datetime import datetime, timedelta
 from typing import List, Tuple, Optional
+
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text
 
@@ -10,11 +11,13 @@ import models
 from shopify_service import ShopifyService
 from product_service import ProductService
 
+
+# Transaction-scoped advisory lock for a barcode group (Postgres)
 LOCK_SQL = text("SELECT pg_try_advisory_xact_lock(hashtext(:k))")
 
 
 def _acquire_lock(db: Session, group_id: str) -> bool:
-    """Transaction-level advisory lock for a barcode group."""
+    """Acquire a TX-level advisory lock for group_id; returns True if lock was obtained."""
     try:
         return bool(db.execute(LOCK_SQL, {"k": group_id}).scalar())
     except Exception as e:
@@ -23,7 +26,9 @@ def _acquire_lock(db: Session, group_id: str) -> bool:
 
 
 def _is_recent_echo(db: Session, variant_id: int, current_available: int, window_s: int = 60) -> bool:
-    """Drop events that are echoes of our own recent writes."""
+    """
+    Echo suppression: if we just wrote 'current_available' to this variant within the window, drop the event.
+    """
     since = datetime.utcnow() - timedelta(seconds=window_s)
     row = (
         db.query(models.PushLog)
@@ -43,8 +48,7 @@ def _set_available_abs_or_delta(
     target_available: int,
 ):
     """
-    Prefer absolute setter (inventorySetQuantities). If not implemented in ProductService,
-    compute a fresh delta and call adjust_inventory_quantity as a safe fallback.
+    Prefer absolute setter (inventorySetQuantities). If not available, compute a live delta and adjust.
     """
     ps = ProductService(store_url=store_url, token=token)
 
@@ -52,13 +56,16 @@ def _set_available_abs_or_delta(
     loc_gid = f"gid://shopify/Location/{location_id}"
 
     if hasattr(ps, "set_inventory_available"):
-        # Absolute set (best)
+        # Absolute set (best; avoids drift)
         return ps.set_inventory_available(inv_gid, loc_gid, int(target_available))
 
     # Fallback: compute delta against live truth and adjust
     svc = ShopifyService(store_url=store_url, token=token)
     data = svc.get_inventory_levels_for_items([inventory_item_id]) or []
-    lvl = next((it for it in data if int(it["id"]) == int(inventory_item_id) and int(it["location_id"]) == int(location_id)), None)
+    lvl = next(
+        (it for it in data if int(it["id"]) == int(inventory_item_id) and int(it["location_id"]) == int(location_id)),
+        None,
+    )
     if not lvl:
         raise RuntimeError("Could not fetch current available for delta write fallback")
     current = int(lvl["available"])
@@ -77,14 +84,20 @@ def process_inventory_update_event(
     db: Optional[Session] = None,
 ):
     """
-    GOLDEN SYNC LOOP (resilient signature):
-    - If passed a Session, uses it.
-    - Else, creates one from db_factory (or imports SessionLocal on demand).
+    GOLDEN SYNC LOOP (lock-safe, delta-based pool maintenance + absolute writes)
+      1) Idempotency
+      2) Resolve variant → group → store
+      3) Auto-learn store.sync_location_id on first event
+      4) Fetch truth for triggering variant
+      5) Echo suppression
+      6) LOCK: delta vs snapshot → update pool; plan targets for members
+      7) OUTSIDE LOCK: write absolute 'available', record PushLog, refresh snapshot
+    The function supports either a passed Session or a db_factory to create one.
     """
     owns_session = False
     if db is None:
         if db_factory is None:
-            # late import to avoid cycles
+            # late import to avoid cycles if needed
             from database import SessionLocal  # type: ignore
             db_factory = SessionLocal
         db = db_factory()
@@ -119,17 +132,24 @@ def process_inventory_update_event(
         if not store.enabled:
             print(f"[skip] store disabled: {store.name}")
             return
-        if not store.sync_location_id or int(location_id) != int(store.sync_location_id):
-            print("[skip] event not for store's sync location")
+
+        # 3) ✅ Auto-learn the sync location on the first inventory event for a store
+        if not store.sync_location_id:
+            with db.begin():
+                store.sync_location_id = int(location_id)
+            print(f"[init] store '{store.name}' sync_location_id set to {store.sync_location_id}")
+        elif int(location_id) != int(store.sync_location_id):
+            print(f"[skip] event not for store's sync location (event={location_id}, sync={store.sync_location_id})")
             return
+
         if getattr(variant, "tracked", True) is False:
             print("[skip] variant untracked")
             return
-        if group.status == "conflicted":
+        if getattr(group, "status", "active") == "conflicted":
             print("[skip] group is conflicted")
             return
 
-        # 3) Read truth for the triggering variant (from Shopify)
+        # 4) Read truth for the triggering variant (from Shopify)
         s = ShopifyService(store_url=store.shopify_url, token=store.api_token)
         truth_rows = s.get_inventory_levels_for_items([inventory_item_id]) or []
         current_level = next(
@@ -143,15 +163,14 @@ def process_inventory_update_event(
         current_available = int(current_level["available"])
         current_on_hand = int(current_level.get("on_hand", current_available))
 
-        # 4) Echo suppression
+        # 5) Echo suppression
         if _is_recent_echo(db, variant.id, current_available):
             print("[echo] drop")
             return
 
-        # 5) LOCKED SECTION — delta vs. snapshot, pool math, plan targets
+        # 6) LOCKED SECTION — delta vs. snapshot, pool math, plan targets
         planned_writes: List[Tuple[models.ProductVariant, int]] = []
 
-        from sqlalchemy import select  # local import okay
         with db.begin():  # lock is scoped to this transaction
             if not _acquire_lock(db, group.id):
                 print(f"[lock-miss] group={group.id}")
@@ -252,7 +271,7 @@ def process_inventory_update_event(
                 if int(m_snap.available or 0) != target:
                     planned_writes.append((member, target))
 
-        # 6) OUTSIDE LOCK — perform writes; record push_log; refresh snapshot
+        # 7) OUTSIDE LOCK — perform writes; record push_log; refresh snapshot
         correlation_id = uuid.uuid4()
         for member, target in planned_writes:
             m_store = member.product.store
@@ -276,7 +295,7 @@ def process_inventory_update_event(
                         )
                     )
                     # keep our snapshot in sync right away
-                    snap = (
+                    snap2 = (
                         db.query(models.InventoryLevel)
                         .filter(
                             models.InventoryLevel.inventory_item_id == member.inventory_item_id,
@@ -284,9 +303,9 @@ def process_inventory_update_event(
                         )
                         .first()
                     )
-                    if snap:
-                        snap.available = int(target)
-                        snap.last_fetched_at = datetime.utcnow()
+                    if snap2:
+                        snap2.available = int(target)
+                        snap2.last_fetched_at = datetime.utcnow()
             except Exception as e:
                 print(f"[write-fail] store={m_store.name} variant={member.id} target={target}: {e}")
 
