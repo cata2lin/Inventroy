@@ -31,6 +31,18 @@
         <span id="page-indicator">Page 1</span>
         <button id="next-button" class="secondary outline">Next &rarr;</button>
     </div>
+
+    <dialog id="details-modal">
+      <article>
+        <header>
+            <button class="close" aria-label="Close" data-target="details-modal"></button>
+            <strong id="modal-title">Product Details</strong>
+        </header>
+        <div id="modal-content" aria-busy="true">
+            <p>Loading details...</p>
+        </div>
+      </article>
+    </dialog>
 </div>
 {% endblock %}
 

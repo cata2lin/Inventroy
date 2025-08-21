@@ -239,6 +239,8 @@ class StockMovement(Base):
     new_quantity = Column(Integer, nullable=False)
     reason = Column(String(255))
     source_info = Column(String(255))
+    # ADDED: A type to categorize the source of the change.
+    source_type = Column(String(50), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Refund(Base):

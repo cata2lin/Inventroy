@@ -23,6 +23,13 @@ document.addEventListener('DOMContentLoaded', () => {
             next: document.getElementById('next-button'),
             indicator: document.getElementById('page-indicator'),
         },
+        // NEW: Modal elements
+        detailsModal: {
+            dialog: document.getElementById('details-modal'),
+            title: document.getElementById('modal-title'),
+            content: document.getElementById('modal-content'),
+            closeBtn: document.querySelector('#details-modal .close'),
+        }
     };
 
     // --- State Management ---
@@ -61,7 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         try {
-            const response = await fetch(API_ENDPOINTS.getInventoryReport(params));
+            const response = await fetch(`/api/v2/inventory/report/?${params.toString()}`);
             if (!response.ok) throw new Error('Failed to fetch inventory report.');
             const data = await response.json();
             
@@ -92,15 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const renderIndividualView = (inventory) => {
-        const headers = [
-            { key: 'image_url', label: 'Image', sortable: false }, { key: 'product_title', label: 'Product / Variant' },
-            { key: 'store_name', label: 'Store' }, { key: 'sku', label: 'SKU' }, { key: 'barcode', label: 'Barcode' },
-            { key: 'type', label: 'Type' }, { key: 'category', label: 'Category' },
-            { key: 'status', label: 'Status' }, { key: 'price', label: 'Price' }, { key: 'cost', label: 'Cost' },
-            { key: 'on_hand', label: 'On Hand' }, { key: 'committed', label: 'Committed' },
-            { key: 'available', label: 'Available' }, { key: 'retail_value', label: 'Retail Value' },
-            { key: 'inventory_value', label: 'Inv. Value' }
-        ];
+        const headers = [ { key: 'image_url', label: 'Image', sortable: false }, { key: 'product_title', label: 'Product / Variant' }, { key: 'store_name', label: 'Store' }, { key: 'sku', label: 'SKU' }, { key: 'barcode', label: 'Barcode' }, { key: 'type', label: 'Type' }, { key: 'category', label: 'Category' }, { key: 'status', label: 'Status' }, { key: 'price', label: 'Price' }, { key: 'cost', label: 'Cost' }, { key: 'on_hand', label: 'On Hand' }, { key: 'committed', label: 'Committed' }, { key: 'available', label: 'Available' }, { key: 'retail_value', label: 'Retail Value' }, { key: 'inventory_value', label: 'Inv. Value' } ];
         let tableHtml = '<div class="overflow-auto"><table><thead><tr>';
         headers.forEach(h => {
             const sortClass = state.sortBy === h.key ? `class="${state.sortOrder}"` : '';
@@ -115,7 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const retailValue = onHand * price;
             const invValue = onHand * cost;
             tableHtml += `
-                <tr>
+                <tr class="clickable-row" onclick="openDetailsModal('${item.barcode}', '${item.product_title}')">
                     <td><img src="${item.image_url || 'https://via.placeholder.com/40'}" alt="${item.product_title}" style="width: 40px; border-radius: 4px;"></td>
                     <td>${item.product_title}<br><small>${item.variant_title}</small></td>
                     <td>${item.store_name || ''}</td>
@@ -146,7 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
         inventory.forEach(group => {
             html += `
             <details class="grouped-item">
-                <summary>
+                <summary class="clickable-row" onclick="openDetailsModal('${group.barcode}', '${group.primary_title}')">
                     <div class="grid">
                         <img src="${group.primary_image_url || 'https://via.placeholder.com/60'}" alt="${group.primary_title}">
                         <div class="product-info">
@@ -178,6 +177,101 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.tableContainer.innerHTML = html;
     };
     
+    // --- NEW: Functions for the details modal ---
+    window.openDetailsModal = async (barcode, title) => {
+        if (!barcode) return;
+        elements.detailsModal.title.textContent = `Details for: ${title} (${barcode})`;
+        elements.detailsModal.content.setAttribute('aria-busy', 'true');
+        elements.detailsModal.content.innerHTML = '<p>Loading details...</p>';
+        elements.detailsModal.dialog.showModal();
+
+        try {
+            const response = await fetch(`/api/v2/inventory/product-details/${barcode}`);
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.detail || 'Failed to load details.');
+            }
+            const data = await response.json();
+            renderDetailsModal(data);
+        } catch (error) {
+            elements.detailsModal.content.innerHTML = `<p style="color: var(--pico-color-red-500);">${error.message}</p>`;
+        } finally {
+            elements.detailsModal.content.removeAttribute('aria-busy');
+        }
+    };
+
+    const renderDetailsModal = (data) => {
+        let html = '<div class="grid">';
+
+        // Committed Orders Section
+        html += `<article>
+                    <header><strong>Committed Orders (${data.committed_orders.length})</strong></header>
+                    <div class="overflow-auto" style="max-height: 200px;">
+                    <table>
+                        <thead><tr><th>Order</th><th>Date</th><th>Qty</th><th>Status</th><th>Action</th></tr></thead>
+                        <tbody>
+                            ${data.committed_orders.map(o => `
+                                <tr>
+                                    <td>${o.name}</td>
+                                    <td>${new Date(o.created_at).toLocaleDateString()}</td>
+                                    <td>${o.quantity}</td>
+                                    <td><span class="status-${(o.fulfillment_status || '').toLowerCase()}">${o.fulfillment_status}</span></td>
+                                    <td><a href="https://${o.shopify_url}/admin/orders/${o.id}" target="_blank" class="outline" role="button">View on Shopify</a></td>
+                                </tr>
+                            `).join('') || '<tr><td colspan="5">No committed orders.</td></tr>'}
+                        </tbody>
+                    </table>
+                    </div>
+                 </article>`;
+
+        // Stock Movements Section
+        html += `<article>
+                    <header><strong>Stock History (Last 100)</strong></header>
+                    <div class="overflow-auto" style="max-height: 200px;">
+                    <table>
+                        <thead><tr><th>Date</th><th>SKU</th><th>Change</th><th>New Qty</th><th>Reason</th></tr></thead>
+                        <tbody>
+                            ${data.stock_movements.map(m => `
+                                <tr>
+                                    <td>${new Date(m.created_at).toLocaleString()}</td>
+                                    <td>${m.product_sku}</td>
+                                    <td><strong>${m.change_quantity > 0 ? '+' : ''}${m.change_quantity}</strong></td>
+                                    <td>${m.new_quantity}</td>
+                                    <td><small>${m.reason || 'N/A'}<br>${m.source_info || ''}</small></td>
+                                </tr>
+                            `).join('') || '<tr><td colspan="5">No stock movements found.</td></tr>'}
+                        </tbody>
+                    </table>
+                    </div>
+                 </article>`;
+
+        html += '</div>'; // close grid
+        
+        // All Orders Section
+        html += `<article>
+                    <header><strong>Order History (Last 100)</strong></header>
+                    <div class="overflow-auto" style="max-height: 300px;">
+                    <table>
+                        <thead><tr><th>Order</th><th>Date</th><th>Qty</th><th>Financial Status</th><th>Fulfillment</th></tr></thead>
+                        <tbody>
+                            ${data.all_orders.map(o => `
+                                <tr>
+                                    <td>${o.name}</td>
+                                    <td>${new Date(o.created_at).toLocaleDateString()}</td>
+                                    <td>${o.quantity}</td>
+                                    <td><span class="status-${(o.financial_status || '').toLowerCase()}">${o.financial_status}</span></td>
+                                    <td><span class="status-${(o.fulfillment_status || '').toLowerCase()}">${o.fulfillment_status}</span></td>
+                                </tr>
+                            `).join('') || '<tr><td colspan="5">No historical orders found.</td></tr>'}
+                        </tbody>
+                    </table>
+                    </div>
+                 </article>`;
+
+        elements.detailsModal.content.innerHTML = html;
+    };
+
+
     const updatePagination = () => {
         const totalPages = Math.ceil(state.totalCount / 50);
         elements.pagination.indicator.textContent = `Page ${state.page} of ${totalPages > 0 ? totalPages : 1}`;
@@ -198,8 +292,9 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     
     window.setPrimaryVariant = async (barcode, variantId) => {
+        event.stopPropagation(); // prevent modal from opening
         try {
-            const response = await fetch(API_ENDPOINTS.setPrimaryVariant, {
+            const response = await fetch('/api/v2/inventory/set-primary-variant/', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ barcode, variant_id: variantId })
@@ -219,24 +314,11 @@ document.addEventListener('DOMContentLoaded', () => {
             sortBy: params.get('sortBy') || 'on_hand',
             sortOrder: params.get('sortOrder') || 'desc',
             view: params.get('view') || 'individual',
-            filters: {
-                search: params.get('search') || '',
-                store_ids: params.get('store_ids') || '',
-                product_type: params.get('product_type') || '',
-                category: params.get('category') || '',
-                status: params.get('status') || '',
-                min_retail: params.get('min_retail') || '',
-                max_retail: params.get('max_retail') || '',
-                min_inventory: params.get('min_inventory') || '',
-                max_inventory: params.get('max_inventory') || '',
-            }
+            filters: { search: params.get('search') || '', store_ids: params.get('store_ids') || '', product_type: params.get('product_type') || '', category: params.get('category') || '', status: params.get('status') || '', min_retail: params.get('min_retail') || '', max_retail: params.get('max_retail') || '', min_inventory: params.get('min_inventory') || '', max_inventory: params.get('max_inventory') || '', }
         };
 
         try {
-            const [filterResp, storeResp] = await Promise.all([
-                fetch(API_ENDPOINTS.getInventoryFilters),
-                fetch(API_ENDPOINTS.getStores)
-            ]);
+            const [filterResp, storeResp] = await Promise.all([ fetch('/api/v2/inventory/filters/'), fetch('/api/config/stores') ]);
             const filterData = await filterResp.json();
             const storeData = await storeResp.json();
             filterData.types.forEach(t => elements.filters.type.add(new Option(t, t)));
@@ -252,11 +334,7 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.filters.groupToggle.checked = state.view === 'grouped';
 
         const setupEventListeners = () => {
-            const filterMap = {
-                search: 'search', store: 'store_ids', type: 'product_type', category: 'category',
-                status: 'status', minRetail: 'min_retail', maxRetail: 'max_retail',
-                minInv: 'min_inventory', maxInv: 'max_inventory'
-            };
+            const filterMap = { search: 'search', store: 'store_ids', type: 'product_type', category: 'category', status: 'status', minRetail: 'min_retail', maxRetail: 'max_retail', minInv: 'min_inventory', maxInv: 'max_inventory' };
             for (const [elKey, filterKey] of Object.entries(filterMap)) {
                 elements.filters[elKey].addEventListener('input', () => {
                     state.filters[filterKey] = elements.filters[elKey].value;
@@ -274,8 +352,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 initialize();
             });
 
-            // MODIFIED: Added this block for the accordion behavior
-            elements.tableContainer.addEventListener('toggle', (event) => {
+            elements.tableContainer.addEventListener('click', (event) => {
                 if (event.target.tagName === 'DETAILS' && event.target.open) {
                     elements.tableContainer.querySelectorAll('details[open]').forEach((details) => {
                         if (details !== event.target) {
@@ -284,6 +361,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                 }
             }, true);
+            
+            // NEW: Close modal listener
+            elements.detailsModal.closeBtn.addEventListener('click', () => {
+                elements.detailsModal.dialog.close();
+            });
         };
         setupEventListeners();
         

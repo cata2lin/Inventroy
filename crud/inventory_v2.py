@@ -1,10 +1,55 @@
 # crud/inventory_v2.py
 
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session, aliased, joinedload
 from sqlalchemy import func, or_, desc, asc
 from typing import Optional, List
 
 import models
+
+def get_product_details_by_barcode(db: Session, barcode: str):
+    """
+    Gathers comprehensive details for a barcode group for the details modal.
+    """
+    # 1. Get all variant SKUs in this barcode group
+    variants_in_group = db.query(models.ProductVariant.sku).filter(
+        models.ProductVariant.barcode_normalized == barcode
+    ).all()
+    
+    if not variants_in_group:
+        return None
+    
+    skus_in_group = [sku[0] for sku in variants_in_group if sku[0]]
+
+    # 2. Get Committed Orders (open orders containing these SKUs)
+    committed_orders = db.query(models.Order, models.LineItem.quantity, models.Store.shopify_url).join(
+        models.LineItem, models.Order.id == models.LineItem.order_id
+    ).join(
+        models.Store, models.Order.store_id == models.Store.id
+    ).filter(
+        models.LineItem.sku.in_(skus_in_group),
+        models.Order.fulfillment_status.in_(['unfulfilled', 'partially_fulfilled', 'scheduled']),
+        models.Order.cancelled_at.is_(None)
+    ).order_by(models.Order.created_at.desc()).all()
+
+    # 3. Get All Orders (historical)
+    all_orders = db.query(models.Order, models.LineItem.quantity, models.Store.shopify_url).join(
+        models.LineItem, models.Order.id == models.LineItem.order_id
+    ).join(
+        models.Store, models.Order.store_id == models.Store.id
+    ).filter(
+        models.LineItem.sku.in_(skus_in_group)
+    ).order_by(models.Order.created_at.desc()).limit(100).all() # Limit for performance
+
+    # 4. Get Stock Movement History
+    stock_movements = db.query(models.StockMovement).filter(
+        models.StockMovement.product_sku.in_(skus_in_group)
+    ).order_by(models.StockMovement.created_at.desc()).limit(100).all() # Limit for performance
+
+    return {
+        "committed_orders": [{**order.__dict__, "quantity": qty, "shopify_url": url} for order, qty, url in committed_orders],
+        "all_orders": [{**order.__dict__, "quantity": qty, "shopify_url": url} for order, qty, url in all_orders],
+        "stock_movements": [move.__dict__ for move in stock_movements]
+    }
 
 def get_inventory_report(
     db: Session, 
@@ -87,8 +132,6 @@ def get_inventory_report(
             func.json_agg(func.json_build_object('variant_id', models.ProductVariant.id, 'sku', models.ProductVariant.sku, 'store_name', models.Store.name, 'status', models.Product.status, 'is_primary', models.ProductVariant.is_primary_variant)).label("variants_json")
         ).subquery('grouped_data_sq')
 
-        # MODIFIED: This subquery now robustly selects a primary variant for every group.
-        # It prioritizes the one marked 'is_primary_variant', but falls back to the one with the lowest ID if none is marked.
         row_num_sq = db.query(
             models.ProductVariant.id,
             models.ProductVariant.barcode,

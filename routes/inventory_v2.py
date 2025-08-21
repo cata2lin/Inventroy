@@ -53,3 +53,15 @@ def set_primary_variant_endpoint(request: SetPrimaryVariantRequest, db: Session 
         return crud_inventory.set_primary_variant(db, barcode=request.barcode, variant_id=request.variant_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- NEW: Endpoint to get detailed history for a barcode group ---
+@router.get("/product-details/{barcode}")
+def get_product_details(barcode: str, db: Session = Depends(get_db)):
+    """
+    Fetches detailed information for a barcode group, including committed orders,
+    all historical orders, and stock movements.
+    """
+    details = crud_inventory.get_product_details_by_barcode(db, barcode=barcode)
+    if not details:
+        raise HTTPException(status_code=404, detail="No details found for this barcode.")
+    return details
