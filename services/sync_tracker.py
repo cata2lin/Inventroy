@@ -1,38 +1,59 @@
 # services/sync_tracker.py
+# tiny in-memory progress tracker used by /sync-control
 
 import uuid
 from typing import Dict, Optional
 
-_state: Dict[str, Dict[str, str]] = {}
+
+class _Task:
+    __slots__ = ("id", "title", "processed", "done", "ok", "note")
+
+    def __init__(self, title: str):
+        self.id = str(uuid.uuid4())
+        self.title = title
+        self.processed = 0
+        self.done = False
+        self.ok: Optional[bool] = None
+        self.note: Optional[str] = None
+
+
+_TASKS: Dict[str, _Task] = {}
+
 
 def create_task(title: str) -> str:
-    tid = str(uuid.uuid4())
-    _state[tid] = {"title": title, "status": "queued", "message": ""}
-    return tid
+    t = _Task(title)
+    _TASKS[t.id] = t
+    return t.id
 
-def step(task_id: Optional[str], message: str) -> None:
-    if not task_id:
+
+def step(task_id: str, processed: int, note: Optional[str] = None) -> None:
+    t = _TASKS.get(task_id)
+    if not t:
         return
-    obj = _state.get(task_id)
-    if obj:
-        obj["status"] = "running"
-        obj["message"] = message
+    t.processed = processed
+    if note:
+        t.note = note
 
-def complete(task_id: Optional[str], message: str = "done") -> None:
-    if not task_id:
+
+def finish_task(task_id: str, ok: bool, note: Optional[str] = None) -> None:
+    t = _TASKS.get(task_id)
+    if not t:
         return
-    obj = _state.get(task_id)
-    if obj:
-        obj["status"] = "done"
-        obj["message"] = message
+    t.done = True
+    t.ok = ok
+    if note:
+        t.note = note
 
-def fail(task_id: Optional[str], message: str) -> None:
-    if not task_id:
-        return
-    obj = _state.get(task_id)
-    if obj:
-        obj["status"] = "failed"
-        obj["message"] = message
 
-def get(task_id: str) -> Dict[str, str]:
-    return _state.get(task_id, {"title": "", "status": "unknown", "message": ""})
+def get_task(task_id: str):
+    t = _TASKS.get(task_id)
+    if not t:
+        return None
+    return {
+        "id": t.id,
+        "title": t.title,
+        "processed": t.processed,
+        "done": t.done,
+        "ok": t.ok,
+        "note": t.note,
+    }
