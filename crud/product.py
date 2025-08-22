@@ -39,7 +39,6 @@ def _to_dt(val) -> Optional[datetime]:
     if isinstance(val, datetime):
         return val
     try:
-        # Accept naive or aware ISO strings
         return datetime.fromisoformat(str(val))
     except Exception:
         return None
@@ -85,10 +84,34 @@ def _ensure_membership(db: Session, variant_id: int, group_id: str) -> None:
     db.add(models.GroupMembership(variant_id=variant_id, group_id=group_id))
 
 
+def _first_image_url(prod: Any) -> Optional[str]:
+    """
+    Try multiple shapes:
+      • GraphQL: product.featuredImage.url
+      • Already stored: product.image_url
+      • REST webhook: product.image.src
+      • REST list: product.images[0].src
+    """
+    url = _get(prod, "featuredImage", "url")
+    if url:
+        return url
+    url = _get(prod, "image_url")
+    if url:
+        return url
+    url = _get(prod, "image", "src")
+    if url:
+        return url
+    images = _get(prod, "images")
+    if isinstance(images, list) and images:
+        first = images[0]
+        if isinstance(first, dict):
+            return first.get("src")
+    return None
+
+
 # ---------- field extraction (handles aliases + shapes) ----------
 
 def _extract_product_fields(prod: Any) -> Dict[str, Any]:
-    # id
     pid = (
         _get(prod, "legacyResourceId")
         or _get(prod, "legacy_resource_id")
@@ -102,7 +125,7 @@ def _extract_product_fields(prod: Any) -> Dict[str, Any]:
     if isinstance(tags_val, list):
         tags_val = ",".join(tags_val)
 
-    image_url = _get(prod, "featuredImage", "url") or _get(prod, "image_url")
+    image_url = _first_image_url(prod)
 
     return {
         "id": int(pid),
@@ -137,7 +160,6 @@ def _extract_variant_fields(variant: Any, product_id: int) -> Dict[str, Any]:
         or gid_to_id(_get(variant, "inventoryItem", "id"))
     )
 
-    # unit cost
     unit_cost = None
     amount = _get(variant, "inventoryItem", "unitCost", "amount")
     if amount is not None:
@@ -231,7 +253,6 @@ def create_or_update_products(
             try:
                 v_fields = _extract_variant_fields(v, product_id=pid)
             except Exception:
-                # Skip malformed variant rather than failing the whole page
                 continue
 
             vid = v_fields["id"]
@@ -273,12 +294,10 @@ def create_or_update_products(
             levels = v_fields["inventory_levels"]
             if levels:
                 for lvl in levels:
-                    # shapes: lvl["location"]["id"] or lvl.location.id
                     loc_gid = _get(lvl, "location", "id")
                     loc_legacy = gid_to_id(loc_gid) if loc_gid else None
                     if not loc_legacy:
                         continue
-                    # quantities: list of { name, quantity }
                     quantities = _get(lvl, "quantities") or []
                     qmap = {}
                     for q in quantities:
@@ -326,17 +345,8 @@ def create_or_update_product_from_webhook(
     store_id: int,
     payload: Any,
 ) -> None:
-    """
-    Shopify product webhook upsert (products/create|update).
-
-    Accepts pydantic model or dict. Extracts id from either:
-      • numeric id
-      • admin_graphql_api_id (gid://) -> converted to numeric
-      • legacyResourceId / legacy_resource_id
-    """
     now = datetime.now(timezone.utc)
 
-    # Some webhooks wrap in {"product": {...}}
     prod = payload.get("product") if isinstance(payload, dict) and "product" in payload else payload
 
     pid = (
@@ -344,7 +354,6 @@ def create_or_update_product_from_webhook(
     ) or _get(prod, "legacyResourceId") or _get(prod, "legacy_resource_id") or gid_to_id(_get(prod, "admin_graphql_api_id"))
 
     if pid is None:
-        # also accept GraphQL product id in "id": "gid://shopify/Product/123"
         pid = gid_to_id(_get(prod, "id"))
 
     if pid is None:
@@ -375,7 +384,7 @@ def create_or_update_product_from_webhook(
         tags_val = ",".join(tags_val)
     db_prod.tags = _coalesce(tags_val, db_prod.tags)
 
-    image_src = _get(prod, "image", "src")
+    image_src = _first_image_url(prod) or _get(prod, "image", "src")
     if image_src:
         db_prod.image_url = image_src
 
@@ -389,7 +398,6 @@ def create_or_update_product_from_webhook(
     for v in variants:
         vid = _get(v, "id")
         if vid is None:
-            # last resort: GraphQL id on webhook variant
             vid = gid_to_id(_get(v, "admin_graphql_api_id"))
         if vid is None:
             continue
@@ -428,7 +436,6 @@ def create_or_update_product_from_webhook(
         var.updated_at = _coalesce(_to_dt(_get(v, "updated_at")), var.updated_at)
         var.last_fetched_at = now
 
-        # Cost if present on webhook
         try:
             vc = _get(v, "cost")
             if vc is not None:
@@ -443,5 +450,3 @@ def create_or_update_product_from_webhook(
         if var.barcode_normalized:
             grp = _ensure_group_for_barcode(db, var.barcode_normalized)
             _ensure_membership(db, var.id, grp.id)
-
-    # commit controlled by caller
