@@ -3,7 +3,8 @@
 import base64
 import hashlib
 import hmac
-from typing import Optional, Any, Callable
+from types import SimpleNamespace
+from typing import Optional, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
@@ -11,33 +12,14 @@ from sqlalchemy.orm import Session
 from database import get_db, SessionLocal
 import models
 
-# Prefer package CRUD
-try:
-    from crud import store as crud_store
-except Exception:  # pragma: no cover
-    import store as crud_store  # type: ignore
+# CRUD (prefer package imports)
+from crud import store as crud_store
+from crud import product as crud_product
+from crud import webhooks as crud_webhook  # optional helpers
 
-try:
-    from crud import product as crud_product
-except Exception:  # pragma: no cover
-    import product as crud_product  # type: ignore
-
-# NEW: orders CRUD (for persistence on webhooks)
-try:
-    from crud import order as crud_order  # type: ignore
-except Exception:  # pragma: no cover
-    crud_order = None  # type: ignore
-
-# Services
-try:
-    from services import inventory_sync_service
-except Exception:  # pragma: no cover
-    import inventory_sync_service  # type: ignore
-
-try:
-    from services import commited_projector as committed_projector  # filename has one 't'
-except Exception:  # pragma: no cover
-    import commited_projector as committed_projector  # type: ignore
+# Services (force package import so it never falls back to root)
+from services import inventory_sync_service
+from services import commited_projector as committed_projector  # note 1 't' in filename
 
 try:
     import schemas
@@ -50,6 +32,7 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
+
 def _verify_hmac(secret: str, raw_body: bytes, header_hmac: Optional[str]) -> None:
     if not header_hmac:
         raise HTTPException(status_code=400, detail="Missing X-Shopify-Hmac-SHA256 header.")
@@ -58,16 +41,18 @@ def _verify_hmac(secret: str, raw_body: bytes, header_hmac: Optional[str]) -> No
     if not hmac.compare_digest(computed, header_hmac):
         raise HTTPException(status_code=401, detail="HMAC verification failed.")
 
-def _call_if_exists(module: Any, names: list[str], *args, **kwargs):
-    """Try multiple function names on a module; return True if any ran."""
-    if not module:
-        return False
-    for name in names:
-        fn: Optional[Callable] = getattr(module, name, None)
-        if callable(fn):
-            fn(*args, **kwargs)
-            return True
-    return False
+
+def _to_attr(obj: Any) -> Any:
+    """
+    Recursively convert dicts → SimpleNamespace so downstream code can use attribute access.
+    Lists and scalars are preserved; nested dicts are converted too.
+    """
+    if isinstance(obj, dict):
+        return SimpleNamespace(**{k: _to_attr(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return [_to_attr(v) for v in obj]
+    return obj
+
 
 @router.post("/{store_id}", include_in_schema=False)
 async def receive_webhook(
@@ -76,28 +61,33 @@ async def receive_webhook(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> Response:
-    # Load store & verify
+    # --- load store ---
     store = crud_store.get_store(db, store_id)
     if not store:
         raise HTTPException(status_code=404, detail="Store not found.")
+
     secret = getattr(store, "api_secret", None)
     if not secret:
         raise HTTPException(status_code=400, detail="Store API secret not configured.")
 
+    # --- headers & raw body ---
     topic = request.headers.get("x-shopify-topic")
     event_id = request.headers.get("x-shopify-webhook-id")
     raw_body = await request.body()
+
+    # --- verify ---
     _verify_hmac(secret, raw_body, request.headers.get("x-shopify-hmac-sha256"))
 
+    # --- parse payload (dict) ---
     try:
         payload = await request.json()
     except Exception:
         payload = {}
 
-    # Always 200 quickly to prevent retries
+    # Always ack quickly; heavy processing is best-effort in-process/background.
     response = Response(status_code=200, content="ok")
 
-    # app/uninstalled -> disable store
+    # --- app/uninstalled: disable store ---
     if topic == "app/uninstalled":
         try:
             store.enabled = False
@@ -108,60 +98,68 @@ async def receive_webhook(
             print(f"[app/uninstalled][error] store={store_id}: {e}")
         return response
 
-    # ---------------- Orders: persist + committed-stock projector ----------------
+    # --- ORDERS / FULFILLMENTS → committed projector ---
     try:
         if topic in {"orders/create", "orders/updated", "orders/edited", "orders/cancelled", "orders/delete"}:
-            # 1) Persist the order row if your CRUD supports it
-            if crud_order:
-                # Accept multiple possible function names your codebase might use
-                persisted = _call_if_exists(
-                    crud_order,
-                    [
-                        "upsert_order_from_webhook",
-                        "create_or_update_order_from_webhook",
-                        "create_or_update_order",
-                        "upsert_order",
-                    ],
-                    db, store_id, payload
-                )
-                if not persisted:
-                    # Optional log to help diagnose if CRUD symbol isn’t present
-                    print("[orders][warn] No CRUD upsert found; skipped order persistence.")
+            # Prefer your schema if present; otherwise convert dict → attribute object
+            if schemas and hasattr(schemas, "ShopifyOrderWebhook"):
+                try:
+                    order_obj = schemas.ShopifyOrderWebhook.parse_obj(payload)
+                except Exception:
+                    order_obj = _to_attr(payload)
+            else:
+                order_obj = _to_attr(payload)
 
-            # 2) Update committed/allocated stock view
-            committed_projector.process_order_event(db, store_id, topic, payload)
+            committed_projector.process_order_event(db, store_id, topic, order_obj)
+
+        elif topic in {"fulfillments/create", "fulfillments/update"}:
+            if schemas and hasattr(schemas, "ShopifyFulfillmentWebhook"):
+                try:
+                    fulfillment_obj = schemas.ShopifyFulfillmentWebhook.parse_obj(payload)
+                except Exception:
+                    fulfillment_obj = _to_attr(payload)
+            else:
+                fulfillment_obj = _to_attr(payload)
+
+            committed_projector.process_fulfillment_event(db, store_id, topic, fulfillment_obj)
+
+        elif topic == "refunds/create":
+            # If you handle restock deltas off refunds, parse similarly:
+            # refund_obj = _to_attr(payload)   # or a schemas model, if you have one
+            pass
+
     except Exception as e:
         db.rollback()
         print(f"[orders][error] store={store_id} topic={topic}: {e}")
 
-    # ---------------- Fulfillments: committed projector ----------------
-    try:
-        if topic in {"fulfillments/create", "fulfillments/update"}:
-            committed_projector.process_fulfillment_event(db, store_id, topic, payload)
-    except Exception as e:
-        db.rollback()
-        print(f"[fulfillment][error] store={store_id} topic={topic}: {e}")
-
-    # ---------------- Products: upsert from webhook ----------------
+    # --- PRODUCTS → upsert + (optional) group updates ---
     try:
         if topic in {"products/create", "products/update"}:
-            # best-effort schema parsing
             if schemas and hasattr(schemas, "ShopifyProductWebhook"):
                 try:
                     product_data = schemas.ShopifyProductWebhook.parse_obj(payload)
                 except Exception:
-                    product_data = payload
+                    product_data = payload  # fallback
             else:
-                product_data = payload
+                product_data = payload  # fallback
+
             crud_product.create_or_update_product_from_webhook(db, store.id, product_data)  # type: ignore[arg-type]
+
         elif topic == "products/delete":
-            # optional: mark as deleted if you maintain soft-deletes
-            pass
+            # Minimal delete handling (optional)
+            delete_id = payload.get("id")
+            if delete_id:
+                # If you maintain soft-deletes, call your crud here.
+                # Example:
+                # try: crud_webhook.mark_product_as_deleted(db, product_id=int(delete_id))
+                # except Exception: pass
+                pass
+
     except Exception as e:
         db.rollback()
         print(f"[product-upsert][error] store={store_id} topic={topic}: {e}")
 
-    # ---------------- Inventory levels: kick the Golden Sync Loop ----------------
+    # --- INVENTORY LEVELS → Golden Sync Loop (background) ---
     if topic == "inventory_levels/update":
         try:
             inventory_item_id = payload.get("inventory_item_id")
@@ -169,7 +167,7 @@ async def receive_webhook(
             if inventory_item_id and location_id and event_id:
                 background_tasks.add_task(
                     inventory_sync_service.process_inventory_update_event,
-                    db_factory=SessionLocal,           # pass factory; the service manages its own session
+                    db_factory=SessionLocal,            # pass factory; service owns lifecycle
                     shop_domain=store.shopify_url,
                     event_id=event_id,
                     inventory_item_id=int(inventory_item_id),
@@ -180,6 +178,7 @@ async def receive_webhook(
 
     # inventory_items/update (optional enrichment)
     if topic == "inventory_items/update":
+        # enrich cost/tracked flags here if desired
         pass
 
     return response
