@@ -32,8 +32,6 @@ def list_tasks():
 def _sync_products_for_store(store_id: int, task_id: str):
     """
     Background job: pull all products & variants for a store and upsert into DB.
-    Uses ShopifyService.get_all_products_and_variants() generator and the
-    new CRUD entrypoint crud_product.create_or_update_products(db, store_id, page).
     """
     db = SessionLocal()
     try:
