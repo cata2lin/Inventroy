@@ -1,207 +1,216 @@
 # crud/product.py
 
-from sqlalchemy.orm import Session, joinedload
-from typing import List, Dict, Any
-
+from typing import Optional, Dict, Any
+from datetime import datetime
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 import models
-import schemas
-from .utils import upsert_batch
-from .sync import normalize_barcode, update_variant_group_membership
 
+# -------- helpers --------
 
-def create_or_update_product_from_webhook(db: Session, store_id: int, product_data: schemas.ShopifyProductWebhook):
+def _nz(v):
+    """Return None if falsy empty string; otherwise the value."""
+    if v is None:
+        return None
+    if isinstance(v, str) and v.strip() == "":
+        return None
+    return v
+
+def _merge_set(obj, attr, value):
     """
-    Upserts a single product and its variants from a webhook payload.
+    Only set obj.attr if 'value' is not None.
+    Prevents overwriting DB with NULL from partial webhooks.
     """
-    product_dict = {
-        "id": product_data.id,
-        "store_id": store_id,
-        "title": product_data.title,
-        "body_html": product_data.body_html,
-        "vendor": product_data.vendor,
-        "product_type": product_data.product_type,
-        "created_at": product_data.created_at,
-        "handle": product_data.handle,
-        "updated_at": product_data.updated_at,
-        "published_at": product_data.published_at,
-        "status": product_data.status,
-        "tags": product_data.tags,
-        "shopify_gid": f"gid://shopify/Product/{product_data.id}"
-    }
-    upsert_batch(db, models.Product, [product_dict], ['id'])
+    if value is not None:
+        setattr(obj, attr, value)
 
-    variants_list = []
-    variant_ids_to_process = []
-    
-    for variant_data in product_data.variants:
-        variant_ids_to_process.append(variant_data['id'])
-        variants_list.append({
-            "id": variant_data['id'],
-            "product_id": product_data.id,
-            "store_id": store_id,
-            "title": variant_data['title'],
-            "price": variant_data['price'],
-            "sku": variant_data['sku'],
-            "position": variant_data['position'],
-            "inventory_policy": variant_data['inventory_policy'],
-            "compare_at_price": variant_data.get('compare_at_price'),
-            "barcode": variant_data.get('barcode'),
-            "barcode_normalized": normalize_barcode(variant_data.get('barcode')),
-            "inventory_item_id": variant_data['inventory_item_id'],
-            "inventory_quantity": variant_data['inventory_quantity'],
-            "created_at": variant_data['created_at'],
-            "updated_at": variant_data['updated_at'],
-            "shopify_gid": f"gid://shopify/ProductVariant/{variant_data['id']}"
-        })
-    if variants_list:
-        upsert_batch(db, models.ProductVariant, variants_list, ['id'])
-    
+def normalize_barcode(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    s = "".join(ch for ch in str(raw).strip() if ch.isalnum())
+    return s if s else None
+
+def _ensure_group(db: Session, group_id: str) -> models.BarcodeGroup:
+    grp = db.query(models.BarcodeGroup).filter(models.BarcodeGroup.id == group_id).first()
+    if not grp:
+        grp = models.BarcodeGroup(id=group_id, status="active", pool_available=0)
+        db.add(grp)
+        db.flush()
+    return grp
+
+def _set_variant_group(db: Session, variant: models.ProductVariant, group_id: str) -> bool:
+    """
+    Idempotent: attach variant to group_id if not already attached.
+    Returns True only when a new membership row was created or moved.
+    """
+    if not group_id:
+        return False
+
+    # existing membership?
+    gm = db.query(models.GroupMembership).filter(
+        models.GroupMembership.variant_id == variant.id
+    ).first()
+
+    if gm:
+        if gm.group_id == group_id:
+            # already in this group; no-op
+            return False
+        # move to new group
+        gm.group_id = group_id
+        return True
+
+    # fresh attach
+    db.add(models.GroupMembership(variant_id=variant.id, group_id=group_id))
+    return True
+
+# -------- core upserts --------
+
+def upsert_product_from_rest_webhook(db: Session, store_id: int, payload: Dict[str, Any]) -> None:
+    """
+    Merge-safe upsert for REST product webhooks (products/create, products/update).
+    - Never overwrite DB values with NULL from partial payloads.
+    - Idempotent group membership from barcode on each variant.
+    """
+    if not payload or "id" not in payload:
+        return
+
+    p_id = int(payload["id"])
+    product = db.query(models.Product).filter(models.Product.id == p_id).first()
+    is_new = product is None
+
+    # Extract fields (REST webhook shape)
+    title          = _nz(payload.get("title"))
+    body_html      = _nz(payload.get("body_html"))
+    vendor         = _nz(payload.get("vendor"))
+    product_type   = _nz(payload.get("product_type"))
+    handle         = _nz(payload.get("handle"))
+    status         = _nz(payload.get("status"))  # Shopify may send "active"/"ACTIVE"
+    tags           = _nz(payload.get("tags"))
+    created_at     = payload.get("created_at")
+    updated_at     = payload.get("updated_at")
+    published_at   = payload.get("published_at")
+    image_url      = None
+    if payload.get("image") and payload["image"].get("src"):
+        image_url = _nz(payload["image"]["src"])
+
+    if is_new:
+        product = models.Product(
+            id=p_id,
+            shopify_gid=str(payload.get("admin_graphql_api_id") or payload.get("admin_graphql_api_id") or f"gid://shopify/Product/{p_id}"),
+            store_id=store_id,
+            title=title or "Untitled",
+        )
+        db.add(product)
+
+    # Merge-safe updates
+    _merge_set(product, "title", title)
+    _merge_set(product, "body_html", body_html)
+    _merge_set(product, "vendor", vendor)
+    _merge_set(product, "product_type", product_type)
+    _merge_set(product, "handle", handle)
+    _merge_set(product, "status", status)
+    _merge_set(product, "tags", tags)
+    # Timestamps
+    if created_at:
+        _merge_set(product, "created_at", _coerce_dt(created_at))
+    if updated_at:
+        _merge_set(product, "updated_at", _coerce_dt(updated_at))
+    if published_at:
+        _merge_set(product, "published_at", _coerce_dt(published_at))
+    # Image only if present (don't null it out)
+    if image_url:
+        product.image_url = image_url
+
+    # --- Variants merge ---
+    variants = payload.get("variants") or []
+    for v in variants:
+        v_id = int(v["id"])
+        variant = db.query(models.ProductVariant).filter(models.ProductVariant.id == v_id).first()
+        if not variant:
+            variant = models.ProductVariant(
+                id=v_id,
+                shopify_gid=str(v.get("admin_graphql_api_id") or f"gid://shopify/ProductVariant/{v_id}"),
+                product_id=p_id,
+                store_id=store_id,
+            )
+            db.add(variant)
+
+        # REST fields
+        _merge_set(variant, "title", _nz(v.get("title")))
+        _merge_set(variant, "sku", _nz(v.get("sku")))
+        _merge_set(variant, "price", _nz(v.get("price")))
+        _merge_set(variant, "compare_at_price", _nz(v.get("compare_at_price")))
+        _merge_set(variant, "inventory_policy", _nz(v.get("inventory_policy")))
+        _merge_set(variant, "position", _nz(v.get("position")))
+        _merge_set(variant, "fulfillment_service", _nz(v.get("fulfillment_service")))
+        _merge_set(variant, "inventory_management", _nz(v.get("inventory_management")))
+        _merge_set(variant, "cost_per_item", _nz(v.get("cost")))
+        # times
+        if v.get("created_at"):
+            _merge_set(variant, "created_at", _coerce_dt(v["created_at"]))
+        if v.get("updated_at"):
+            _merge_set(variant, "updated_at", _coerce_dt(v["updated_at"]))
+
+        # IDs
+        if v.get("inventory_item_id") is not None:
+            _merge_set(variant, "inventory_item_id", int(v["inventory_item_id"]))
+
+        # inventory_quantity in variant webhook is global; DO NOT write to inventory_levels here.
+        if v.get("inventory_quantity") is not None:
+            _merge_set(variant, "inventory_quantity", int(v["inventory_quantity"]))
+
+        # barcode/group
+        raw_barcode = _nz(v.get("barcode"))
+        norm = normalize_barcode(raw_barcode)
+        _merge_set(variant, "barcode", raw_barcode)
+        _merge_set(variant, "barcode_normalized", norm)
+
+        # update group only if we have a barcode
+        if norm:
+            _ensure_group(db, norm)
+            moved = _set_variant_group(db, variant, norm)
+            if moved:
+                print(f"Variant {variant.id} linked to group '{norm}'")
+
+    # touch product last_fetched_at (auto via model onupdate, but ensure changed)
+    product.last_fetched_at = func.now()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        # re-try minimal: dedupe membership if conflict
+        _cleanup_dupe_memberships(db, p_id)
+        db.commit()
+
+
+def _coerce_dt(dt_val: Any) -> Optional[datetime]:
+    """Accept ISO strings or datetime; return datetime or None."""
+    if dt_val is None:
+        return None
+    if isinstance(dt_val, datetime):
+        return dt_val
+    try:
+        # let PostgreSQL parse text if needed, but best effort here:
+        from dateutil.parser import isoparse  # type: ignore
+        return isoparse(str(dt_val))
+    except Exception:
+        return None
+
+
+def _cleanup_dupe_memberships(db: Session, product_id: int):
+    """
+    Defensive cleanup if there was a unique conflict on group_membership.
+    Ensures one row per variant.
+    """
+    # find all variants of this product with >1 memberships (shouldn't happen with our logic)
+    q = db.query(models.ProductVariant.id).filter(models.ProductVariant.product_id == product_id).all()
+    variant_ids = [r[0] for r in q]
+    for vid in variant_ids:
+        rows = db.query(models.GroupMembership).filter(models.GroupMembership.variant_id == vid).all()
+        if len(rows) > 1:
+            # keep the most recent, delete the rest
+            keep = rows[0]
+            for r in rows[1:]:
+                db.delete(r)
     db.flush()
-
-    variants_to_update = db.query(models.ProductVariant).filter(models.ProductVariant.id.in_(variant_ids_to_process)).all()
-    for variant in variants_to_update:
-        update_variant_group_membership(db, variant)
-
-    db.commit()
-
-
-def update_inventory_details(db: Session, inventory_data: List[Dict[str, Any]]):
-    """
-    Updates variant details (cost, inventory management) based on a list of inventory items.
-    """
-    if not inventory_data: return
-    
-    print(f"Enriching data for {len(inventory_data)} inventory items...")
-    for item in inventory_data:
-        inventory_item_legacy_id = item.get('legacyResourceId')
-        if not inventory_item_legacy_id: continue
-
-        update_payload = {}
-        if item.get('unitCost') and item['unitCost'].get('amount') is not None:
-            update_payload['cost'] = item['unitCost']['amount']
-        
-        if item.get('tracked') is not None:
-            update_payload['inventory_management'] = 'shopify' if item['tracked'] else 'not_tracked'
-
-        if update_payload:
-            db.query(models.ProductVariant).\
-                filter(models.ProductVariant.inventory_item_id == inventory_item_legacy_id).\
-                update(update_payload, synchronize_session=False)
-    db.commit()
-    print("Finished enriching variant data.")
-
-
-def create_or_update_products(db: Session, products_data: List[Dict[str, Any]], store_id: int):
-    """
-    Takes a list of product and variant data from the Shopify service and upserts them.
-    """
-    all_products, all_variants, all_inventory_levels, all_locations = [], [], [], []
-    variant_ids_to_process = []
-    
-    for item in products_data:
-        product = item['product']
-        all_products.append({
-            "id": product.legacy_resource_id, "shopify_gid": product.id, 
-            "store_id": store_id, "title": product.title, "body_html": product.body_html, 
-            "vendor": product.vendor, "product_type": product.product_type,
-            "product_category": product.category.name if product.category else None,
-            "created_at": product.created_at, "handle": product.handle, 
-            "updated_at": product.updated_at, "published_at": product.published_at, 
-            "status": product.status, "tags": ", ".join(product.tags),
-            "image_url": str(product.featured_image.url) if product.featured_image else None
-        })
-
-        for variant in item['variants']:
-            variant_ids_to_process.append(variant.legacy_resource_id)
-            inv_item = variant.inventory_item
-            
-            # --- FIX: Find the correct 'on_hand' quantity from the nested structure ---
-            on_hand_qty = None
-            if inv_item.inventory_levels:
-                primary_level = inv_item.inventory_levels[0] # Assume the first location is primary for sync
-                on_hand_qty_obj = next((q for q in primary_level.quantities if q['name'] == 'on_hand'), None)
-                if on_hand_qty_obj:
-                    on_hand_qty = on_hand_qty_obj['quantity']
-
-            all_variants.append({
-                "id": variant.legacy_resource_id, "shopify_gid": variant.id, 
-                "product_id": product.legacy_resource_id,
-                "store_id": store_id,
-                "title": variant.title, 
-                "price": variant.price, "sku": variant.sku, "position": variant.position, 
-                "inventory_policy": variant.inventory_policy, 
-                "compare_at_price": variant.compare_at_price, "barcode": variant.barcode, 
-                "barcode_normalized": normalize_barcode(variant.barcode),
-                "inventory_item_id": inv_item.legacy_resource_id, 
-                "inventory_quantity": on_hand_qty, # Use the correctly extracted on_hand value
-                "created_at": variant.created_at, "updated_at": variant.updated_at,
-                "cost": inv_item.unit_cost.amount if inv_item.unit_cost else None
-            })
-            
-            for level in inv_item.inventory_levels:
-                loc = level.location
-                all_locations.append({"id": loc.legacy_resource_id, "name": loc.name, "store_id": store_id})
-                
-                available_qty = next((q['quantity'] for q in level.quantities if q['name'] == 'available'), None)
-                on_hand_level_qty = next((q['quantity'] for q in level.quantities if q['name'] == 'on_hand'), None)
-                
-                all_inventory_levels.append({"inventory_item_id": inv_item.legacy_resource_id, "location_id": loc.legacy_resource_id, "available": available_qty, "on_hand": on_hand_level_qty, "updated_at": level.updated_at})
-    
-    print("Upserting locations from product sync...")
-    upsert_batch(db, models.Location, all_locations, ['id'])
-    print("Upserting products...")
-    upsert_batch(db, models.Product, all_products, ['id'])
-    print("Upserting variants...")
-    upsert_batch(db, models.ProductVariant, all_variants, ['id'])
-    print("Upserting inventory levels from product sync...")
-    upsert_batch(db, models.InventoryLevel, all_inventory_levels, ['inventory_item_id', 'location_id'])
-    
-    db.flush()
-
-    print(f"Updating group memberships for {len(variant_ids_to_process)} variants...")
-    variants_to_update = db.query(models.ProductVariant).filter(models.ProductVariant.id.in_(variant_ids_to_process)).all()
-    for variant in variants_to_update:
-        update_variant_group_membership(db, variant)
-
-    db.commit()
-    print("Finished updating group memberships.")
-
-
-def get_variants_by_store(db: Session, store_id: int):
-    """
-    Fetches all product variants for a specific store, eagerly loading related data.
-    """
-    return db.query(models.ProductVariant)\
-        .join(models.Product)\
-        .outerjoin(models.InventoryLevel)\
-        .outerjoin(models.Location)\
-        .filter(models.Product.store_id == store_id)\
-        .options(
-            joinedload(models.ProductVariant.product),
-            joinedload(models.ProductVariant.inventory_levels).joinedload(models.InventoryLevel.location)
-        )\
-        .order_by(models.Product.title, models.ProductVariant.title)\
-        .all()
-
-def get_variant_with_inventory(db: Session, variant_id: int):
-    """
-    Fetches a single product variant with its inventory levels and locations.
-    """
-    return db.query(models.ProductVariant)\
-        .filter(models.ProductVariant.id == variant_id)\
-        .options(joinedload(models.ProductVariant.inventory_levels))\
-        .first()
-
-def set_primary_variant(db: Session, barcode: str, variant_id: int):
-    """
-    Sets a specific variant as the primary for a barcode group.
-    """
-    db.query(models.ProductVariant).filter(
-        models.ProductVariant.barcode == barcode
-    ).update({"is_primary_variant": False}, synchronize_session=False)
-
-    db.query(models.ProductVariant).filter(
-        models.ProductVariant.id == variant_id
-    ).update({"is_primary_variant": True}, synchronize_session=False)
-
-    db.commit()
