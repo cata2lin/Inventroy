@@ -3,7 +3,6 @@
 import base64
 import hashlib
 import hmac
-from types import SimpleNamespace
 from typing import Optional, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
@@ -15,15 +14,14 @@ import models
 # CRUD
 from crud import store as crud_store
 from crud import product as crud_product
-from crud import order as crud_order            # NEW: order upsert
-from crud import webhooks as crud_webhook       # optional helpers
+from crud import order as crud_order
 
 # Services
+from services import commited_projector as committed_projector  # note single 't' in filename
 from services import inventory_sync_service
-from services import commited_projector as committed_projector  # note one 't'
 
 try:
-    import schemas
+    import schemas  # optional
 except Exception:  # pragma: no cover
     schemas = None  # type: ignore
 
@@ -43,15 +41,6 @@ def _verify_hmac(secret: str, raw_body: bytes, header_hmac: Optional[str]) -> No
         raise HTTPException(status_code=401, detail="HMAC verification failed.")
 
 
-def _to_attr(obj: Any) -> Any:
-    """Recursively convert dicts → SimpleNamespace for attribute access."""
-    if isinstance(obj, dict):
-        return SimpleNamespace(**{k: _to_attr(v) for k, v in obj.items()})
-    if isinstance(obj, list):
-        return [_to_attr(v) for v in obj]
-    return obj
-
-
 @router.post("/{store_id}", include_in_schema=False)
 async def receive_webhook(
     store_id: int,
@@ -59,6 +48,10 @@ async def receive_webhook(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> Response:
+    """
+    Central webhook receiver. Verifies HMAC, routes topics, and offloads
+    inventory-level work to the Golden Sync Loop in a background task.
+    """
     # --- load store ---
     store = crud_store.get_store(db, store_id)
     if not store:
@@ -69,23 +62,23 @@ async def receive_webhook(
         raise HTTPException(status_code=400, detail="Store API secret not configured.")
 
     # --- headers & raw body ---
-    topic = request.headers.get("x-shopify-topic")
+    topic = request.headers.get("x-shopify-topic") or ""
     event_id = request.headers.get("x-shopify-webhook-id")
     raw_body = await request.body()
 
     # --- verify ---
     _verify_hmac(secret, raw_body, request.headers.get("x-shopify-hmac-sha256"))
 
-    # --- parse payload (dict) ---
+    # --- parse payload ---
     try:
-        payload = await request.json()
+        payload: Any = await request.json()
     except Exception:
         payload = {}
 
-    # Always ack quickly; heavy processing is best-effort in-process/background.
+    # Always ack quickly; heavy work must never block Shopify
     response = Response(status_code=200, content="ok")
 
-    # --- app/uninstalled: disable store ---
+    # --- app/uninstalled ---
     if topic == "app/uninstalled":
         try:
             store.enabled = False
@@ -96,81 +89,68 @@ async def receive_webhook(
             print(f"[app/uninstalled][error] store={store_id}: {e}")
         return response
 
-    # --- ORDERS / FULFILLMENTS ---
+    # --- committed projector (orders/fulfillments/refunds drive committed stock) ---
     try:
         if topic in {"orders/create", "orders/updated", "orders/edited", "orders/cancelled", "orders/delete"}:
-            # 1) Parse to attr-access object or schema
-            if schemas and hasattr(schemas, "ShopifyOrderWebhook"):
-                try:
-                    order_obj = schemas.ShopifyOrderWebhook.parse_obj(payload)
-                except Exception:
-                    order_obj = _to_attr(payload)
-            else:
-                order_obj = _to_attr(payload)
-
-            # 2) Save / upsert order in DB (NEW)
-            try:
-                crud_order.upsert_order_from_webhook(db, store.id, order_obj)
-                db.commit()
-            except Exception as e:
-                db.rollback()
-                print(f"[orders][save-error] store={store_id} topic={topic}: {e}")
-
-            # 3) Continue with committed-stock projector for deltas
-            committed_projector.process_order_event(db, store_id, topic, order_obj)
-
+            print("Processing committed stock for topic:", topic)
+            committed_projector.process_order_event(db, store_id, topic, payload)
         elif topic in {"fulfillments/create", "fulfillments/update"}:
-            if schemas and hasattr(schemas, "ShopifyFulfillmentWebhook"):
-                try:
-                    fulfillment_obj = schemas.ShopifyFulfillmentWebhook.parse_obj(payload)
-                except Exception:
-                    fulfillment_obj = _to_attr(payload)
-            else:
-                fulfillment_obj = _to_attr(payload)
-
-            committed_projector.process_fulfillment_event(db, store_id, topic, fulfillment_obj)
-
+            committed_projector.process_fulfillment_event(db, store_id, topic, payload)
         elif topic == "refunds/create":
-            # If you later count restocks from refunds, parse & persist similarly.
+            # projector may consider restock adjustments if you do that there
             pass
+    except Exception as e:
+        db.rollback()
+        print(f"[committed_projector][error] store={store_id} topic={topic}: {e}")
 
+    # --- persist ORDERS to DB (dict OR Pydantic safe) ---
+    try:
+        if topic in {"orders/create", "orders/updated"}:
+            crud_order.create_or_update_order_from_webhook(db, store.id, payload)
     except Exception as e:
         db.rollback()
         print(f"[orders][error] store={store_id} topic={topic}: {e}")
 
-    # --- PRODUCTS ---
+    # --- persist FULFILLMENTS to DB (dict OR Pydantic safe) ---
     try:
-        if topic in {"products/create", "products/update"}:
-            if schemas and hasattr(schemas, "ShopifyProductWebhook"):
-                try:
-                    product_data = schemas.ShopifyProductWebhook.parse_obj(payload)
-                except Exception:
-                    product_data = payload  # fallback
-            else:
-                product_data = payload  # fallback
-
-            crud_product.create_or_update_product_from_webhook(db, store.id, product_data)  # type: ignore[arg-type]
-            db.commit()
-
-        elif topic == "products/delete":
-            delete_id = payload.get("id")
-            if delete_id:
-                # Optional: soft-delete code here if you keep tombstones
-                pass
-
+        if topic in {"fulfillments/create", "fulfillments/update"}:
+            crud_order.create_or_update_fulfillment_from_webhook(db, store.id, payload)
     except Exception as e:
         db.rollback()
-        print(f"[product-upsert][error] store={store_id} topic={topic}: {e}")
+        print(f"[fulfillments][error] store={store_id} topic={topic}: {e}")
 
-    # --- INVENTORY LEVELS → Golden Sync Loop (background) ---
+    # --- process/record REFUNDS to DB (dict OR Pydantic safe) ---
+    try:
+        if topic == "refunds/create":
+            crud_order.create_refund_from_webhook(db, store.id, payload)
+    except Exception as e:
+        db.rollback()
+        print(f"[refunds][error] store={store_id} topic={topic}: {e}")
+
+    # --- handle HOLDS (order or fulfillment order hold/release) ---
+    try:
+        # Cover multiple possible topic spellings Shopify may use
+        if topic in {
+            "orders/hold",
+            "orders/release_hold",
+            "fulfillment_orders/hold",
+            "fulfillment_orders/release_hold",
+        }:
+            on_hold = topic.endswith("/hold")
+            crud_order.apply_order_hold_from_webhook(db, store.id, payload, on_hold=on_hold)
+    except Exception as e:
+        db.rollback()
+        print(f"[holds][error] store={store_id} topic={topic}: {e}")
+
+    # --- inventory_levels/update -> enqueue Golden Sync Loop ---
     if topic == "inventory_levels/update":
         try:
-            inventory_item_id = payload.get("inventory_item_id")
-            location_id = payload.get("location_id")
+            inventory_item_id = (payload or {}).get("inventory_item_id")
+            location_id = (payload or {}).get("location_id")
             if inventory_item_id and location_id and event_id:
                 background_tasks.add_task(
                     inventory_sync_service.process_inventory_update_event,
-                    db_factory=SessionLocal,            # pass factory; service owns lifecycle
+                    db_factory=SessionLocal,       # pass factory, not live session
                     shop_domain=store.shopify_url,
                     event_id=event_id,
                     inventory_item_id=int(inventory_item_id),
@@ -179,8 +159,5 @@ async def receive_webhook(
         except Exception as e:
             print(f"[inventory-levels/update][enqueue-error] store={store_id}: {e}")
 
-    # inventory_items/update (optional enrichment)
-    if topic == "inventory_items/update":
-        pass
-
+    # Optionally: inventory_items/update for cost/tracked enrichment (not required)
     return response

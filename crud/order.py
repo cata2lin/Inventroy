@@ -12,10 +12,9 @@ from .utils import upsert_batch
 from sqlalchemy.dialects.postgresql import insert
 
 
-# ---------- helpers (dict/attr-safe) ----------
+# ---------------- helpers (dict/attr-safe) ----------------
 
 def _get(obj: Any, key: str, default=None):
-    """Dict/attr compatible getter."""
     if obj is None:
         return default
     if isinstance(obj, dict):
@@ -37,15 +36,7 @@ def _parse_dt(val) -> Optional[datetime]:
         return None
 
 
-def _csv(val) -> Optional[str]:
-    if val is None:
-        return None
-    if isinstance(val, list):
-        return ", ".join([str(x) for x in val])
-    return str(val)
-
-
-# ---------- committed stock projector helper ----------
+# ---------------- committed stock projector helper ----------------
 
 def update_committed_stock_for_order(db: Session, order: models.Order):
     """
@@ -90,27 +81,22 @@ def update_committed_stock_for_order(db: Session, order: models.Order):
         db.execute(stmt)
 
 
-# ---------- webhook upserts (DICT OR OBJECT) ----------
+# ---------------- webhook upserts (orders/fulfillments/refunds) ----------------
 
 def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: Any):
     """
     Upserts a single order and its line items from a webhook payload.
     Accepts dict or Pydantic object. Field access is dict/attr-safe.
     """
-    # IDs
     oid = _get(order_data, "id")
     if oid is None:
-        # Some webhooks might send admin_graphql_api_id only (rare); ignore silently
         return
     oid = int(oid)
 
-    # Status fields
-    financial_status = _get(order_data, "financial_status")
-    fulfillment_status = _get(order_data, "fulfillment_status")
-    financial_status = (financial_status or 'pending')
-    fulfillment_status = (fulfillment_status or 'unfulfilled')
+    financial_status = _get(order_data, "financial_status") or 'pending'
+    fulfillment_status = _get(order_data, "fulfillment_status") or 'unfulfilled'
 
-    # Shipping total (REST usually has total_shipping_price_set.shop_money.amount)
+    # total_shipping_price_set.shop_money.amount OR sum(shipping_lines.price)
     total_shipping_price = None
     tsp_set = _get(order_data, "total_shipping_price_set")
     if tsp_set:
@@ -118,17 +104,14 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
         if shop_money:
             total_shipping_price = shop_money.get("amount") if isinstance(shop_money, dict) else _get(shop_money, "amount")
     if total_shipping_price is None:
-        # Fallback to sum of shipping_lines[].price if present
-        total_shipping_price = 0
-        slines = _get(order_data, "shipping_lines") or []
-        for sl in slines:
+        total_shipping_price = 0.0
+        for sl in (_get(order_data, "shipping_lines") or []):
             try:
                 p = _get(sl, "price")
                 total_shipping_price += float(p) if p is not None else 0.0
             except Exception:
                 pass
 
-    # Payment gateways
     payment_gateway_names = _get(order_data, "payment_gateway_names")
     if isinstance(payment_gateway_names, list):
         payment_gateway_names = ", ".join(payment_gateway_names)
@@ -158,10 +141,14 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
         "total_discounts": _get(order_data, "total_discounts"),
         "total_shipping_price": total_shipping_price if total_shipping_price is not None else None,
     }
+    # Optional: hold reason if present on order payloads
+    hold_reason = _get(order_data, "hold_reason")
+    if hasattr(models.Order, "hold_reason") and hold_reason is not None:
+        order_dict["hold_reason"] = hold_reason
 
     upsert_batch(db, models.Order, [order_dict], ['id'])
 
-    # Ensure dependent Product/Variant placeholders exist (for reporting/joins)
+    # Ensure products/variants exist for line items
     products_to_create: List[Dict[str, Any]] = []
     variants_to_create: List[Dict[str, Any]] = []
 
@@ -218,9 +205,6 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
         li_id = _get(it, "id")
         if not li_id:
             continue
-        price = _get(it, "price")
-        total_discount = _get(it, "total_discount")
-
         line_items_list.append({
             "id": int(li_id),
             "order_id": oid,
@@ -230,12 +214,11 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
             "quantity": _get(it, "quantity"),
             "sku": _get(it, "sku"),
             "vendor": _get(it, "vendor"),
-            "price": price,
-            "total_discount": total_discount,
+            "price": _get(it, "price"),
+            "total_discount": _get(it, "total_discount"),
             "taxable": _get(it, "taxable"),
             "shopify_gid": f"gid://shopify/LineItem/{int(li_id)}",
         })
-
     if line_items_list:
         upsert_batch(db, models.LineItem, line_items_list, ['id'])
 
@@ -247,117 +230,151 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     db.commit()
 
 
-# Backward-compatible alias if other modules import the old name
 def upsert_order_from_webhook(db: Session, store_id: int, order_obj: Any):
+    """Backward-compatible alias."""
     return create_or_update_order_from_webhook(db, store_id, order_obj)
 
 
-# ---------- fulfillments (unchanged except dict/attr safety for status handling) ----------
+def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfillment_data: Any):
+    """
+    Accepts dict or Pydantic. Minimal columns used.
+    """
+    order_id = _get(fulfillment_data, "order_id")
+    if not order_id:
+        return
+    order_id = int(order_id)
 
-def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfillment_data: schemas.ShopifyFulfillmentWebhook):
-    order = db.query(models.Order).filter(models.Order.id == fulfillment_data.order_id).first()
-    if not order:
-        placeholder_order = {
-            "id": fulfillment_data.order_id,
+    # Ensure placeholder order if not present
+    if not db.query(models.Order.id).filter(models.Order.id == order_id).first():
+        upsert_batch(db, models.Order, [{
+            "id": order_id,
             "store_id": store_id,
-            "name": f"#{fulfillment_data.order_id}",
-            "shopify_gid": f"gid://shopify/Order/{fulfillment_data.order_id}",
-        }
-        upsert_batch(db, models.Order, [placeholder_order], ['id'])
+            "name": f"#{order_id}",
+            "shopify_gid": f"gid://shopify/Order/{order_id}",
+        }], ['id'])
+
+    fid = _get(fulfillment_data, "id")
+    status = _get(fulfillment_data, "status")
+    tracking_company = _get(fulfillment_data, "tracking_company")
+    tracking_number = _get(fulfillment_data, "tracking_number")
+    tracking_url = _get(fulfillment_data, "tracking_url")
 
     fulfillment_dict = {
-        "id": fulfillment_data.id,
-        "order_id": fulfillment_data.order_id,
-        "status": fulfillment_data.status.lower() if fulfillment_data.status else None,
-        "created_at": fulfillment_data.created_at,
-        "updated_at": fulfillment_data.updated_at,
-        "tracking_company": fulfillment_data.tracking_company,
-        "tracking_number": fulfillment_data.tracking_number,
-        "tracking_url": str(fulfillment_data.tracking_url) if fulfillment_data.tracking_url else None,
-        "shopify_gid": f"gid://shopify/Fulfillment/{fulfillment_data.id}",
+        "id": int(fid) if fid else None,
+        "order_id": order_id,
+        "status": status.lower() if isinstance(status, str) else status,
+        "created_at": _parse_dt(_get(fulfillment_data, "created_at")),
+        "updated_at": _parse_dt(_get(fulfillment_data, "updated_at")),
+        "tracking_company": tracking_company,
+        "tracking_number": tracking_number,
+        "tracking_url": str(tracking_url) if tracking_url else None,
+        "shopify_gid": f"gid://shopify/Fulfillment/{int(fid)}" if fid else None,
     }
-    upsert_batch(db, models.Fulfillment, [fulfillment_dict], ['id'])
+    if fulfillment_dict["id"] is not None:
+        upsert_batch(db, models.Fulfillment, [fulfillment_dict], ['id'])
 
-    order_to_update = db.query(models.Order).filter(models.Order.id == fulfillment_data.order_id).first()
+    # Update order fulfillment_status when appropriate
+    order_to_update = db.query(models.Order).filter(models.Order.id == order_id).first()
     if order_to_update:
-        if fulfillment_data.status == 'success':
+        if status and str(status).lower() == 'success':
             order_to_update.fulfillment_status = 'fulfilled'
-        else:
-            order_to_update.fulfillment_status = fulfillment_data.status.lower() if fulfillment_data.status else None
+        elif status:
+            order_to_update.fulfillment_status = str(status).lower()
         db.commit()
 
 
-def create_refund_from_webhook(db: Session, store_id: int, refund_data: schemas.ShopifyRefundWebhook):
-    order = db.query(models.Order).filter(models.Order.id == refund_data.order_id).first()
-    if not order:
-        placeholder_order = {
-            "id": refund_data.order_id,
+def create_refund_from_webhook(db: Session, store_id: int, refund_data: Any):
+    """
+    Accepts dict or Pydantic. Persists refund, ensures referenced order + line items exist.
+    """
+    order_id = _get(refund_data, "order_id")
+    if not order_id:
+        return
+    order_id = int(order_id)
+
+    # Ensure placeholder order
+    if not db.query(models.Order.id).filter(models.Order.id == order_id).first():
+        upsert_batch(db, models.Order, [{
+            "id": order_id,
             "store_id": store_id,
-            "name": f"#{refund_data.order_id}",
-            "shopify_gid": f"gid://shopify/Order/{refund_data.order_id}",
-        }
-        upsert_batch(db, models.Order, [placeholder_order], ['id'])
+            "name": f"#{order_id}",
+            "shopify_gid": f"gid://shopify/Order/{order_id}",
+        }], ['id'])
 
     # Ensure referenced line items exist
+    refund_line_items = _get(refund_data, "refund_line_items") or []
+    required_line_item_ids = { _get(item, "line_item_id") for item in refund_line_items if _get(item, "line_item_id") }
+    existing_line_item_ids = {
+        lid for (lid,) in db.query(models.LineItem.id).filter(models.LineItem.id.in_(required_line_item_ids)).all()
+    }
     line_items_to_create: List[Dict[str, Any]] = []
-    required_line_item_ids = {item.line_item_id for item in refund_data.refund_line_items}
-    existing_line_items = db.query(models.LineItem.id).filter(models.LineItem.id.in_(required_line_item_ids)).all()
-    existing_line_item_ids = {item_id for (item_id,) in existing_line_items}
-    for item in refund_data.refund_line_items:
-        if item.line_item_id not in existing_line_item_ids:
-            line_item_data = item.line_item
-            line_items_to_create.append({
-                "id": line_item_data['id'],
-                "order_id": refund_data.order_id,
-                "variant_id": line_item_data.get('variant_id'),
-                "product_id": line_item_data.get('product_id'),
-                "title": line_item_data.get('title', 'N/A'),
-                "quantity": line_item_data.get('quantity', 0),
-                "sku": line_item_data.get('sku'),
-                "shopify_gid": f"gid://shopify/LineItem/{line_item_data['id']}",
-            })
+    for item in refund_line_items:
+        li_id = _get(item, "line_item_id")
+        if not li_id or li_id in existing_line_item_ids:
+            continue
+        li = _get(item, "line_item") or {}
+        line_items_to_create.append({
+            "id": int(_get(li, "id")) if _get(li, "id") else int(li_id),
+            "order_id": order_id,
+            "variant_id": _get(li, "variant_id"),
+            "product_id": _get(li, "product_id"),
+            "title": _get(li, "title") or "N/A",
+            "quantity": _get(li, "quantity") or 0,
+            "sku": _get(li, "sku"),
+            "shopify_gid": f"gid://shopify/LineItem/{int(_get(li, 'id') or li_id)}",
+        })
     if line_items_to_create:
-        print(f"Creating {len(line_items_to_create)} placeholder line items for refund processing.")
         upsert_batch(db, models.LineItem, line_items_to_create, ['id'])
 
-    # Aggregate refund totals
+    # Refund header
+    rid = _get(refund_data, "id")
+    transactions = _get(refund_data, "transactions") or []
     total_refunded = 0.0
     currency = "USD"
-    for transaction in refund_data.transactions:
-        if transaction.get('kind') == 'refund' and transaction.get('status') == 'success':
-            total_refunded += float(transaction.get('amount', 0.0))
-            currency = transaction.get('currency', currency)
+    for t in transactions:
+        if _get(t, "kind") == "refund" and _get(t, "status") == "success":
+            amt = _get(t, "amount")
+            if amt is not None:
+                try:
+                    total_refunded += float(amt)
+                except Exception:
+                    pass
+            currency = _get(t, "currency") or currency
 
     refund_dict = {
-        "id": refund_data.id,
-        "order_id": refund_data.order_id,
-        "created_at": refund_data.created_at,
-        "note": refund_data.note,
+        "id": int(rid) if rid else None,
+        "order_id": order_id,
+        "created_at": _parse_dt(_get(refund_data, "created_at")),
+        "note": _get(refund_data, "note"),
         "total_refunded": total_refunded,
         "currency": currency,
-        "shopify_gid": f"gid://shopify/Refund/{refund_data.id}",
+        "shopify_gid": f"gid://shopify/Refund/{int(rid)}" if rid else None,
     }
-    upsert_batch(db, models.Refund, [refund_dict], ['id'])
+    if refund_dict["id"] is not None:
+        upsert_batch(db, models.Refund, [refund_dict], ['id'])
+        db_refund = db.query(models.Refund).filter(models.Refund.id == refund_dict["id"]).one()
 
-    db_refund = db.query(models.Refund).filter(models.Refund.id == refund_data.id).one()
-    refund_line_items_list: List[Dict[str, Any]] = []
-    for item in refund_data.refund_line_items:
-        refund_line_items_list.append({
-            "id": item.id,
-            "refund_id": db_refund.id,
-            "line_item_id": item.line_item_id,
-            "quantity": item.quantity,
-            "subtotal": item.subtotal,
-            "total_tax": item.total_tax,
-        })
-    if refund_line_items_list:
-        upsert_batch(db, models.RefundLineItem, refund_line_items_list, ['id'])
+        # Refund lines
+        refund_line_items_list: List[Dict[str, Any]] = []
+        for item in refund_line_items:
+            refund_line_items_list.append({
+                "id": int(_get(item, "id")) if _get(item, "id") else None,
+                "refund_id": db_refund.id,
+                "line_item_id": int(_get(item, "line_item_id")) if _get(item, "line_item_id") else None,
+                "quantity": _get(item, "quantity"),
+                "subtotal": _get(item, "subtotal"),
+                "total_tax": _get(item, "total_tax"),
+            })
+        refund_line_items_list = [x for x in refund_line_items_list if x["id"] is not None]
+        if refund_line_items_list:
+            upsert_batch(db, models.RefundLineItem, refund_line_items_list, ['id'])
 
-    order_to_update = db.query(models.Order).filter(models.Order.id == refund_data.order_id).first()
+    # Update order financial status according to total refunds
+    order_to_update = db.query(models.Order).filter(models.Order.id == order_id).first()
     if order_to_update and order_to_update.total_price is not None:
         current_refunds = (
             db.query(func.sum(models.Refund.total_refunded))
-            .filter(models.Refund.order_id == refund_data.order_id)
+            .filter(models.Refund.order_id == order_id)
             .scalar()
             or 0
         )
@@ -368,7 +385,57 @@ def create_refund_from_webhook(db: Session, store_id: int, refund_data: schemas.
     db.commit()
 
 
-# ---------- bulk GraphQL import (minor safety fixes) ----------
+# ---------------- order HOLD / RELEASE (from webhooks) ----------------
+
+def apply_order_hold_from_webhook(db: Session, store_id: int, payload: Any, on_hold: bool):
+    """
+    Marks order as on hold (or releases hold). Accepts order payloads or
+    fulfillment_order payloads. Best effort to resolve order_id.
+    """
+    order_id = _get(payload, "order_id")
+
+    # Some hold webhooks may wrap data under 'fulfillment_order'
+    if not order_id:
+        fo = _get(payload, "fulfillment_order")
+        if isinstance(fo, dict):
+            order_id = _get(fo, "order_id") or _get(_get(fo, "order"), "id")
+
+    if not order_id:
+        # If we cannot resolve the order id, skip safely
+        print("[holds] Could not resolve order_id from webhook payload.")
+        return
+
+    order_id = int(order_id)
+
+    # Ensure order exists
+    if not db.query(models.Order.id).filter(models.Order.id == order_id).first():
+        upsert_batch(db, models.Order, [{
+            "id": order_id,
+            "store_id": store_id,
+            "name": f"#{order_id}",
+            "shopify_gid": f"gid://shopify/Order/{order_id}",
+        }], ['id'])
+
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if not order:
+        return
+
+    if on_hold:
+        order.fulfillment_status = "on_hold"
+        reason = _get(payload, "reason") or _get(payload, "hold_reason")
+        if hasattr(order, "hold_reason") and reason:
+            order.hold_reason = reason
+    else:
+        # release back to unfulfilled if not fulfilled yet
+        if order.fulfillment_status != "fulfilled":
+            order.fulfillment_status = "unfulfilled"
+        if hasattr(order, "hold_reason"):
+            order.hold_reason = None
+
+    db.commit()
+
+
+# ---------------- bulk GraphQL import (unchanged except guards) ----------------
 
 def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder], store_id: int):
     if not orders_data:
@@ -388,8 +455,8 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
 
     for order in orders_data:
         order_ids_to_process.append(order.legacy_resource_id)
-
         payment_gateway_str = ", ".join(order.paymentGatewayNames) if order.paymentGatewayNames else None
+
         all_orders.append({
             "id": order.legacy_resource_id,
             "shopify_gid": order.id,
@@ -405,14 +472,14 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
             "processed_at": order.processed_at,
             "financial_status": (order.financial_status or 'pending').lower(),
             "fulfillment_status": (order.fulfillment_status or 'unfulfilled').lower(),
-            "currency": order.currency,  # keep your existing mapping
+            "currency": order.currency,
             "payment_gateway_names": payment_gateway_str,
             "note": order.note,
             "tags": ", ".join(order.tags) if order.tags else None,
             "total_price": order.total_price.amount if order.total_price else None,
             "subtotal_price": order.subtotal_price.amount if order.subtotal_price else None,
             "total_tax": order.total_tax.amount if order.total_tax else None,
-            "total_discounts": order.total_discounts.amount if order.total_discounts else None,  # FIX: guard None
+            "total_discounts": order.total_discounts.amount if order.total_discounts else None,
             "total_shipping_price": order.total_shipping_price.amount if order.total_shipping_price else None,
         })
 
@@ -543,7 +610,7 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
     print("Database synchronization and committed stock update complete.")
 
 
-# ---------- simple read helpers ----------
+# ---------------- read helpers ----------------
 
 def get_orders_by_store(db: Session, store_id: int):
     return (
