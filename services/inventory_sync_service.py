@@ -1,44 +1,47 @@
 # services/inventory_sync_service.py
+
+from __future__ import annotations
+
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple
+from typing import List, Tuple, Optional, Dict
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
 
 import models
+from services.shopify_service import ShopifyService
 from product_service import ProductService
-from shopify_service import ShopifyService
 
-# ---------------- time helpers (UTC-aware) ----------------
+# ---------- time helpers (UTC-aware) ----------
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
-def _ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
+def _aware(dt: Optional[datetime]) -> Optional[datetime]:
     if dt is None:
         return None
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
-# ---------------- constants / policy ----------------
+# ---------- policy ----------
 STALE_TTL_SECONDS = 10
 ECHO_WINDOW_SECONDS = 60
 
-# Bootstrap safety: on first-ever read, if many zeros but some positive, treat zeros as anomalies.
+# Bootstrap: if at first read you see many zeros and at least one positive,
+# treat zeros as anomalies (take min of positives).
 BOOTSTRAP_IGNORE_ZERO_IF_MAJORITY_POSITIVE = True
-# For that bootstrap only, allow bypassing the on_hand clamp so we can recover to the true pool value.
 BYPASS_ON_HAND_CLAMP_FOR_FIRST_BOOTSTRAP = True
 
-# ---------------- PG advisory lock ----------------
+# ---------- advisory lock ----------
 LOCK_SQL = text("SELECT pg_try_advisory_xact_lock(hashtext(:k))")
 
-def _acquire_lock(db: Session, group_id: str) -> bool:
+def _acquire_lock(db: Session, group_key: str) -> bool:
     try:
-        return bool(db.execute(LOCK_SQL, {"k": group_id}).scalar())
+        return bool(db.execute(LOCK_SQL, {"k": group_key}).scalar())
     except Exception as e:
-        print(f"[lock] failed group={group_id}: {e}")
+        print(f"[lock] failed group={group_key}: {e}")
         return False
 
-# ---------------- helpers ----------------
+# ---------- helpers ----------
 def _is_recent_echo(db: Session, variant_id: int, current_available: int, window_s: int = ECHO_WINDOW_SECONDS) -> bool:
     since = _utcnow() - timedelta(seconds=window_s)
     row = (
@@ -49,12 +52,14 @@ def _is_recent_echo(db: Session, variant_id: int, current_available: int, window
     )
     return bool(row and int(row.target_available) == int(current_available))
 
+
 def _ensure_no_open_tx(db: Session):
     try:
         if db.in_transaction():
             db.commit()
     except Exception:
         db.rollback()
+
 
 def _refresh_member_snapshot(
     db: Session,
@@ -66,8 +71,9 @@ def _refresh_member_snapshot(
     """Fetch live available/on_hand for one member and upsert local snapshot."""
     svc = ShopifyService(store_url=store_url, token=token)
     rows = svc.get_inventory_levels_for_items([inventory_item_id]) or []
+
     lvl = next(
-        (it for it in rows if int(it["id"]) == int(inventory_item_id) and int(it["location_id"]) == int(location_id)),
+        (r for r in rows if int(r.get("id", 0)) == int(inventory_item_id) and int(r.get("location_id", 0)) == int(location_id)),
         None,
     )
     if not lvl:
@@ -97,6 +103,7 @@ def _refresh_member_snapshot(
         db.add(snap)
     return snap
 
+
 def _get_fresh_snap(db: Session, member: models.ProductVariant) -> Optional[models.InventoryLevel]:
     """Return a fresh-enough snapshot (refresh if missing/stale)."""
     m_store = member.product.store
@@ -107,7 +114,7 @@ def _get_fresh_snap(db: Session, member: models.ProductVariant) -> Optional[mode
         (lvl for lvl in member.inventory_levels if int(lvl.location_id) == int(m_store.sync_location_id)),
         None,
     )
-    last_ts = _ensure_aware(m_snap.last_fetched_at) if m_snap else None
+    last_ts = _aware(m_snap.last_fetched_at) if m_snap else None
     stale = m_snap is None or last_ts is None or (_utcnow() - last_ts).total_seconds() > STALE_TTL_SECONDS
     if stale:
         m_snap = _refresh_member_snapshot(
@@ -118,6 +125,7 @@ def _get_fresh_snap(db: Session, member: models.ProductVariant) -> Optional[mode
             location_id=m_store.sync_location_id,
         )
     return m_snap
+
 
 def _compute_bootstrap_pool_from_snaps(snaps: List[models.InventoryLevel]) -> int:
     """First-time pool from live truth using min(), with a zero-anomaly guard."""
@@ -131,6 +139,7 @@ def _compute_bootstrap_pool_from_snaps(snaps: List[models.InventoryLevel]) -> in
             return min(positives)
     return min(vals)
 
+
 def _write_available_delta(
     store_url: str,
     token: str,
@@ -139,7 +148,7 @@ def _write_available_delta(
     target_available: int,
     current_available: int,
 ):
-    """Use delta write (tested path from bulk editor)."""
+    """Use delta write (same tested path as bulk editor)."""
     delta = int(target_available) - int(current_available)
     if delta == 0:
         return
@@ -148,7 +157,6 @@ def _write_available_delta(
     loc_gid = f"gid://shopify/Location/{location_id}"
     ps.adjust_inventory_quantity(inv_gid, loc_gid, delta)
 
-# ---------------- main loop ----------------
 
 def process_inventory_update_event(
     shop_domain: str,
@@ -160,18 +168,21 @@ def process_inventory_update_event(
 ):
     """
     GOLDEN SYNC LOOP (bootstrap once, then delta-based pool)
-      • First event per group: refresh all, pool = min(live) with anomaly guard; (optionally) bypass on_hand clamp to recover.
-      • Subsequent events: pool_available += delta_available_at_origin (within lock); propagate to all stores.
-      • Always clamp per store: 0 ≤ target ≤ on_hand, and apply safety_buffer.
-      • Writes are delta-based to match your tested bulk editor.
+
+    • First event per group: refresh all members; pool = min(live) with anomaly guard;
+      optionally bypass on_hand clamp to recover.
+    • Subsequent events: pool_available += delta_available_at_origin (within lock);
+      then propagate to all stores.
+    • Always clamp per store: 0 ≤ target ≤ on_hand, and apply safety_buffer.
+    • Writes are delta-based to match your tested bulk editor path.
     """
-    owns_session = False
+    owns = False
     if db is None:
         if db_factory is None:
             from database import SessionLocal  # type: ignore
             db_factory = SessionLocal
         db = db_factory()
-        owns_session = True
+        owns = True
 
     try:
         # 1) Idempotency
@@ -182,7 +193,7 @@ def process_inventory_update_event(
         db.commit()
 
         # 2) Resolve variant → group → store
-        variant = (
+        variant: models.ProductVariant = (
             db.query(models.ProductVariant)
             .options(
                 joinedload(models.ProductVariant.product).joinedload(models.Product.store),
@@ -195,14 +206,15 @@ def process_inventory_update_event(
         if not variant or not variant.group_membership or not variant.group_membership.group:
             print("[skip] unknown variant or no barcode group")
             return
+
         group = variant.group_membership.group
-        store = variant.product.store
+        store: models.Store = variant.product.store
 
         if not store.enabled:
             print(f"[skip] store disabled: {store.name}")
             return
 
-        # Auto-learn sync location id
+        # Auto-learn sync location (first event)
         if not store.sync_location_id:
             store.sync_location_id = int(location_id)
             db.commit()
@@ -218,16 +230,17 @@ def process_inventory_update_event(
             print("[skip] group is conflicted")
             return
 
-        # 3) Live truth for the triggering variant
+        # 3) Live truth for origin
         svc_origin = ShopifyService(store_url=store.shopify_url, token=store.api_token)
         origin_rows = svc_origin.get_inventory_levels_for_items([inventory_item_id]) or []
         origin_lvl = next(
-            (it for it in origin_rows if int(it["id"]) == int(inventory_item_id) and int(it["location_id"]) == int(store.sync_location_id)),
+            (r for r in origin_rows if int(r.get("id", 0)) == int(inventory_item_id) and int(r.get("location_id", 0)) == int(store.sync_location_id)),
             None,
         )
         if not origin_lvl:
             print("[abort] live inventory at sync location not found")
             return
+
         current_available = int(origin_lvl.get("available", 0))
         current_on_hand = int(origin_lvl.get("on_hand", current_available))
 
@@ -236,8 +249,8 @@ def process_inventory_update_event(
             print("[echo] drop")
             return
 
-        # 5) TX-LOCK
-        planned_writes: List[Tuple[models.ProductVariant, int, int, bool]] = []  # (member, target, current_available, bypass_on_hand_clamp)
+        # 5) Transaction + lock
+        planned_writes: List[Tuple[models.ProductVariant, int, int, bool]] = []  # (member, target, current_av, bypass_on_hand)
         first_bootstrap = group.last_reconciled_at is None
 
         _ensure_no_open_tx(db)
@@ -248,7 +261,7 @@ def process_inventory_update_event(
                 print(f"[lock-miss] group={group.id}")
                 return
 
-            # Load (for_update) the origin snapshot and compute delta BEFORE updating it
+            # Load FOR UPDATE origin snapshot and compute delta BEFORE update
             snap_origin = (
                 db.query(models.InventoryLevel)
                 .filter(
@@ -261,7 +274,7 @@ def process_inventory_update_event(
             last_available = int(snap_origin.available) if snap_origin and snap_origin.available is not None else 0
             delta_at_origin = current_available - last_available
 
-            # Update / insert origin snapshot
+            # Update/insert origin snapshot
             now = _utcnow()
             if snap_origin:
                 snap_origin.available = current_available
@@ -278,8 +291,8 @@ def process_inventory_update_event(
                     )
                 )
 
-            # Load all members and ensure fresh snapshots (refresh if stale/missing)
-            members = (
+            # Load all members and ensure EVERY member has a fresh snapshot.
+            members: List[models.ProductVariant] = (
                 db.query(models.ProductVariant)
                 .options(
                     joinedload(models.ProductVariant.product).joinedload(models.Product.store),
@@ -290,56 +303,65 @@ def process_inventory_update_event(
                 .all()
             )
 
+            # Build a map of member.id -> snapshot (after refresh if missing/stale)
+            snap_map: Dict[int, models.InventoryLevel] = {}
             fresh_snaps: List[models.InventoryLevel] = []
-            for member in members:
-                m_store = member.product.store
+            for m in members:
+                m_store = m.product.store
                 if not m_store.enabled or not m_store.sync_location_id:
                     continue
-                if getattr(member, "tracked", True) is False:
+                if getattr(m, "tracked", True) is False:
                     continue
-
-                m_snap = _get_fresh_snap(db, member)
-                if m_snap:
-                    fresh_snaps.append(m_snap)
+                s = _get_fresh_snap(db, m)
+                # If still missing (no local row yet), force a refresh to CREATE it:
+                if s is None:
+                    s = _refresh_member_snapshot(
+                        db,
+                        store_url=m_store.shopify_url,
+                        token=m_store.api_token,
+                        inventory_item_id=m.inventory_item_id,
+                        location_id=m_store.sync_location_id,
+                    )
+                if s:
+                    snap_map[m.id] = s
+                    fresh_snaps.append(s)
 
             if first_bootstrap:
-                # Pool from live truth using safe min (with anomaly guard)
+                # Pool from live truth using safe min with zero-anomaly guard
                 new_pool = _compute_bootstrap_pool_from_snaps(fresh_snaps)
                 group.pool_available = new_pool
                 group.last_reconciled_at = _utcnow()
             else:
-                # ---- DELTA POLICY (this enables upward propagation on restock) ----
-                group.pool_available = max(0, int(group.pool_available) + int(delta_at_origin))
+                # Delta policy (works for upward propagation on restocks)
+                group.pool_available = max(0, int(group.pool_available or 0) + int(delta_at_origin))
 
-            # Plan targets
-            for member in members:
-                m_store = member.product.store
-                if not m_store.enabled or not m_store.sync_location_id or getattr(member, "tracked", True) is False:
+            # Plan targets for ALL members using the *snap_map* (guaranteed rows)
+            for m in members:
+                m_store = m.product.store
+                if not m_store.enabled or not m_store.sync_location_id or getattr(m, "tracked", True) is False:
                     continue
 
-                # Find the updated snapshot
-                m_snap = next(
-                    (lvl for lvl in member.inventory_levels if int(lvl.location_id) == int(m_store.sync_location_id)),
-                    None,
-                )
+                m_snap = snap_map.get(m.id)
                 if not m_snap:
-                    continue
-                m_current_av = int(m_snap.available or 0)
+                    continue  # should be rare now
 
+                m_current_av = int(m_snap.available or 0)
                 # Safety buffer & clamp
-                target = max(0, int(group.pool_available) - int(m_store.safety_buffer))
+                target = max(0, int(group.pool_available or 0) - int(m_store.safety_buffer or 0))
+
                 bypass_on_hand = False
                 if first_bootstrap and BYPASS_ON_HAND_CLAMP_FOR_FIRST_BOOTSTRAP:
                     values = [int(s.available or 0) for s in fresh_snaps]
                     zeros = sum(1 for v in values if v == 0)
                     positives = sum(1 for v in values if v > 0)
-                    if positives and zeros >= len(values) // 2 and group.pool_available > 0:
+                    if positives and zeros >= len(values) // 2 and group.pool_available and group.pool_available > 0:
                         bypass_on_hand = True
+
                 if not bypass_on_hand:
                     target = min(target, int(m_snap.on_hand or 0))
 
                 if m_current_av != target:
-                    planned_writes.append((member, target, m_current_av, bypass_on_hand))
+                    planned_writes.append((m, target, m_current_av, bypass_on_hand))
 
             tx.commit()
         except Exception:
@@ -359,8 +381,8 @@ def process_inventory_update_event(
                     target_available=int(target),
                     current_available=int(current_av),
                 )
-                print(f"[adjust-available] gid://shopify/InventoryItem/{member.inventory_item_id} @ gid://shopify/Location/{m_store.sync_location_id} Δ {int(target)-int(current_av)}")
 
+                # Record push log and set local snapshot to the target (fresh timestamp)
                 _ensure_no_open_tx(db)
                 tx2 = db.begin()
                 try:
@@ -388,10 +410,9 @@ def process_inventory_update_event(
                 except Exception:
                     tx2.rollback()
                     raise
-
             except Exception as e:
                 print(f"[write-fail] store={m_store.name} variant={member.id} target={target}: {e}")
 
     finally:
-        if owns_session:
+        if owns:
             db.close()

@@ -1,46 +1,84 @@
 # services/sync_tracker.py
-"""
-Lightweight helpers to ensure each variant belongs to exactly one barcode group
-(by normalized barcode) and to avoid noisy duplicate "added to group" logs.
-"""
 
-from typing import Optional
-from sqlalchemy.orm import Session
+from __future__ import annotations
 
-import models
+import threading
+import uuid
+from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
+from typing import Dict, Optional, List, Literal
 
-def _norm_barcode(b: Optional[str]) -> Optional[str]:
-    if not b:
-        return None
-    return b.strip().replace(" ", "").upper() or None
+Status = Literal["queued", "running", "done", "error"]
 
-def ensure_variant_in_group(db: Session, variant: models.ProductVariant) -> None:
-    """
-    Create barcode group + membership if missing, otherwise no-op.
-    This avoids duplicate inserts and duplicate 'added' logs.
-    """
-    bnorm = _norm_barcode(variant.barcode)
-    if not bnorm:
-        return
+@dataclass
+class Task:
+    id: str
+    name: str
+    status: Status
+    created_at: datetime
+    updated_at: datetime
+    error: Optional[str] = None
 
-    grp = db.query(models.BarcodeGroup).filter(models.BarcodeGroup.id == bnorm).first()
-    if not grp:
-        grp = models.BarcodeGroup(id=bnorm, status="active", pool_available=0)
-        db.add(grp)
-        db.flush()
+    def to_dict(self) -> Dict:
+        d = asdict(self)
+        # make ISO strings for JSONability
+        d["created_at"] = self.created_at.isoformat()
+        d["updated_at"] = self.updated_at.isoformat()
+        return d
 
-    exists = (
-        db.query(models.GroupMembership)
-        .filter(
-            models.GroupMembership.variant_id == variant.id,
-            models.GroupMembership.group_id == bnorm,
-        )
-        .first()
-    )
-    if exists:
-        # already a member; no spammy log
-        return
 
-    db.add(models.GroupMembership(variant_id=variant.id, group_id=bnorm))
-    # Let caller commit; single log line here if you want visibility:
-    print(f"Variant {variant.id} added to group '{bnorm}'")
+_LOCK = threading.Lock()
+_TASKS: Dict[str, Task] = {}
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def create_task(name: str) -> str:
+    """Create a new task in 'queued' state and return its id."""
+    with _LOCK:
+        tid = str(uuid.uuid4())
+        t = Task(id=tid, name=name, status="queued", created_at=_now(), updated_at=_now())
+        _TASKS[tid] = t
+        return tid
+
+
+def start_task(task_id: str) -> None:
+    with _LOCK:
+        t = _TASKS.get(task_id)
+        if not t:
+            return
+        t.status = "running"
+        t.updated_at = _now()
+
+
+def complete_task(task_id: str) -> None:
+    with _LOCK:
+        t = _TASKS.get(task_id)
+        if not t:
+            return
+        t.status = "done"
+        t.updated_at = _now()
+
+
+def fail_task(task_id: str, error: str) -> None:
+    with _LOCK:
+        t = _TASKS.get(task_id)
+        if not t:
+            return
+        t.status = "error"
+        t.error = error
+        t.updated_at = _now()
+
+
+def get_task_status(task_id: str) -> Optional[Dict]:
+    with _LOCK:
+        t = _TASKS.get(task_id)
+        return t.to_dict() if t else None
+
+
+def get_all_tasks() -> List[Dict]:
+    with _LOCK:
+        return [t.to_dict() for t in _TASKS.values()]
+s

@@ -1,71 +1,75 @@
 # routes/sync_control.py
 
+from __future__ import annotations
+
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
-from typing import Optional
-from pydantic import BaseModel
+
 from database import get_db, SessionLocal
-from services import sync_service, sync_tracker
-from crud import store as crud_store
+import models
 
-router = APIRouter(
-    prefix="/api/sync-control",
-    tags=["Sync Control"],
-    responses={404: {"description": "Not found"}},
-)
+# services
+try:
+    from services import sync_tracker
+except Exception:
+    import sync_tracker  # type: ignore
 
-class SyncRequest(BaseModel):
-    store_id: Optional[int] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
+try:
+    from services.shopify_service import ShopifyService
+except Exception:
+    from shopify_service import ShopifyService  # type: ignore
 
-@router.post("/orders", status_code=202)
-def trigger_order_sync(request: SyncRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """
-    Triggers a background sync of orders. Can be for all stores, a single store, or a date range.
-    """
-    task_ids = []
-    if request.store_id:
-        store = crud_store.get_store(db, store_id=request.store_id)
-        if not store:
-            raise HTTPException(status_code=404, detail="Store not found")
-        stores_to_sync = [store]
-    else:
-        stores_to_sync = crud_store.get_stores(db)
+try:
+    from crud import product as crud_product
+except Exception:
+    import product as crud_product  # type: ignore
 
-    for store in stores_to_sync:
-        task_id = sync_tracker.create_task(f"Orders for {store.name}")
-        task_ids.append(task_id)
-        # --- FIX: Create a new session and pass it directly to the background task ---
-        background_tasks.add_task(
-            sync_service.run_sync_in_background,
-            target_function=sync_service.run_full_order_sync,
-            db=SessionLocal(), # Create a new session for the task
-            store_id=store.id,
-            task_id=task_id,
-            start_date=request.start_date,
-            end_date=request.end_date
-        )
-    return {"message": "Order synchronization started.", "task_ids": task_ids}
 
-@router.post("/products", status_code=202)
-def trigger_product_sync(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """Triggers a background sync of all products for ALL stores."""
-    stores = crud_store.get_stores(db)
+router = APIRouter(prefix="/api/sync-control", tags=["Sync Control"])
+
+
+@router.get("/tasks")
+def list_tasks():
+    return {"tasks": sync_tracker.get_all_tasks()}
+
+
+def _sync_products_for_store(store_id: int, task_id: str):
+    """Background job: pull all products & variants for a store and upsert."""
+    db = SessionLocal()
+    try:
+        sync_tracker.start_task(task_id)
+
+        store: models.Store = db.query(models.Store).get(store_id)
+        if not store or not store.enabled:
+            raise RuntimeError("Store not found or disabled")
+
+        svc = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+
+        # Pull pages and upsert incrementally
+        for page in svc.get_all_products_and_variants():
+            # page = [{ "product": schemas.Product, "variants": [schemas.ProductVariant, ...] }, ...]
+            crud_product.create_or_update_products(db, store_id=store.id, page=page)
+
+        sync_tracker.complete_task(task_id)
+    except Exception as e:
+        db.rollback()
+        sync_tracker.fail_task(task_id, str(e))
+        print(f"CRITICAL BACKGROUND ERROR in task {task_id}: {e}")
+    finally:
+        db.close()
+
+
+@router.post("/products")
+def trigger_product_sync(background: BackgroundTasks, db: Session = Depends(get_db)):
+    # launch one task per enabled store
+    stores = db.query(models.Store).filter(models.Store.enabled == True).all()
+    if not stores:
+        raise HTTPException(400, "No enabled stores.")
+
     task_ids = []
     for store in stores:
-        task_id = sync_tracker.create_task(f"Products for {store.name}")
-        task_ids.append(task_id)
-        # --- FIX: Create a new session and pass it directly to the background task ---
-        background_tasks.add_task(
-            sync_service.run_sync_in_background,
-            target_function=sync_service.run_full_product_sync,
-            db=SessionLocal(), # Create a new session for the task
-            store_id=store.id,
-            task_id=task_id
-        )
-    return {"message": "Full product synchronization started for all stores.", "task_ids": task_ids}
+        tid = sync_tracker.create_task(f"Products for {store.name}")
+        background.add_task(_sync_products_for_store, store.id, tid)
+        task_ids.append({"store_id": store.id, "task_id": tid})
 
-@router.get("/status")
-def get_all_tasks_status():
-    return sync_tracker.get_all_tasks()
+    return {"accepted": True, "tasks": task_ids}
