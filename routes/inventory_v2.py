@@ -61,7 +61,7 @@ def inventory_report(
     Notes:
       - Totals are always deduped by barcode group (MAX cost/price per group * group on_hand).
       - Rows:
-          view='grouped' -> one row per barcode group
+          view='grouped'    -> one row per barcode group
           view='individual' -> one row per variant (summed across locations)
     """
     store_list = _parse_store_ids(store_ids)
