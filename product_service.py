@@ -1,122 +1,145 @@
 # product_service.py
 
-import os
-import requests
 import time
 import random
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
-from shopify_service import gid_to_id
+import requests
+
 
 class ProductService:
     """
-    A service class to handle product and variant updates via the Shopify Admin API.
+    Service for Shopify product/variant and inventory mutations (GraphQL Admin API).
     """
     def __init__(self, store_url: str, token: str, api_version: str = "2025-04"):
-        if not all([store_url, token]):
-            raise ValueError("Store URL and Access Token are required.")
-        
+        if not store_url or not token:
+            raise ValueError("store_url and token are required")
         self.api_endpoint = f"https://{store_url}/admin/api/{api_version}/graphql.json"
         self.headers = {
             "Content-Type": "application/json",
             "X-Shopify-Access-Token": token,
         }
 
+    # -------------------- internal helpers --------------------
     def _execute_mutation(self, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Executes a GraphQL mutation with a reliable retry mechanism for throttling.
+        Execute a GraphQL mutation with retry/backoff for throttling and transient errors.
         """
         payload = {"query": query, "variables": variables or {}}
         max_retries = 7
-        base_delay = 1  # seconds
+        base_delay = 1.0
 
         for attempt in range(max_retries):
             try:
-                response = requests.post(self.api_endpoint, headers=self.headers, json=payload, timeout=20)
-                response.raise_for_status()
-                
-                json_response = response.json()
+                resp = requests.post(self.api_endpoint, headers=self.headers, json=payload, timeout=25)
+                resp.raise_for_status()
+                data = resp.json()
 
-                if "errors" in json_response:
-                    print("Shopify API Error Response:", json_response['errors'])
-                    is_throttled = any(
-                        err.get("extensions", {}).get("code") == "THROTTLED"
-                        for err in json_response.get("errors", [])
-                    )
+                # GraphQL-level errors
+                if "errors" in data and data["errors"]:
+                    errs = data["errors"]
+                    print("Shopify API Error Response:", errs)
+                    # Retry if throttled
+                    is_throttled = any((e.get("extensions", {}) or {}).get("code") == "THROTTLED" for e in errs)
                     if is_throttled and attempt < max_retries - 1:
-                        cost = json_response.get("extensions", {}).get("cost", {})
-                        throttle_status = cost.get("throttleStatus", {})
-                        wait_time = throttle_status.get("currentlyAvailable", base_delay) / throttle_status.get("restoreRate", 50) + 1
-                        print(f"API throttled. Retrying in {wait_time:.2f} seconds...")
-                        time.sleep(wait_time)
+                        # try to honor throttle status if present (fallback to exp backoff)
+                        wait = max(base_delay * (2 ** attempt) + random.uniform(0, 0.5), 1.0)
+                        print(f"[throttle] retry in {wait:.2f}s")
+                        time.sleep(wait)
                         continue
-                    else:
-                        raise ValueError(f"GraphQL API Mutation Error: {json_response['errors']}")
+                    raise ValueError(f"GraphQL API Mutation Error: {errs}")
 
-                return json_response.get("data", {})
+                return data.get("data") or {}
 
             except requests.exceptions.RequestException as e:
                 if attempt < max_retries - 1:
-                    wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                    print(f"Network error: {e}. Retrying in {wait_time:.2f} seconds...")
-                    time.sleep(wait_time)
+                    wait = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                    print(f"[network] {e}; retry in {wait:.2f}s")
+                    time.sleep(wait)
                 else:
-                    raise e
+                    raise
 
-        raise Exception("Max retries reached. Could not complete the API mutation.")
+        raise RuntimeError("Max retries reached for GraphQL mutation")
 
-    def update_product(self, product_gid: str, product_input: Dict[str, Any]) -> Dict[str, Any]:
+    # -------------------- product / variant edits (kept minimal) --------------------
+    def product_update(self, product_input: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Updates a product's details using the productUpdate mutation.
+        Update a product. product_input must include 'id' (a Product GID).
         """
-        MUTATION_UPDATE_PRODUCT = """
+        MUT = """
         mutation productUpdate($input: ProductInput!) {
           productUpdate(input: $input) {
-            product { id, title, vendor, status, tags }
-            userErrors { field, message }
+            product { id title vendor status tags }
+            userErrors { field message }
           }
         }
         """
-        variables = { "input": { "id": product_gid, **product_input } }
-        print(f"Sending product update for {product_gid} with data: {product_input}")
-        response_data = self._execute_mutation(MUTATION_UPDATE_PRODUCT, variables)
-        result = response_data.get("productUpdate", {})
-        if result.get("userErrors"):
-            error_message = ", ".join([f"{e['field']}: {e['message']}" for e in result["userErrors"]])
-            raise ValueError(f"Shopify User Error: {error_message}")
-        return result.get("product", {})
+        data = self._execute_mutation(MUT, {"input": product_input})
+        out = (data.get("productUpdate") or {})
+        if out.get("userErrors"):
+            raise ValueError(f"Shopify User Error: {out['userErrors']}")
+        return out.get("product") or {}
 
-    # MODIFIED: The GraphQL query now includes 'cost' in the response.
-    def update_variant_details(self, product_id: str, variant_updates: Dict[str, Any]) -> Dict[str, Any]:
+    def variants_bulk_update(self, product_id: str, variants: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Updates a single product variant's details using the productVariantsBulkUpdate mutation.
+        Update multiple variants for a product (uses productVariantsBulkUpdate).
+        Each variant dict should include at least 'id' (variant GID) and any fields to change.
         """
-        MUTATION_UPDATE_VARIANT = """
+        MUT = """
         mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
           productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-            productVariants { 
-              id, title, sku, barcode, price, compareAtPrice, 
-              inventoryItem { id, unitCost { amount } } 
-            }
-            userErrors { field, message }
+            productVariants { id title price compareAtPrice position }
+            userErrors { field message }
           }
         }
         """
-        variables = { "productId": product_id, "variants": [variant_updates] }
-        print(f"Sending variant update for {variant_updates.get('id')} to product {product_id} with data: {variant_updates}")
-        response_data = self._execute_mutation(MUTATION_UPDATE_VARIANT, variables)
-        result = response_data.get("productVariantsBulkUpdate", {})
-        if result.get("userErrors"):
-            error_message = ", ".join([f"{e['field']}: {e['message']}" for e in result["userErrors"]])
-            raise ValueError(f"Shopify User Error: {error_message}")
-        return result.get("productVariants", [{}])[0]
+        data = self._execute_mutation(MUT, {"productId": product_id, "variants": variants})
+        out = (data.get("productVariantsBulkUpdate") or {})
+        if out.get("userErrors"):
+            raise ValueError(f"Shopify User Error: {out['userErrors']}")
+        return out.get("productVariants") or []
 
-    def set_inventory_available(self, inventory_item_id: str, location_id: str, target_available: int):
+    # -------------------- inventory mutations --------------------
+    def adjust_inventory_quantity(self, inventory_item_id: str, location_id: str, available_delta: int) -> Dict[str, Any]:
         """
-        ABSOLUTE set of 'available' quantity via inventorySetQuantities.
-        inventory_item_id / location_id are GIDs (gid://shopify/...).
+        Adjust AVAILABLE by a delta at a location.
+        Uses inventoryAdjustQuantities (Input: name, reason, changes[].delta).
         """
-        MUTATION_SET_INVENTORY = """
+        MUT = """
+        mutation inventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!) {
+          inventoryAdjustQuantities(input: $input) {
+            inventoryAdjustmentGroup { id reason }
+            userErrors { field message }
+          }
+        }
+        """
+        variables = {
+            "input": {
+                "name": "available",
+                "reason": "correction",
+                "changes": [{
+                    "inventoryItemId": inventory_item_id,
+                    "locationId": location_id,
+                    "delta": int(available_delta),
+                }],
+            }
+        }
+        print(f"[adjust-available] {inventory_item_id} @ {location_id} Δ {available_delta}")
+        data = self._execute_mutation(MUT, variables)
+        out = (data.get("inventoryAdjustQuantities") or {})
+        if out.get("userErrors"):
+            # format error message for logs
+            msg = ", ".join(f"{(e.get('field') or '')}: {e.get('message')}" for e in out["userErrors"])
+            raise ValueError(f"Shopify Inventory Error: {msg}")
+        return out.get("inventoryAdjustmentGroup") or {}
+
+    def set_inventory_available(self, inventory_item_id: str, location_id: str, target_available: int,
+                                reason: str = "correction", ignore_compare: bool = True) -> Dict[str, Any]:
+        """
+        Set AVAILABLE to an absolute value at a location.
+        Uses inventorySetQuantities (Input: name, reason, quantities[]).
+        """
+        MUT = """
         mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
           inventorySetQuantities(input: $input) {
             inventoryAdjustmentGroup { id reason }
@@ -127,50 +150,26 @@ class ProductService:
         variables = {
             "input": {
                 "name": "available",
-                "ignoreCompareQuantity": True,  # compare-and-set off; turn off contention errors
-                "changes": [{
+                "reason": reason,
+                "ignoreCompareQuantity": bool(ignore_compare),
+                "quantities": [{
                     "inventoryItemId": inventory_item_id,
                     "locationId": location_id,
-                    "quantity": int(target_available)
-                }]
+                    "quantity": int(target_available),
+                }],
             }
         }
         print(f"[set-available] {inventory_item_id} @ {location_id} -> {target_available}")
-        data = self._execute_mutation(MUTATION_SET_INVENTORY, variables)
-        result = data.get("inventorySetQuantities", {})
-        if result.get("userErrors"):
-            msg = ", ".join([f"{e.get('field')}: {e.get('message')}" for e in result["userErrors"]])
+        data = self._execute_mutation(MUT, variables)
+        out = (data.get("inventorySetQuantities") or {})
+        if out.get("userErrors"):
+            msg = ", ".join(f"{(e.get('field') or '')}: {e.get('message')}" for e in out["userErrors"])
             raise ValueError(f"Shopify Inventory Error: {msg}")
-        return result.get("inventoryAdjustmentGroup", {})
-
-    def adjust_inventory_quantity(self, inventory_item_id: str, location_id: str, available_delta: int) -> Dict[str, Any]:
-        """
-        Adjusts the 'available' inventory quantity for an inventory item at a location.
-        """
-        MUTATION_ADJUST_INVENTORY = """
-        mutation inventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!) {
-            inventoryAdjustQuantities(input: $input) {
-                inventoryAdjustmentGroup { id, reason }
-                userErrors { field, message }
-            }
-        }
-        """
-        variables = {
-            "input": {
-                "reason": "correction", "name": "available",
-                "changes": [{"inventoryItemId": inventory_item_id, "locationId": location_id, "delta": available_delta}]
-            }
-        }
-        print(f"Adjusting AVAILABLE inventory for item {inventory_item_id} at {location_id} by {available_delta}")
-        response_data = self._execute_mutation(MUTATION_ADJUST_INVENTORY, variables)
-        result = response_data.get("inventoryAdjustQuantities", {})
-        if result.get("userErrors"):
-            error_message = ", ".join([f"{e['field']}: {e['message']}" for e in result["userErrors"]])
-            raise ValueError(f"Shopify Inventory Error: {error_message}")
-        return result.get("inventoryAdjustmentGroup", {})
+        return out.get("inventoryAdjustmentGroup") or {}
 
     def adjust_on_hand_quantity(self, inventory_item_id: str, location_id: str, on_hand_delta: int) -> Dict[str, Any]:
         """
-        Adjusts the 'on hand' quantity by changing the 'available' quantity, which is the reliable method.
+        There is no direct 'on_hand' adjust; Shopify derives AVAILABLE from ON_HAND minus reservations.
+        The safe tested approach (used by your bulk page) is to adjust AVAILABLE by the desired delta.
         """
-        return self.adjust_inventory_quantity(inventory_item_id, location_id, on_hand_delta)
+        return self.adjust_inventory_quantity(inventory_item_id, location_id, int(on_hand_delta))

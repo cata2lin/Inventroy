@@ -56,18 +56,20 @@ def _set_available_abs_or_delta(
     target_available: int,
 ):
     """
-    Prefer absolute setter (inventorySetQuantities). If not available, compute a live delta and adjust.
+    Prefer absolute setter (inventorySetQuantities). If it fails, fall back to delta adjust.
     """
     ps = ProductService(store_url=store_url, token=token)
 
     inv_gid = f"gid://shopify/InventoryItem/{inventory_item_id}"
     loc_gid = f"gid://shopify/Location/{location_id}"
 
-    if hasattr(ps, "set_inventory_available"):
-        # Absolute set (best; avoids drift)
+    # Try absolute set first
+    try:
         return ps.set_inventory_available(inv_gid, loc_gid, int(target_available))
+    except Exception as e:
+        print(f"[set-fallback->adjust] absolute set failed: {e}")
 
-    # Fallback: compute delta against live truth and adjust
+    # Fallback: compute a live delta and adjust
     svc = ShopifyService(store_url=store_url, token=token)
     data = svc.get_inventory_levels_for_items([inventory_item_id]) or []
     lvl = next(
