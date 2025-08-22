@@ -24,17 +24,10 @@ def _ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
 STALE_TTL_SECONDS = 10
 ECHO_WINDOW_SECONDS = 60
 
-# We equalize every store's AVAILABLE to the group's "truth".
-# The "truth" is the MIN of all members' AVAILABLE at their sync locations (no oversell).
-RECOMPUTE_POLICY = "min"
-
-# Bootstrap safety: if the first-ever read shows many zeros (like after a bad write),
-# but at least one store still has a large positive value, we consider zeros "anomalies"
-# for that FIRST bootstrap and ignore them while establishing the pool.
+# Bootstrap safety: on first-ever read, if many zeros but some positive, treat zeros as anomalies.
 BOOTSTRAP_IGNORE_ZERO_IF_MAJORITY_POSITIVE = True
-# And for that bootstrap only, we bypass the on_hand clamp so we can restore to the true pool.
+# For that bootstrap only, allow bypassing the on_hand clamp so we can recover to the true pool value.
 BYPASS_ON_HAND_CLAMP_FOR_FIRST_BOOTSTRAP = True
-
 
 # ---------------- PG advisory lock ----------------
 LOCK_SQL = text("SELECT pg_try_advisory_xact_lock(hashtext(:k))")
@@ -45,7 +38,6 @@ def _acquire_lock(db: Session, group_id: str) -> bool:
     except Exception as e:
         print(f"[lock] failed group={group_id}: {e}")
         return False
-
 
 # ---------------- helpers ----------------
 def _is_recent_echo(db: Session, variant_id: int, current_available: int, window_s: int = ECHO_WINDOW_SECONDS) -> bool:
@@ -58,14 +50,12 @@ def _is_recent_echo(db: Session, variant_id: int, current_available: int, window
     )
     return bool(row and int(row.target_available) == int(current_available))
 
-
 def _ensure_no_open_tx(db: Session):
     try:
         if db.in_transaction():
             db.commit()
     except Exception:
         db.rollback()
-
 
 def _refresh_member_snapshot(db: Session, store_url: str, token: str, inventory_item_id: int, location_id: int) -> Optional[models.InventoryLevel]:
     """Fetch live available/on_hand for one member and upsert local snapshot."""
@@ -102,7 +92,6 @@ def _refresh_member_snapshot(db: Session, store_url: str, token: str, inventory_
         db.add(snap)
     return snap
 
-
 def _get_fresh_snap(db: Session, member: models.ProductVariant) -> Optional[models.InventoryLevel]:
     """Return a fresh-enough snapshot (refresh if missing/stale)."""
     m_store = member.product.store
@@ -125,26 +114,17 @@ def _get_fresh_snap(db: Session, member: models.ProductVariant) -> Optional[mode
         )
     return m_snap
 
-
-def _compute_pool_from_snaps(snaps: List[models.InventoryLevel], bootstrap_mode: bool) -> int:
-    """Compute the group's pool_available from a list of fresh member snapshots."""
+def _compute_bootstrap_pool_from_snaps(snaps: List[models.InventoryLevel]) -> int:
+    """First-time pool from live truth using min(), with a zero-anomaly guard."""
     vals = [int(s.available or 0) for s in snaps]
-
     if not vals:
         return 0
-
-    if RECOMPUTE_POLICY == "min":
-        if bootstrap_mode and BOOTSTRAP_IGNORE_ZERO_IF_MAJORITY_POSITIVE:
-            positives = [v for v in vals if v > 0]
-            zeros = [v for v in vals if v == 0]
-            # If most are zero but at least one is clearly positive, treat zeros as anomalies for FIRST bootstrap only
-            if positives and len(zeros) >= len(vals) // 2:
-                return min(positives)  # ignore zero anomaly
-        return min(vals)
-
-    # future policies (median, etc.) could be added here
+    if BOOTSTRAP_IGNORE_ZERO_IF_MAJORITY_POSITIVE:
+        positives = [v for v in vals if v > 0]
+        zeros = [v for v in vals if v == 0]
+        if positives and len(zeros) >= len(vals) // 2:
+            return min(positives)
     return min(vals)
-
 
 def _write_available_delta(store_url: str, token: str, inventory_item_id: int, location_id: int, target_available: int, current_available: int):
     """Use delta write (tested path from bulk editor)."""
@@ -156,7 +136,6 @@ def _write_available_delta(store_url: str, token: str, inventory_item_id: int, l
     loc_gid = f"gid://shopify/Location/{location_id}"
     ps.adjust_inventory_quantity(inv_gid, loc_gid, delta)
 
-
 def process_inventory_update_event(
     shop_domain: str,
     event_id: str,
@@ -166,14 +145,11 @@ def process_inventory_update_event(
     db: Optional[Session] = None,
 ):
     """
-    GOLDEN SYNC LOOP (recompute-from-truth, bootstrap-safe, delta-first writes)
-      1) Idempotency
-      2) Resolve variant → group → store; auto-learn sync_location_id on first event
-      3) Fetch live truth for triggering variant
-      4) Echo suppression
-      5) TX-LOCK: refresh all member snapshots if needed; compute pool via MIN policy
-      6) Plan targets (respect safety_buffer); on bootstrap can bypass on_hand clamp for recovery
-      7) OUTSIDE LOCK: write deltas; record PushLog; update local snapshots
+    GOLDEN SYNC LOOP (bootstrap once, then delta-based pool)
+      • First event per group: refresh all, pool = min(live) with anomaly guard; (optionally) bypass on_hand clamp to recover.
+      • Subsequent events: pool_available += delta_available_at_origin (within lock); propagate to all stores.
+      • Always clamp per store: 0 ≤ target ≤ on_hand, and apply safety_buffer.
+      • Writes are delta-based to match your tested bulk editor.
     """
     owns_session = False
     if db is None:
@@ -247,7 +223,7 @@ def process_inventory_update_event(
             print("[echo] drop")
             return
 
-        # 5) TX-LOCK: refresh member snapshots and compute pool
+        # 5) TX-LOCK
         planned_writes: List[Tuple[models.ProductVariant, int, int, bool]] = []  # (member, target, current_available, bypass_on_hand_clamp)
         first_bootstrap = group.last_reconciled_at is None
 
@@ -259,7 +235,7 @@ def process_inventory_update_event(
                 print(f"[lock-miss] group={group.id}")
                 return
 
-            # Refresh *origin* snapshot inside the lock
+            # Load (for_update) the origin snapshot and compute delta BEFORE updating it
             snap_origin = (
                 db.query(models.InventoryLevel)
                 .filter(
@@ -269,10 +245,15 @@ def process_inventory_update_event(
                 .with_for_update(read=True)
                 .first()
             )
+            last_available = int(snap_origin.available) if snap_origin and snap_origin.available is not None else 0
+            delta_at_origin = current_available - last_available
+
+            # Update / insert origin snapshot
+            now = _utcnow()
             if snap_origin:
                 snap_origin.available = current_available
                 snap_origin.on_hand = current_on_hand
-                snap_origin.last_fetched_at = _utcnow()
+                snap_origin.last_fetched_at = now
             else:
                 db.add(
                     models.InventoryLevel(
@@ -280,7 +261,7 @@ def process_inventory_update_event(
                         location_id=store.sync_location_id,
                         available=current_available,
                         on_hand=current_on_hand,
-                        last_fetched_at=_utcnow(),
+                        last_fetched_at=now,
                     )
                 )
 
@@ -308,11 +289,14 @@ def process_inventory_update_event(
                 if m_snap:
                     fresh_snaps.append(m_snap)
 
-            # Compute pool by policy (with bootstrap anomaly handling)
-            new_pool = _compute_pool_from_snaps(fresh_snaps, bootstrap_mode=first_bootstrap)
-            group.pool_available = new_pool
             if first_bootstrap:
+                # Pool from live truth using safe min (with anomaly guard)
+                new_pool = _compute_bootstrap_pool_from_snaps(fresh_snaps)
+                group.pool_available = new_pool
                 group.last_reconciled_at = _utcnow()
+            else:
+                # ---- DELTA POLICY (this enables upward propagation on restock) ----
+                group.pool_available = max(0, int(group.pool_available) + int(delta_at_origin))
 
             # Plan targets
             for member in members:
@@ -320,7 +304,7 @@ def process_inventory_update_event(
                 if not m_store.enabled or not m_store.sync_location_id or getattr(member, "tracked", True) is False:
                     continue
 
-                # Find the now-updated snapshot (should exist)
+                # Find the updated snapshot
                 m_snap = next(
                     (lvl for lvl in member.inventory_levels if int(lvl.location_id) == int(m_store.sync_location_id)),
                     None,
@@ -328,14 +312,11 @@ def process_inventory_update_event(
                 if not m_snap:
                     continue
 
-                # Current live available (we just refreshed snapshots)
                 m_current_av = int(m_snap.available or 0)
 
-                # Safety buffer
+                # Safety buffer & clamp
                 target = max(0, int(group.pool_available) - int(m_store.safety_buffer))
 
-                # Clamp: normally target ≤ on_hand; BUT if this is the FIRST bootstrap and we detected an anomaly (pool>0 with many zeros),
-                # we allow bypass of the on_hand clamp for recovery.
                 bypass_on_hand = False
                 if first_bootstrap and BYPASS_ON_HAND_CLAMP_FOR_FIRST_BOOTSTRAP:
                     values = [int(s.available or 0) for s in fresh_snaps]
@@ -360,7 +341,6 @@ def process_inventory_update_event(
         for member, target, current_av, _bypass in planned_writes:
             m_store = member.product.store
             try:
-                # Always compute delta vs live (we just refreshed to ~live)
                 _write_available_delta(
                     store_url=m_store.shopify_url,
                     token=m_store.api_token,
@@ -382,7 +362,6 @@ def process_inventory_update_event(
                             written_at=_utcnow(),
                         )
                     )
-                    # Update snapshot to target immediately
                     snap2 = (
                         db.query(models.InventoryLevel)
                         .filter(
