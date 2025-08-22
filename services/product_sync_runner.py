@@ -1,5 +1,4 @@
 # services/product_sync_runner.py
-
 from typing import Any, Dict, List, Optional
 import uuid
 import inspect
@@ -7,13 +6,13 @@ import traceback
 
 from sqlalchemy.orm import Session
 
-# Your Shopify API client lives at project root (not under services/)
+# The Shopify client lives at project root
 from shopify_service import ShopifyService
 
-# Tiny in-memory tracker
+# Tiny in-memory tracker (services/sync_tracker.py)
 from services import sync_tracker
 
-# Prefer your CRUD module
+# CRUD module we call into
 from crud import product as crud_product
 
 
@@ -23,7 +22,7 @@ def _call_crud_upsert(db: Session, store_id: int, page: List[Any]) -> None:
       - create_or_update_products(db, store_id, page)
       - create_or_update_products(db=db, store_id=..., page=page)
       - create_or_update_products(db=db, store_id=..., products=page)
-      - alt names: upsert_products / create_or_update_products_batch
+      - alternative names: upsert_products / create_or_update_products_batch / bulk_upsert_products
     """
     fn = None
     for name in (
@@ -32,20 +31,21 @@ def _call_crud_upsert(db: Session, store_id: int, page: List[Any]) -> None:
         "upsert_products",
         "bulk_upsert_products",
     ):
-        fn = getattr(crud_product, name, None)
-        if callable(fn):
+        maybe = getattr(crud_product, name, None)
+        if callable(maybe):
+            fn = maybe
             break
     if fn is None:
         raise RuntimeError("crud.product has no suitable upsert function (tried several names).")
 
-    # Prefer positional first (avoids keyword mismatches)
+    # Try positional first (avoids keyword mismatches)
     try:
         fn(db, store_id, page)  # type: ignore[misc]
         return
     except TypeError:
         pass
 
-    # Try common keyword sets
+    # Common keyword sets
     try:
         fn(db=db, store_id=store_id, page=page)  # type: ignore[misc]
         return
@@ -58,7 +58,7 @@ def _call_crud_upsert(db: Session, store_id: int, page: List[Any]) -> None:
     except TypeError:
         pass
 
-    # Last resort: introspect signature and map common parameter names
+    # Last resort: introspect and map
     sig = inspect.signature(fn)
     kwargs: Dict[str, Any] = {}
     for p in sig.parameters.values():
@@ -79,10 +79,11 @@ def run_product_sync_for_store(
     task_id: Optional[str] = None,
 ):
     """
-    Background job: pull all products+variants via GraphQL and upsert into DB.
+    Background job: pull all products+variants and upsert into DB.
 
-    IMPORTANT: We now pass pages through untouched so that CRUD receives the
-    original Pydantic models/objects (with attribute access like .legacyResourceId).
+    IMPORTANT: We pass 'page' through untouched so CRUD receives exactly
+    what ShopifyService yields (dicts with {'product', 'variants'} whose values
+    are your Pydantic models). CRUD handles shapes and aliases robustly.
     """
     if not task_id:
         task_id = str(uuid.uuid4())
@@ -95,9 +96,9 @@ def run_product_sync_for_store(
         svc = ShopifyService(store_url=shop_url, token=api_token)
 
         for page in svc.get_all_products_and_variants():
-            # DO NOT normalize to dicts — CRUD expects attribute access
+            # DO NOT normalize to dicts — CRUD now supports both dict & Pydantic shapes
             try:
-                _call_crud_upsert(db, store_id, page)  # pass through unchanged
+                _call_crud_upsert(db, store_id, page)
                 db.commit()
             except Exception:
                 db.rollback()
