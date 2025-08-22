@@ -12,14 +12,15 @@ from sqlalchemy.orm import Session
 from database import get_db, SessionLocal
 import models
 
-# CRUD (prefer package imports)
+# CRUD
 from crud import store as crud_store
 from crud import product as crud_product
-from crud import webhooks as crud_webhook  # optional helpers
+from crud import order as crud_order            # NEW: order upsert
+from crud import webhooks as crud_webhook       # optional helpers
 
-# Services (force package import so it never falls back to root)
+# Services
 from services import inventory_sync_service
-from services import commited_projector as committed_projector  # note 1 't' in filename
+from services import commited_projector as committed_projector  # note one 't'
 
 try:
     import schemas
@@ -43,10 +44,7 @@ def _verify_hmac(secret: str, raw_body: bytes, header_hmac: Optional[str]) -> No
 
 
 def _to_attr(obj: Any) -> Any:
-    """
-    Recursively convert dicts → SimpleNamespace so downstream code can use attribute access.
-    Lists and scalars are preserved; nested dicts are converted too.
-    """
+    """Recursively convert dicts → SimpleNamespace for attribute access."""
     if isinstance(obj, dict):
         return SimpleNamespace(**{k: _to_attr(v) for k, v in obj.items()})
     if isinstance(obj, list):
@@ -98,10 +96,10 @@ async def receive_webhook(
             print(f"[app/uninstalled][error] store={store_id}: {e}")
         return response
 
-    # --- ORDERS / FULFILLMENTS → committed projector ---
+    # --- ORDERS / FULFILLMENTS ---
     try:
         if topic in {"orders/create", "orders/updated", "orders/edited", "orders/cancelled", "orders/delete"}:
-            # Prefer your schema if present; otherwise convert dict → attribute object
+            # 1) Parse to attr-access object or schema
             if schemas and hasattr(schemas, "ShopifyOrderWebhook"):
                 try:
                     order_obj = schemas.ShopifyOrderWebhook.parse_obj(payload)
@@ -110,6 +108,15 @@ async def receive_webhook(
             else:
                 order_obj = _to_attr(payload)
 
+            # 2) Save / upsert order in DB (NEW)
+            try:
+                crud_order.upsert_order_from_webhook(db, store.id, order_obj)
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                print(f"[orders][save-error] store={store_id} topic={topic}: {e}")
+
+            # 3) Continue with committed-stock projector for deltas
             committed_projector.process_order_event(db, store_id, topic, order_obj)
 
         elif topic in {"fulfillments/create", "fulfillments/update"}:
@@ -124,15 +131,14 @@ async def receive_webhook(
             committed_projector.process_fulfillment_event(db, store_id, topic, fulfillment_obj)
 
         elif topic == "refunds/create":
-            # If you handle restock deltas off refunds, parse similarly:
-            # refund_obj = _to_attr(payload)   # or a schemas model, if you have one
+            # If you later count restocks from refunds, parse & persist similarly.
             pass
 
     except Exception as e:
         db.rollback()
         print(f"[orders][error] store={store_id} topic={topic}: {e}")
 
-    # --- PRODUCTS → upsert + (optional) group updates ---
+    # --- PRODUCTS ---
     try:
         if topic in {"products/create", "products/update"}:
             if schemas and hasattr(schemas, "ShopifyProductWebhook"):
@@ -144,15 +150,12 @@ async def receive_webhook(
                 product_data = payload  # fallback
 
             crud_product.create_or_update_product_from_webhook(db, store.id, product_data)  # type: ignore[arg-type]
+            db.commit()
 
         elif topic == "products/delete":
-            # Minimal delete handling (optional)
             delete_id = payload.get("id")
             if delete_id:
-                # If you maintain soft-deletes, call your crud here.
-                # Example:
-                # try: crud_webhook.mark_product_as_deleted(db, product_id=int(delete_id))
-                # except Exception: pass
+                # Optional: soft-delete code here if you keep tombstones
                 pass
 
     except Exception as e:
@@ -178,7 +181,6 @@ async def receive_webhook(
 
     # inventory_items/update (optional enrichment)
     if topic == "inventory_items/update":
-        # enrich cost/tracked flags here if desired
         pass
 
     return response
