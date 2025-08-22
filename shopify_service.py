@@ -11,9 +11,12 @@ import schemas
 
 # --- Helper function ---
 def gid_to_id(gid: Optional[str]) -> Optional[int]:
-    if not gid: return None
-    try: return int(str(gid).split('/')[-1])
-    except (IndexError, ValueError): return None
+    if not gid:
+        return None
+    try:
+        return int(str(gid).split('/')[-1])
+    except (IndexError, ValueError):
+        return None
 
 # --- GraphQL Fragments ---
 MONEY_FRAGMENT = "fragment MoneyFragment on MoneyV2 { amount currencyCode }"
@@ -131,23 +134,18 @@ query GetInventoryDetails($cursor: String) {
 }
 """
 
+# IMPORTANT: Shopify 2025-04 no longer supports `inventoryItems(ids: ...)`.
+# Use the root `nodes(ids: [...])` field and inline-fragment the InventoryItem.
 GET_INVENTORY_LEVELS_QUERY = """
 query getInventoryLevels($itemIds: [ID!]!) {
-  inventoryItems(ids: $itemIds) {
-    edges {
-      node {
-        legacyResourceId
-        inventoryLevels {
-          edges {
-            node {
-              location {
-                legacyResourceId
-              }
-              quantities(names: ["available", "on_hand"]) {
-                name
-                quantity
-              }
-            }
+  nodes(ids: $itemIds) {
+    ... on InventoryItem {
+      legacyResourceId
+      inventoryLevels(first: 100) {
+        edges {
+          node {
+            location { legacyResourceId }
+            quantities(names: ["available", "on_hand"]) { name quantity }
           }
         }
       }
@@ -155,7 +153,6 @@ query getInventoryLevels($itemIds: [ID!]!) {
   }
 }
 """
-
 
 class ShopifyService:
     def __init__(self, store_url: str, token: str, api_version: str = "2025-04"):
@@ -165,54 +162,78 @@ class ShopifyService:
         self.rest_api_endpoint = f"https://{store_url}/admin/api/{api_version}"
         self.headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": token}
         self.rest_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-        
+
+    # ---------- inventory levels for specific items ----------
     def get_inventory_levels_for_items(self, item_legacy_ids: List[int]) -> List[Dict[str, Any]]:
+        """
+        Return list of dicts:
+        [
+          {"id": <inventory_item_legacy_id>, "location_id": <legacy_id>, "available": int, "on_hand": int},
+          ...
+        ]
+        """
         if not item_legacy_ids:
             return []
-            
+
+        # Convert legacy ints to GIDs to query via `nodes(ids: [...])`
         item_gids = [f"gid://shopify/InventoryItem/{item_id}" for item_id in item_legacy_ids]
-        
+
         try:
             variables = {"itemIds": item_gids}
             data = self._execute_query(GET_INVENTORY_LEVELS_QUERY, variables)
-            
-            if not data or "inventoryItems" not in data:
-                print("Received no data or malformed inventoryItems data from get_inventory_levels.")
+
+            # We expect `data["nodes"]` to be a list of InventoryItem nodes (and possibly None for unknown ids)
+            nodes = (data or {}).get("nodes", [])
+            if not isinstance(nodes, list):
+                print("Received unexpected structure for nodes in getInventoryLevels.")
                 return []
 
-            results = []
-            item_edges = data["inventoryItems"].get("edges", [])
-            for item_edge in item_edges:
-                item_node = item_edge.get("node", {})
-                item_id = item_node.get("legacyResourceId")
-                level_edges = item_node.get("inventoryLevels", {}).get("edges", [])
-                
-                for level_edge in level_edges:
-                    level_node = level_edge.get("node", {})
-                    location_id = level_node.get("location", {}).get("legacyResourceId")
-                    
-                    quantities = level_node.get("quantities", []) or []
-                    available = next((int(q['quantity']) for q in quantities if q.get('name') == 'available'), 0)
-                    on_hand = next((int(q['quantity']) for q in quantities if q.get('name') == 'on_hand'), available)
-                    
-                    results.append({
-                        "id": item_id,
-                        "location_id": location_id,
-                        "available": available,
-                        "on_hand": on_hand
-                    })
+            results: List[Dict[str, Any]] = []
+            for node in nodes:
+                if not node or "legacyResourceId" not in node:
+                    # This node may be None or a different type; skip
+                    continue
+
+                item_legacy = node.get("legacyResourceId")
+                inv_levels = ((node.get("inventoryLevels") or {}).get("edges")) or []
+                for lev_edge in inv_levels:
+                    lev_node = (lev_edge or {}).get("node") or {}
+                    loc_legacy = ((lev_node.get("location") or {}).get("legacyResourceId"))
+                    q_list = lev_node.get("quantities") or []
+                    available = 0
+                    on_hand = 0
+                    for q in q_list:
+                        n = q.get("name")
+                        try:
+                            qty = int(q.get("quantity", 0))
+                        except Exception:
+                            qty = 0
+                        if n == "available":
+                            available = qty
+                        elif n == "on_hand":
+                            on_hand = qty
+                    if not on_hand:
+                        on_hand = available
+
+                    results.append(
+                        {
+                            "id": int(item_legacy) if item_legacy is not None else None,
+                            "location_id": int(loc_legacy) if loc_legacy is not None else None,
+                            "available": int(available),
+                            "on_hand": int(on_hand),
+                        }
+                    )
             return results
         except Exception as e:
             print(f"An error occurred during inventory level fetch: {e}")
             return []
 
+    # ---------- various helpers ----------
     def get_order_id_from_fulfillment_order_gid(self, fulfillment_order_gid: str) -> Optional[int]:
         query = """
         query($id: ID!) {
           fulfillmentOrder(id: $id) {
-            order {
-              legacyResourceId
-            }
+            order { legacyResourceId }
           }
         }
         """
@@ -247,19 +268,22 @@ class ShopifyService:
     def get_total_counts(self, created_at_min: Optional[str] = None, created_at_max: Optional[str] = None) -> Dict[str, int]:
         try:
             params = {"status": "any"}
-            if created_at_min: params["created_at_min"] = created_at_min
-            if created_at_max: params["created_at_max"] = created_at_max
+            if created_at_min:
+                params["created_at_min"] = created_at_min
+            if created_at_max:
+                params["created_at_max"] = created_at_max
             order_count_url = f"{self.rest_api_endpoint}/orders/count.json"
             product_count_url = f"{self.rest_api_endpoint}/products/count.json"
             order_response = requests.get(order_count_url, headers=self.rest_headers, params=params, timeout=10)
             order_response.raise_for_status()
             product_response = requests.get(product_count_url, headers=self.rest_headers, timeout=10)
             product_response.raise_for_status()
-            return { "orders": order_response.json().get("count", 0), "products": product_response.json().get("count", 0) }
+            return {"orders": order_response.json().get("count", 0), "products": product_response.json().get("count", 0)}
         except requests.exceptions.RequestException as e:
             print(f"An error occurred while fetching counts via REST API: {e}")
             return {"orders": 0, "products": 0}
 
+    # ---------- low-level GraphQL ----------
     def _execute_query(self, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = {"query": query, "variables": variables or {}}
         max_retries = 7
@@ -288,15 +312,23 @@ class ShopifyService:
         raise Exception("Max retries reached. Could not complete the API request.")
 
     def _flatten_edges(self, data: Optional[Dict]) -> List:
-        if not data or "edges" not in data: return []
+        if not data or "edges" not in data:
+            return []
         return [edge["node"] for edge in data["edges"]]
 
-    def get_all_orders_and_related_data(self, created_at_min: Optional[str] = None, created_at_max: Optional[str] = None) -> Generator[List[schemas.ShopifyOrder], None, None]:
+    # ---------- orders ----------
+    def get_all_orders_and_related_data(
+        self,
+        created_at_min: Optional[str] = None,
+        created_at_max: Optional[str] = None
+    ) -> Generator[List[schemas.ShopifyOrder], None, None]:
         has_next_page = True
         cursor = None
         query_parts = []
-        if created_at_min: query_parts.append(f"created_at:>{created_at_min}")
-        if created_at_max: query_parts.append(f"created_at:<{created_at_max}")
+        if created_at_min:
+            query_parts.append(f"created_at:>{created_at_min}")
+        if created_at_max:
+            query_parts.append(f"created_at:<{created_at_max}")
         query_string = " AND ".join(query_parts) if query_parts else None
 
         print(f"Starting order data fetch from {self.api_endpoint} with query: {query_string}...")
@@ -304,7 +336,7 @@ class ShopifyService:
             try:
                 variables = {"cursor": cursor, "query": query_string}
                 data = self._execute_query(GET_ALL_ORDERS_QUERY, variables)
-                
+
                 if not data or "orders" not in data:
                     print("Received no data or malformed orders data from API. Stopping.")
                     has_next_page = False
@@ -315,7 +347,7 @@ class ShopifyService:
                 has_next_page = page_info.get("hasNextPage", False)
                 cursor = page_info.get("endCursor")
                 orders_on_page = []
-                
+
                 for order_node in self._flatten_edges(order_connection):
                     order_node["lineItems"] = self._flatten_edges(order_node.get("lineItems"))
                     for item in order_node["lineItems"]:
@@ -324,7 +356,7 @@ class ShopifyService:
                         if item.get("originalUnitPriceSet"):
                             item["originalUnitPriceSet"] = item["originalUnitPriceSet"]["shopMoney"]
                         if item.get("totalDiscountSet"):
-                             item["totalDiscountSet"] = item["totalDiscountSet"]["shopMoney"]
+                            item["totalDiscountSet"] = item["totalDiscountSet"]["shopMoney"]
                     for fulfillment in order_node.get("fulfillments", []):
                         if fulfillment.get("trackingInfo"):
                             tracking_info = fulfillment["trackingInfo"][0] if fulfillment["trackingInfo"] else {}
@@ -336,7 +368,7 @@ class ShopifyService:
                         if order_node.get(key):
                             order_node[key] = order_node[key]["shopMoney"]
                     orders_on_page.append(schemas.ShopifyOrder.parse_obj(order_node))
-                
+
                 yield orders_on_page
 
             except (ValueError, requests.exceptions.RequestException) as e:
@@ -344,11 +376,12 @@ class ShopifyService:
                 has_next_page = False
 
         print("Finished fetching all order pages from Shopify.")
-    
+
+    # ---------- products + variants ----------
     def get_all_products_and_variants(self) -> Generator[List[Dict[str, Any]], None, None]:
         """
-        IMPORTANT: return raw dicts (not Pydantic) so we don't lose nested fields like
-        featuredImage.url and inventoryItem.unitCost.amount. We pre-flatten edges.
+        Returns raw dicts to preserve nested fields like featuredImage.url and
+        inventoryItem.unitCost.amount without Pydantic stripping.
         """
         has_next_page = True
         cursor = None
@@ -384,6 +417,7 @@ class ShopifyService:
                 return
         print("Finished fetching all product pages from Shopify.")
 
+    # ---------- inventory details ----------
     def get_all_inventory_details(self) -> Generator[List[Dict[str, Any]], None, None]:
         has_next_page = True
         cursor = None
