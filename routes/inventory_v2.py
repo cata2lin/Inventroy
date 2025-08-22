@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from crud.inventory_report import get_inventory_report
+import models
 
 router = APIRouter(
     prefix="/api/v2/inventory",
@@ -21,7 +22,7 @@ def _parse_store_ids(store_ids: Optional[str]) -> Optional[List[int]]:
     if not store_ids:
         return None
     parts = [p.strip() for p in store_ids.split(",")]
-    out = []
+    out: List[int] = []
     for p in parts:
         if not p:
             continue
@@ -30,6 +31,17 @@ def _parse_store_ids(store_ids: Optional[str]) -> Optional[List[int]]:
         except Exception:
             continue
     return out or None
+
+
+@router.get("/filters/", summary="Filters/options used by the inventory UI")
+def inventory_filters(db: Session = Depends(get_db)):
+    stores = db.query(models.Store.id, models.Store.name).order_by(models.Store.id).all()
+    return {
+        "stores": [{"id": s.id, "name": s.name} for s in stores],
+        "views": ["individual", "grouped"],
+        "sort_by": ["on_hand", "available", "inventory_value", "retail_value", "price", "cost"],
+        "sort_order": ["asc", "desc"],
+    }
 
 
 @router.get("/report/", summary="Inventory report with deduped totals by barcode group")

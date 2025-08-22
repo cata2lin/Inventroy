@@ -153,7 +153,7 @@ def _build_variant_aggregate_query(db: Session, filters: Dict[str, Any]):
             Variant.id,
             Variant.product_id,
             Variant.store_id,
-            GM.group_id,
+            models.GroupMembership.group_id,
             Variant.barcode_normalized,
             Product.title,
             Variant.title,
@@ -179,7 +179,15 @@ def _map_sort(sort_by: str, sort_order: str, columns: Dict[str, Any]):
     if key == "cost":
         key = "cost_per_item"
 
-    col = columns.get(key) or columns.get("on_hand")
+    col = columns.get(key)
+    if col is None:
+        col = columns.get("on_hand")
+
+    # Defensive fallback in case nothing matched
+    if col is None:
+        # arbitrary stable fallback: first value
+        col = next(iter(columns.values()))
+
     return col.desc() if dir_desc else col.asc()
 
 
