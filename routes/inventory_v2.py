@@ -1,12 +1,11 @@
 # routes/inventory_v2.py
 
-from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
 from typing import Optional, List
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.orm import Session
 
 from database import get_db
-from crud import inventory_v2 as crud_inventory
+from crud.inventory_report import get_inventory_report
 
 router = APIRouter(
     prefix="/api/v2/inventory",
@@ -14,54 +13,72 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-class SetPrimaryVariantRequest(BaseModel):
-    barcode: str
-    variant_id: int
 
-@router.get("/report/")
-def get_inventory_report_data(
-    skip: int = 0, limit: int = 50,
-    view: str = 'individual',
-    store_ids: Optional[List[int]] = Query(None),
+def _parse_store_ids(store_ids: Optional[str]) -> Optional[List[int]]:
+    """
+    Accepts comma-separated string (e.g., "1,2,3") -> List[int]
+    """
+    if not store_ids:
+        return None
+    parts = [p.strip() for p in store_ids.split(",")]
+    out = []
+    for p in parts:
+        if not p:
+            continue
+        try:
+            out.append(int(p))
+        except Exception:
+            continue
+    return out or None
+
+
+@router.get("/report/", summary="Inventory report with deduped totals by barcode group")
+def inventory_report(
+    skip: int = 0,
+    limit: int = 50,
+    sort_by: str = "on_hand",
+    sort_order: str = "desc",
+    view: str = "individual",  # 'individual' or 'grouped'
     search: Optional[str] = None,
-    product_type: Optional[str] = None,
-    category: Optional[str] = None,
-    status: Optional[str] = None,
-    min_retail: Optional[float] = None,
-    max_retail: Optional[float] = None,
-    min_inventory: Optional[float] = None,
-    max_inventory: Optional[float] = None,
-    sort_by: str = 'on_hand',
-    sort_order: str = 'desc',
-    db: Session = Depends(get_db)
+    store_ids: Optional[str] = Query(None, description="Comma-separated store ids"),
+    totals_mode: str = "grouped",  # 'grouped' (deduped) or 'raw' (not recommended)
+    db: Session = Depends(get_db),
 ):
-    return crud_inventory.get_inventory_report(
-        db, skip=skip, limit=limit, view=view, store_ids=store_ids, search=search, 
-        product_type=product_type, category=category, status=status,
-        min_retail=min_retail, max_retail=max_retail,
-        min_inventory=min_inventory, max_inventory=max_inventory,
-        sort_by=sort_by, sort_order=sort_order
+    """
+    Returns:
+      {
+        "rows": [...],
+        "totals": {
+          "on_hand": int,
+          "available": int,
+          "inventory_value": float,
+          "retail_value": float,
+          "mode": "grouped"
+        },
+        "pagination": {"skip": int, "limit": int, "total": int}
+      }
+
+    Notes:
+      - Totals are always deduped by barcode group (MAX cost/price per group * group on_hand).
+      - Rows:
+          view='grouped' -> one row per barcode group
+          view='individual' -> one row per variant (summed across locations)
+    """
+    store_list = _parse_store_ids(store_ids)
+    rows, totals, total_count = get_inventory_report(
+        db,
+        skip=skip,
+        limit=limit,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        view=view,
+        search=search,
+        store_ids=store_list,
+        totals_mode=totals_mode,
     )
 
-@router.get("/filters/")
-def get_filter_data(db: Session = Depends(get_db)):
-    return crud_inventory.get_filter_options(db)
-
-@router.post("/set-primary-variant/")
-def set_primary_variant_endpoint(request: SetPrimaryVariantRequest, db: Session = Depends(get_db)):
-    try:
-        return crud_inventory.set_primary_variant(db, barcode=request.barcode, variant_id=request.variant_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# --- NEW: Endpoint to get detailed history for a barcode group ---
-@router.get("/product-details/{barcode}")
-def get_product_details(barcode: str, db: Session = Depends(get_db)):
-    """
-    Fetches detailed information for a barcode group, including committed orders,
-    all historical orders, and stock movements.
-    """
-    details = crud_inventory.get_product_details_by_barcode(db, barcode=barcode)
-    if not details:
-        raise HTTPException(status_code=404, detail="No details found for this barcode.")
-    return details
+    return {
+        "rows": rows,
+        "totals": totals,
+        "pagination": {"skip": skip, "limit": limit, "total": total_count},
+    }
