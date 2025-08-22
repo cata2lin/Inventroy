@@ -10,6 +10,7 @@ from typing import Dict, Optional, List, Literal
 
 Status = Literal["queued", "running", "done", "error"]
 
+
 @dataclass
 class Task:
     id: str
@@ -21,7 +22,6 @@ class Task:
 
     def to_dict(self) -> Dict:
         d = asdict(self)
-        # make ISO strings for JSONability
         d["created_at"] = self.created_at.isoformat()
         d["updated_at"] = self.updated_at.isoformat()
         return d
@@ -81,4 +81,3 @@ def get_task_status(task_id: str) -> Optional[Dict]:
 def get_all_tasks() -> List[Dict]:
     with _LOCK:
         return [t.to_dict() for t in _TASKS.values()]
-s
