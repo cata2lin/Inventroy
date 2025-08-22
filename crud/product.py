@@ -1,254 +1,280 @@
 # crud/product.py
-
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
+
 import models
 import schemas
-from .sync import normalize_barcode, update_variant_group_membership
 
-def _set_if_not_none(obj, **kwargs):
-    """Update SQLAlchemy obj attributes only when value is not None."""
-    for k, v in kwargs.items():
-        if v is not None:
-            setattr(obj, k, v)
+# Prefer the shared helper; if not present (tests), use a local fallback
+try:
+    from shopify_service import gid_to_id  # type: ignore
+except Exception:  # pragma: no cover
+    def gid_to_id(gid: Optional[str]) -> Optional[int]:
+        if not gid:
+            return None
+        try:
+            return int(str(gid).split("/")[-1])
+        except Exception:
+            return None
 
-def _upsert_product(db: Session, store_id: int, p: schemas.Product) -> models.Product:
-    prod = db.query(models.Product).filter(models.Product.id == p.id).first()
-    if not prod:
-        prod = models.Product(
-            id=p.id,
-            shopify_gid=p.id_gid if hasattr(p, "id_gid") else p.shopify_gid if hasattr(p, "shopify_gid") else p.id,
-            store_id=store_id,
-            title=p.title,
-            body_html=p.body_html,
-            vendor=p.vendor,
-            product_type=p.product_type,
-            created_at=p.created_at,
-            handle=p.handle,
-            updated_at=p.updated_at,
-            published_at=p.published_at,
-            status=p.status.upper() if isinstance(p.status, str) else p.status,
-            tags=",".join(p.tags) if isinstance(p.tags, list) else p.tags,
-            image_url=getattr(p, "featured_image_url", None) or getattr(p, "image_url", None),
-            product_category=getattr(p, "product_category", None) or getattr(p, "category", None),
-        )
-        db.add(prod)
-    else:
-        # preserve existing if incoming is None
-        _set_if_not_none(
-            prod,
-            title=p.title,
-            body_html=p.body_html,
-            vendor=p.vendor,
-            product_type=p.product_type,
-            created_at=p.created_at,
-            handle=p.handle,
-            updated_at=p.updated_at,
-            published_at=p.published_at,
-            status=p.status.upper() if isinstance(p.status, str) else p.status,
-            tags=",".join(p.tags) if isinstance(p.tags, list) else p.tags,
-        )
-        # these are often missing in webhook payloads; only update if provided
-        img = getattr(p, "featured_image_url", None) or getattr(p, "image_url", None)
-        cat = getattr(p, "product_category", None) or getattr(p, "category", None)
-        if img: prod.image_url = img
-        if cat: prod.product_category = cat
-        if not prod.store_id: prod.store_id = store_id
-    return prod
+# ---------- helpers ----------
 
-def _extract_variant_inventory_fields(v: schemas.ProductVariant) -> Dict[str, Any]:
-    inv = getattr(v, "inventoryItem", None) or {}
-    # Flatten inventory levels
-    levels = getattr(inv, "inventoryLevels", None) or getattr(inv, "levels", None) or []
-    level_rows = []
-    for lvl in levels:
-        # lvl may be dict or Pydantic model
-        loc = getattr(lvl, "location", None)
-        quantities = getattr(lvl, "quantities", None)
-        if isinstance(lvl, dict):
-            loc_id = int(lvl.get("location", {}).get("legacyResourceId") or lvl.get("location_id") or 0)
-            qs = lvl.get("quantities", [])
-        else:
-            loc_id = int(getattr(loc, "legacyResourceId", 0) or 0)
-            qs = quantities or []
-        available = 0
-        on_hand = 0
-        for q in qs or []:
-            name = q["name"] if isinstance(q, dict) else getattr(q, "name", None)
-            qty = q["quantity"] if isinstance(q, dict) else getattr(q, "quantity", 0)
-            if name == "available":
-                available = int(qty or 0)
-            elif name == "on_hand":
-                on_hand = int(qty or 0)
-        if loc_id:
-            level_rows.append({"location_id": loc_id, "available": available, "on_hand": on_hand})
-    unit_cost = None
-    if isinstance(inv, dict):
-        amt = inv.get("unitCost", {}).get("amount")
-        unit_cost = float(amt) if amt is not None else None
-    else:
-        uc = getattr(inv, "unitCost", None)
-        unit_cost = float(getattr(uc, "amount", 0)) if uc and getattr(uc, "amount", None) is not None else None
-    return {"levels": level_rows, "unit_cost": unit_cost}
+def _norm_barcode(b: Optional[str]) -> Optional[str]:
+    if not b:
+        return None
+    # normalize: trim, remove spaces, uppercase
+    v = b.strip().replace(" ", "")
+    return v.upper() or None
 
-def _upsert_variant(db: Session, store_id: int, p: models.Product, v: schemas.ProductVariant) -> models.ProductVariant:
-    # Normalize barcode
-    bc = v.barcode if hasattr(v, "barcode") else getattr(v, "barcode", None)
-    norm_bc = normalize_barcode(bc) if bc else None
+def _coalesce(new, old):
+    return new if new is not None else old
 
-    var = db.query(models.ProductVariant).filter(models.ProductVariant.id == v.id).first()
-    if not var:
-        var = models.ProductVariant(
-            id=v.id,
-            shopify_gid=v.id_gid if hasattr(v, "id_gid") else v.shopify_gid if hasattr(v, "shopify_gid") else v.id,
-            product_id=p.id,
-            title=v.title,
-            price=v.price,
-            sku=v.sku,
-            position=v.position,
-            inventory_policy=v.inventory_policy if hasattr(v, "inventory_policy") else v.inventoryPolicy if hasattr(v, "inventoryPolicy") else None,
-            compare_at_price=v.compare_at_price if hasattr(v, "compare_at_price") else v.compareAtPrice if hasattr(v, "compareAtPrice") else None,
-            fulfillment_service=None,  # GraphQL doesn't expose this
-            inventory_management=None,  # GraphQL path differs
-            barcode=bc,
-            barcode_normalized=norm_bc,
-            grams=getattr(v, "grams", None),
-            weight=getattr(v, "weight", None),
-            weight_unit=getattr(v, "weight_unit", None) or getattr(v, "weightUnit", None),
-            inventory_item_id=v.inventory_item_id if hasattr(v, "inventory_item_id") else getattr(v, "inventoryItem", {}).get("legacyResourceId", None) if isinstance(getattr(v, "inventoryItem", None), dict) else getattr(getattr(v, "inventoryItem", None), "legacyResourceId", None),
-            inventory_quantity=v.inventory_quantity if hasattr(v, "inventory_quantity") else getattr(v, "inventoryQuantity", None),
-            created_at=v.created_at if hasattr(v, "created_at") else getattr(v, "createdAt", None),
-            updated_at=v.updated_at if hasattr(v, "updated_at") else getattr(v, "updatedAt", None),
-            cost=None,  # deprecated
-            store_id=store_id,
-            tracked=True,  # default; will adjust from InventoryItem.tracked if you sync details later
-            cost_per_item=None,
-        )
-        db.add(var)
-    else:
-        _set_if_not_none(
-            var,
-            product_id=p.id,
-            title=v.title,
-            price=v.price,
-            sku=v.sku,
-            position=v.position,
-            inventory_policy=v.inventory_policy if hasattr(v, "inventory_policy") else v.inventoryPolicy if hasattr(v, "inventoryPolicy") else None,
-            compare_at_price=v.compare_at_price if hasattr(v, "compare_at_price") else v.compareAtPrice if hasattr(v, "compareAtPrice") else None,
-            barcode=bc,
-            barcode_normalized=norm_bc,
-            grams=getattr(v, "grams", None),
-            weight=getattr(v, "weight", None),
-            weight_unit=getattr(v, "weight_unit", None) or getattr(v, "weightUnit", None),
-            inventory_item_id=v.inventory_item_id if hasattr(v, "inventory_item_id") else getattr(v, "inventoryItem", {}).get("legacyResourceId", None) if isinstance(getattr(v, "inventoryItem", None), dict) else getattr(getattr(v, "inventoryItem", None), "legacyResourceId", None),
-            inventory_quantity=v.inventory_quantity if hasattr(v, "inventory_quantity") else getattr(v, "inventoryQuantity", None),
-            created_at=v.created_at if hasattr(v, "created_at") else getattr(v, "createdAt", None),
-            updated_at=v.updated_at if hasattr(v, "updated_at") else getattr(v, "updatedAt", None),
-        )
-        if not var.store_id:
-            var.store_id = store_id
+def _product_status_to_db(val: Optional[str]) -> Optional[str]:
+    if not val:
+        return None
+    return str(val).upper()
 
-    # cost_per_item from InventoryItem
-    inv_fields = _extract_variant_inventory_fields(v)
-    if inv_fields["unit_cost"] is not None:
-        var.cost_per_item = inv_fields["unit_cost"]
-
-    # Upsert inventory level snapshots we got on this page (best-effort)
-    for lvl in inv_fields["levels"]:
-        il = db.query(models.InventoryLevel).filter(
-            models.InventoryLevel.inventory_item_id == var.inventory_item_id,
-            models.InventoryLevel.location_id == int(lvl["location_id"])
-        ).first()
-        if il:
-            il.available = lvl["available"]
-            il.on_hand = lvl["on_hand"]
-        else:
-            db.add(models.InventoryLevel(
-                inventory_item_id=var.inventory_item_id,
-                location_id=int(lvl["location_id"]),
-                available=lvl["available"],
-                on_hand=lvl["on_hand"],
-            ))
-    # Group membership (by normalized barcode)
-    if norm_bc:
-        update_variant_group_membership(db, var, norm_bc)
-
-    return var
-
-def create_or_update_products(db: Session, products_data: List[Dict[str, Any]], store_id: int):
-    """
-    Upserts products and variants from a GraphQL page returned by ShopifyService.get_all_products_and_variants().
-    products_data: List[{"product": schemas.Product, "variants": List[schemas.ProductVariant]}]
-    """
-    for item in products_data:
-        p: schemas.Product = item["product"]
-        variants: List[schemas.ProductVariant] = item.get("variants", [])
-        prod_row = _upsert_product(db, store_id, p)
-        # Flush to ensure product_id foreign key is valid
+def _ensure_group_for_barcode(db: Session, barcode_norm: str) -> models.BarcodeGroup:
+    grp = db.query(models.BarcodeGroup).filter(models.BarcodeGroup.id == barcode_norm).first()
+    if not grp:
+        grp = models.BarcodeGroup(id=barcode_norm, status="active", pool_available=0)
+        db.add(grp)
         db.flush()
-        for v in variants:
-            _upsert_variant(db, store_id, prod_row, v)
-        # Optional: mark primary variant if one was set in Shopify (not exposed here)
-        db.commit()
+    return grp
 
-def mark_products_deleted(db: Session, store_id: int, product_ids: List[int]):
-    """Mark products as deleted by removing from DB (optional soft-delete could be implemented)."""
-    # For safety, don't hard delete here; leave to your chosen policy
-    pass
-
-def set_primary_variant(db: Session, barcode: str, variant_id: int):
-    # Keep this helper available for UI
-    db.query(models.ProductVariant).filter(models.ProductVariant.barcode == barcode).update(
-        {"is_primary_variant": False}, synchronize_session=False
+def _ensure_membership(db: Session, variant_id: int, group_id: str) -> None:
+    exists = (
+        db.query(models.GroupMembership)
+        .filter(
+            models.GroupMembership.variant_id == variant_id,
+            models.GroupMembership.group_id == group_id,
+        )
+        .first()
     )
-    db.query(models.ProductVariant).filter(models.ProductVariant.id == variant_id).update(
-        {"is_primary_variant": True}, synchronize_session=False
-    )
-    db.commit()
+    if exists:
+        return
+    db.add(models.GroupMembership(variant_id=variant_id, group_id=group_id))
 
-def create_or_update_product_from_webhook(db: Session, store_id: int, product_data: schemas.ShopifyProductWebhook):
+
+# ---------- upsert from full product + variants (GraphQL pagination job) ----------
+
+def create_or_update_products(
+    db: Session,
+    store_id: int,
+    items: List[Dict[str, Any]],
+) -> None:
     """
-    Lightweight upsert from a REST webhook (products/create|update).
+    Upsert products + variants from the GraphQL bulk product fetch.
+    items = [{ "product": schemas.Product, "variants": [schemas.ProductVariant, ...] }, ...]
     """
-    # Map incoming to schemas.Product-like for reuse
-    p = schemas.Product(
-        id=product_data.id,
-        shopify_gid=product_data.admin_graphql_api_id,
-        title=product_data.title,
-        body_html=product_data.body_html,
-        vendor=product_data.vendor,
-        product_type=product_data.product_type,
-        created_at=product_data.created_at,
-        updated_at=product_data.updated_at,
-        published_at=product_data.published_at,
-        status=product_data.status,
-        handle=product_data.handle,
-        tags=",".join(product_data.tags) if isinstance(product_data.tags, list) else product_data.tags,
-        image_url=(product_data.image.get("src") if getattr(product_data, "image", None) else None),
-        product_category=None
-    )
-    prod_row = _upsert_product(db, store_id, p)
-    db.flush()
+    now = datetime.utcnow()
 
-    # Variants
-    for v in (product_data.variants or []):
-        # Build a minimal schemas.ProductVariant-like object
-        class _V:
+    for bundle in items:
+        p: schemas.Product = bundle["product"]
+        vs: List[schemas.ProductVariant] = bundle.get("variants", []) or []
+
+        pid = int(p.legacyResourceId or gid_to_id(p.id))  # numeric
+        prod = db.query(models.Product).filter(models.Product.id == pid).first()
+        if not prod:
+            prod = models.Product(id=pid, store_id=store_id)
+            db.add(prod)
+
+        # update columns (do not blindly overwrite with None)
+        prod.shopify_gid = _coalesce(p.id, prod.shopify_gid)
+        prod.store_id = store_id
+        prod.title = _coalesce(p.title, prod.title)
+        prod.body_html = _coalesce(p.bodyHtml, prod.body_html)
+        prod.vendor = _coalesce(p.vendor, prod.vendor)
+        prod.product_type = _coalesce(p.productType, prod.product_type)
+        prod.product_category = _coalesce((p.category.name if p.category else None), prod.product_category)
+        prod.created_at = _coalesce(p.createdAt, prod.created_at)
+        prod.handle = _coalesce(p.handle, prod.handle)
+        prod.updated_at = _coalesce(p.updatedAt, prod.updated_at)
+        prod.published_at = _coalesce(p.publishedAt, prod.published_at)
+        prod.status = _coalesce(_product_status_to_db(p.status), prod.status)
+        # keep the first non-empty featured image URL we know
+        if p.featuredImage and p.featuredImage.url:
+            prod.image_url = p.featuredImage.url
+        prod.tags = _coalesce(",".join(p.tags) if isinstance(p.tags, list) else p.tags, prod.tags)
+        prod.last_fetched_at = now
+
+        # variants
+        for v in vs:
+            vid = int(v.legacyResourceId or gid_to_id(v.id))
+            var = db.query(models.ProductVariant).filter(models.ProductVariant.id == vid).first()
+            if not var:
+                var = models.ProductVariant(id=vid, product_id=pid, store_id=store_id)
+                db.add(var)
+
+            var.shopify_gid = _coalesce(v.id, var.shopify_gid)
+            var.product_id = pid
+            var.store_id = store_id
+            var.title = _coalesce(v.title, var.title)
+            var.price = _coalesce(v.price, var.price)
+            var.compare_at_price = _coalesce(v.compareAtPrice, var.compare_at_price)
+            var.sku = _coalesce(v.sku, var.sku)
+            var.position = _coalesce(v.position, var.position)
+            var.inventory_policy = _coalesce(v.inventoryPolicy, var.inventory_policy)
+            var.fulfillment_service = _coalesce(v.fulfillmentService, var.fulfillment_service)
+            var.inventory_management = _coalesce(
+                ("SHOPIFY" if v.inventoryItem else None), var.inventory_management
+            )
+            var.barcode = _coalesce(v.barcode, var.barcode)
+            var.barcode_normalized = _norm_barcode(var.barcode)
+            var.weight = _coalesce(v.weight, var.weight)
+            var.weight_unit = _coalesce(v.weightUnit, var.weight_unit)
+            var.inventory_item_id = _coalesce(
+                (int(v.inventoryItem.legacyResourceId) if v.inventoryItem and v.inventoryItem.legacyResourceId else None),
+                var.inventory_item_id,
+            )
+            var.inventory_quantity = _coalesce(v.inventoryQuantity, var.inventory_quantity)
+            var.created_at = _coalesce(v.createdAt, var.created_at)
+            var.updated_at = _coalesce(v.updatedAt, var.updated_at)
+            var.last_fetched_at = now
+            # cost precedence: unitCost > cost (legacy)
+            unit_cost = None
+            if v.inventoryItem and v.inventoryItem.unitCost and v.inventoryItem.unitCost.amount is not None:
+                try:
+                    unit_cost = float(v.inventoryItem.unitCost.amount)
+                except Exception:
+                    unit_cost = None
+            var.cost_per_item = _coalesce(unit_cost, var.cost_per_item)
+            var.tracked = True if v.inventoryItem else var.tracked
+
+            # Ensure group by barcode
+            if var.barcode_normalized:
+                grp = _ensure_group_for_barcode(db, var.barcode_normalized)
+                _ensure_membership(db, var.id, grp.id)
+
+            # Optional: seed inventory level snapshot(s) if GraphQL gave us levels
+            if v.inventoryItem and v.inventoryItem.inventoryLevels:
+                for lvl in v.inventoryItem.inventoryLevels:
+                    loc_legacy = gid_to_id(lvl.location.id) if lvl.location and lvl.location.id else None
+                    if not loc_legacy:
+                        continue
+                    # quantities is a list of {"name": "...", "quantity": X}
+                    q = {x.name: int(x.quantity) for x in (lvl.quantities or [])}
+                    avail = q.get("available")
+                    on_hand = q.get("on_hand", avail)
+                    snap = (
+                        db.query(models.InventoryLevel)
+                        .filter(
+                            models.InventoryLevel.inventory_item_id == var.inventory_item_id,
+                            models.InventoryLevel.location_id == int(loc_legacy),
+                        )
+                        .first()
+                    )
+                    if snap:
+                        if avail is not None:
+                            snap.available = avail
+                        if on_hand is not None:
+                            snap.on_hand = on_hand
+                        snap.last_fetched_at = now
+                    else:
+                        db.add(
+                            models.InventoryLevel(
+                                inventory_item_id=var.inventory_item_id,
+                                location_id=int(loc_legacy),
+                                available=avail if avail is not None else 0,
+                                on_hand=on_hand if on_hand is not None else (avail or 0),
+                                last_fetched_at=now,
+                            )
+                        )
+
+    # commit is controlled by caller (jobs, routes)
+    # db.commit()
+
+
+# ---------- upsert from product webhook (REST-ish payload) ----------
+
+def create_or_update_product_from_webhook(
+    db: Session,
+    store_id: int,
+    payload: schemas.ShopifyProductWebhook,
+) -> None:
+    """
+    Shopify product webhook upsert (products/create|update).
+    Maps REST/webhook fields to our DB (no use of admin_graphql_api_id).
+    """
+    now = datetime.utcnow()
+
+    pid = int(payload.id)
+    prod = db.query(models.Product).filter(models.Product.id == pid).first()
+    if not prod:
+        prod = models.Product(id=pid, store_id=store_id)
+        db.add(prod)
+
+    prod.shopify_gid = payload.admin_graphql_api_id or prod.shopify_gid
+    prod.store_id = store_id
+    prod.title = _coalesce(payload.title, prod.title)
+    prod.body_html = _coalesce(payload.body_html, prod.body_html)
+    prod.vendor = _coalesce(payload.vendor, prod.vendor)
+    prod.product_type = _coalesce(payload.product_type, prod.product_type)
+    prod.product_category = _coalesce(
+        payload.product_category.get("name") if payload.product_category else None, prod.product_category
+    )
+    prod.created_at = _coalesce(payload.created_at, prod.created_at)
+    prod.handle = _coalesce(payload.handle, prod.handle)
+    prod.updated_at = _coalesce(payload.updated_at, prod.updated_at)
+    prod.published_at = _coalesce(payload.published_at, prod.published_at)
+    prod.status = _coalesce(_product_status_to_db(payload.status), prod.status)
+    prod.tags = _coalesce(",".join(payload.tags) if isinstance(payload.tags, list) else payload.tags, prod.tags)
+    if payload.image and payload.image.get("src"):
+        prod.image_url = payload.image["src"]
+    prod.last_fetched_at = now
+
+    # Variants from webhook
+    for v in payload.variants or []:
+        vid = int(v.get("id"))
+        var = db.query(models.ProductVariant).filter(models.ProductVariant.id == vid).first()
+        if not var:
+            var = models.ProductVariant(id=vid, product_id=pid, store_id=store_id)
+            db.add(var)
+
+        var.product_id = pid
+        var.store_id = store_id
+        var.title = _coalesce(v.get("title"), var.title)
+        var.price = _coalesce(v.get("price"), var.price)
+        var.compare_at_price = _coalesce(v.get("compare_at_price"), var.compare_at_price)
+        var.sku = _coalesce(v.get("sku"), var.sku)
+        var.position = _coalesce(v.get("position"), var.position)
+        var.inventory_policy = _coalesce(v.get("inventory_policy"), var.inventory_policy)
+        var.fulfillment_service = _coalesce(v.get("fulfillment_service"), var.fulfillment_service)
+        var.inventory_management = _coalesce(v.get("inventory_management"), var.inventory_management)
+        var.barcode = _coalesce(v.get("barcode"), var.barcode)
+        var.barcode_normalized = _norm_barcode(var.barcode)
+        var.weight = _coalesce(v.get("weight"), var.weight)
+        var.weight_unit = _coalesce(v.get("weight_unit"), var.weight_unit)
+        inv_item_id = v.get("inventory_item_id")
+        if inv_item_id is not None:
+            try:
+                var.inventory_item_id = int(inv_item_id)
+            except Exception:
+                pass
+        var.inventory_quantity = _coalesce(v.get("inventory_quantity"), var.inventory_quantity)
+        var.created_at = _coalesce(v.get("created_at"), var.created_at)
+        var.updated_at = _coalesce(v.get("updated_at"), var.updated_at)
+        var.last_fetched_at = now
+
+        # cost precedence: unit_cost (from inventory webhook) > cost
+        # Webhook variant usually contains "cost" (if present)
+        try:
+            vc = v.get("cost")
+            if vc is not None:
+                var.cost_per_item = float(vc)
+        except Exception:
             pass
-        _v = _V()
-        _v.id = v.id
-        _v.title = v.title
-        _v.price = v.price
-        _v.sku = v.sku
-        _v.position = v.position
-        _v.inventoryPolicy = v.inventory_policy if hasattr(v, "inventory_policy") else None
-        _v.compareAtPrice = v.compare_at_price
-        _v.barcode = v.barcode
-        _v.inventoryQuantity = v.inventory_quantity
-        _v.createdAt = v.created_at
-        _v.updatedAt = v.updated_at
-        _v.inventoryItem = {"legacyResourceId": v.inventory_item_id}
-        _upsert_variant(db, store_id, prod_row, _v)
 
-    db.commit()
+        # "tracked" defaults to True unless the variant explicitly says otherwise
+        tracked_flag = v.get("tracked")
+        if tracked_flag is not None:
+            var.tracked = bool(tracked_flag)
+
+        # ensure group by barcode
+        if var.barcode_normalized:
+            grp = _ensure_group_for_barcode(db, var.barcode_normalized)
+            _ensure_membership(db, var.id, grp.id)
+
+    # db.commit() controlled by caller

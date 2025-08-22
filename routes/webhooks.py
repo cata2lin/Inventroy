@@ -55,6 +55,15 @@ router = APIRouter(
 )
 
 
+def _get_header(request: Request, key: str) -> Optional[str]:
+    """Headers are case-insensitive; this helper is a little more forgiving."""
+    val = request.headers.get(key)
+    if val is not None:
+        return val
+    # fallback variants used by Shopify docs/samples
+    return request.headers.get(key.lower()) or request.headers.get(key.upper())
+
+
 def _verify_hmac(secret: str, raw_body: bytes, header_hmac: Optional[str]) -> None:
     """
     Verify Shopify webhook HMAC using the store's API secret (shared secret).
@@ -93,12 +102,15 @@ async def receive_webhook(
         raise HTTPException(status_code=400, detail="Store API secret not configured.")
 
     # --- headers & raw body ---
-    topic = request.headers.get("x-shopify-topic")
-    event_id = request.headers.get("x-shopify-webhook-id")
+    topic = _get_header(request, "x-shopify-topic")
+    event_id = _get_header(request, "x-shopify-webhook-id")
+    shop_domain = _get_header(request, "x-shopify-shop-domain") or store.shopify_url
+    header_hmac = _get_header(request, "x-shopify-hmac-sha256")
+
     raw_body = await request.body()
 
     # --- verify ---
-    _verify_hmac(secret, raw_body, request.headers.get("x-shopify-hmac-sha256"))
+    _verify_hmac(secret, raw_body, header_hmac)
 
     # --- parse payload (dict); keep this minimal/robust ---
     try:
@@ -130,7 +142,7 @@ async def receive_webhook(
             committed_projector.process_fulfillment_event(db, store_id, topic, payload)
 
         elif topic == "refunds/create":
-            # if you count restocks from refund lines, handle them here as well
+            # If you count restocks from refund lines, handle them here as well
             pass
     except Exception as e:
         db.rollback()
@@ -141,6 +153,7 @@ async def receive_webhook(
     try:
         if topic in {"products/create", "products/update"}:
             if schemas and hasattr(schemas, "ShopifyProductWebhook"):
+                # Parse strictly if model available; otherwise pass raw dict
                 try:
                     product_data = schemas.ShopifyProductWebhook.parse_obj(payload)
                 except Exception:
@@ -148,6 +161,7 @@ async def receive_webhook(
             else:
                 product_data = payload  # best-effort fallback
 
+            # NOTE: crud function must not rely on 'admin_graphql_api_id' (use id + shopify_gid instead)
             crud_product.create_or_update_product_from_webhook(db, store.id, product_data)  # type: ignore[arg-type]
 
         elif topic == "products/delete":
@@ -161,12 +175,8 @@ async def receive_webhook(
             else:
                 delete_id = payload.get("id")
             if delete_id:
-                # Mark delete in your CRUD (if implemented); otherwise ignore
-                try:
-                    # Optional: crud_webhook.mark_product_as_deleted(db, product_id=delete_id)
-                    pass
-                except Exception:
-                    pass
+                # Optional: crud_webhook.mark_product_as_deleted(db, product_id=delete_id)
+                pass
     except Exception as e:
         db.rollback()
         print(f"[product-upsert][error] store={store_id} topic={topic}: {e}")
@@ -182,8 +192,8 @@ async def receive_webhook(
                 background_tasks.add_task(
                     inventory_sync_service.process_inventory_update_event,
                     db_factory=SessionLocal,  # factory; service owns its session lifecycle
-                    shop_domain=store.shopify_url,
-                    event_id=event_id,
+                    shop_domain=shop_domain or store.shopify_url,
+                    event_id=str(event_id),
                     inventory_item_id=int(inventory_item_id),
                     location_id=int(location_id),
                 )

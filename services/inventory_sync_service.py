@@ -1,15 +1,14 @@
 # services/inventory_sync_service.py
-
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
-from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text
+from sqlalchemy.orm import Session, joinedload
 
 import models
-from shopify_service import ShopifyService
 from product_service import ProductService
+from shopify_service import ShopifyService
 
 # ---------------- time helpers (UTC-aware) ----------------
 def _utcnow() -> datetime:
@@ -57,7 +56,13 @@ def _ensure_no_open_tx(db: Session):
     except Exception:
         db.rollback()
 
-def _refresh_member_snapshot(db: Session, store_url: str, token: str, inventory_item_id: int, location_id: int) -> Optional[models.InventoryLevel]:
+def _refresh_member_snapshot(
+    db: Session,
+    store_url: str,
+    token: str,
+    inventory_item_id: int,
+    location_id: int,
+) -> Optional[models.InventoryLevel]:
     """Fetch live available/on_hand for one member and upsert local snapshot."""
     svc = ShopifyService(store_url=store_url, token=token)
     rows = svc.get_inventory_levels_for_items([inventory_item_id]) or []
@@ -126,7 +131,14 @@ def _compute_bootstrap_pool_from_snaps(snaps: List[models.InventoryLevel]) -> in
             return min(positives)
     return min(vals)
 
-def _write_available_delta(store_url: str, token: str, inventory_item_id: int, location_id: int, target_available: int, current_available: int):
+def _write_available_delta(
+    store_url: str,
+    token: str,
+    inventory_item_id: int,
+    location_id: int,
+    target_available: int,
+    current_available: int,
+):
     """Use delta write (tested path from bulk editor)."""
     delta = int(target_available) - int(current_available)
     if delta == 0:
@@ -135,6 +147,8 @@ def _write_available_delta(store_url: str, token: str, inventory_item_id: int, l
     inv_gid = f"gid://shopify/InventoryItem/{inventory_item_id}"
     loc_gid = f"gid://shopify/Location/{location_id}"
     ps.adjust_inventory_quantity(inv_gid, loc_gid, delta)
+
+# ---------------- main loop ----------------
 
 def process_inventory_update_event(
     shop_domain: str,
@@ -181,7 +195,6 @@ def process_inventory_update_event(
         if not variant or not variant.group_membership or not variant.group_membership.group:
             print("[skip] unknown variant or no barcode group")
             return
-
         group = variant.group_membership.group
         store = variant.product.store
 
@@ -311,12 +324,10 @@ def process_inventory_update_event(
                 )
                 if not m_snap:
                     continue
-
                 m_current_av = int(m_snap.available or 0)
 
                 # Safety buffer & clamp
                 target = max(0, int(group.pool_available) - int(m_store.safety_buffer))
-
                 bypass_on_hand = False
                 if first_bootstrap and BYPASS_ON_HAND_CLAMP_FOR_FIRST_BOOTSTRAP:
                     values = [int(s.available or 0) for s in fresh_snaps]
@@ -324,7 +335,6 @@ def process_inventory_update_event(
                     positives = sum(1 for v in values if v > 0)
                     if positives and zeros >= len(values) // 2 and group.pool_available > 0:
                         bypass_on_hand = True
-
                 if not bypass_on_hand:
                     target = min(target, int(m_snap.on_hand or 0))
 
@@ -349,6 +359,7 @@ def process_inventory_update_event(
                     target_available=int(target),
                     current_available=int(current_av),
                 )
+                print(f"[adjust-available] gid://shopify/InventoryItem/{member.inventory_item_id} @ gid://shopify/Location/{m_store.sync_location_id} Δ {int(target)-int(current_av)}")
 
                 _ensure_no_open_tx(db)
                 tx2 = db.begin()

@@ -1,49 +1,46 @@
 # services/sync_tracker.py
+"""
+Lightweight helpers to ensure each variant belongs to exactly one barcode group
+(by normalized barcode) and to avoid noisy duplicate "added to group" logs.
+"""
 
-import uuid
-from typing import Dict, Any
+from typing import Optional
+from sqlalchemy.orm import Session
 
-# This will store the state of our background tasks in memory.
-# In a production multi-worker setup, you'd replace this with Redis or a database.
-tasks: Dict[str, Dict[str, Any]] = {}
+import models
 
-def create_task(store_name: str) -> str:
-    """Creates a new task entry and returns its ID."""
-    task_id = str(uuid.uuid4())
-    tasks[task_id] = {
-        "store_name": store_name,
-        "status": "pending",
-        "progress": 0,
-        "total": 100,
-        "message": "Initializing..."
-    }
-    return task_id
+def _norm_barcode(b: Optional[str]) -> Optional[str]:
+    if not b:
+        return None
+    return b.strip().replace(" ", "").upper() or None
 
-def update_task_progress(task_id: str, progress: int, total: int, message: str):
-    """Updates the progress of a specific task."""
-    if task_id in tasks:
-        tasks[task_id]["progress"] = progress
-        tasks[task_id]["total"] = total
-        tasks[task_id]["message"] = message
-        tasks[task_id]["status"] = "running"
+def ensure_variant_in_group(db: Session, variant: models.ProductVariant) -> None:
+    """
+    Create barcode group + membership if missing, otherwise no-op.
+    This avoids duplicate inserts and duplicate 'added' logs.
+    """
+    bnorm = _norm_barcode(variant.barcode)
+    if not bnorm:
+        return
 
-def complete_task(task_id: str, message: str):
-    """Marks a task as completed."""
-    if task_id in tasks:
-        tasks[task_id]["status"] = "completed"
-        tasks[task_id]["progress"] = tasks[task_id]["total"]
-        tasks[task_id]["message"] = message
+    grp = db.query(models.BarcodeGroup).filter(models.BarcodeGroup.id == bnorm).first()
+    if not grp:
+        grp = models.BarcodeGroup(id=bnorm, status="active", pool_available=0)
+        db.add(grp)
+        db.flush()
 
-def fail_task(task_id: str, error_message: str):
-    """Marks a task as failed."""
-    if task_id in tasks:
-        tasks[task_id]["status"] = "failed"
-        tasks[task_id]["message"] = error_message
+    exists = (
+        db.query(models.GroupMembership)
+        .filter(
+            models.GroupMembership.variant_id == variant.id,
+            models.GroupMembership.group_id == bnorm,
+        )
+        .first()
+    )
+    if exists:
+        # already a member; no spammy log
+        return
 
-def get_task_status(task_id: str) -> Dict[str, Any]:
-    """Retrieves the status of a single task."""
-    return tasks.get(task_id, {"status": "not_found"})
-
-def get_all_tasks() -> Dict[str, Dict[str, Any]]:
-    """Retrieves the status of all tasks."""
-    return tasks
+    db.add(models.GroupMembership(variant_id=variant.id, group_id=bnorm))
+    # Let caller commit; single log line here if you want visibility:
+    print(f"Variant {variant.id} added to group '{bnorm}'")
