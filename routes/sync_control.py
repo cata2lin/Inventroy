@@ -14,7 +14,10 @@ router = APIRouter(prefix="/api/sync-control", tags=["Sync Control"])
 
 
 @router.post("/products")
-def trigger_product_sync(background_tasks: BackgroundTasks, db: Session = Depends(get_db)) -> Dict[str, Any]:
+def trigger_product_sync(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
     stores = crud_store.get_all_stores(db)
     if not stores:
         raise HTTPException(status_code=404, detail="No stores configured.")
@@ -28,7 +31,11 @@ def trigger_product_sync(background_tasks: BackgroundTasks, db: Session = Depend
 
 
 @router.post("/products/{store_id}")
-def trigger_product_sync_for_store(store_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def trigger_product_sync_for_store(
+    store_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
     store = crud_store.get_store(db, store_id)
     if not store:
         raise HTTPException(status_code=404, detail="Store not found.")
@@ -43,7 +50,10 @@ def trigger_product_sync_for_store(store_id: int, background_tasks: BackgroundTa
 # ---------------- Orders ----------------
 
 @router.post("/orders")
-def trigger_orders_sync_all(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def trigger_orders_sync_all(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
     stores = crud_store.get_all_stores(db)
     if not stores:
         raise HTTPException(status_code=404, detail="No stores configured.")
@@ -63,7 +73,7 @@ def trigger_orders_sync_for_store(
     store_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-):
+) -> Dict[str, Any]:
     store = crud_store.get_store(db, store_id)
     if not store:
         raise HTTPException(status_code=404, detail="Store not found.")
@@ -79,14 +89,22 @@ def trigger_orders_sync_for_store(
 
 @router.post("/orders/range")
 def trigger_orders_sync_range(
-    payload: Dict[str, Optional[str]] = Body(..., example={"start": "2025-08-01T00:00:00Z", "end": "2025-08-22T23:59:59Z"}),
-    background_tasks: BackgroundTasks = Depends(),
+    payload: Dict[str, Optional[str]] = Body(
+        ...,
+        example={"start": "2025-08-01T00:00:00Z", "end": "2025-08-22T23:59:59Z"},
+    ),
+    background_tasks: BackgroundTasks = ...,
     db: Session = Depends(get_db),
-):
+) -> Dict[str, Any]:
+    """
+    Kick off order sync for all stores in a date window.
+    Provide ISO8601 timestamps (UTC recommended) in 'start' and/or 'end'.
+    """
     start = payload.get("start")
     end = payload.get("end")
     if not start and not end:
         raise HTTPException(status_code=400, detail="Provide at least one of 'start' or 'end'.")
+
     stores = crud_store.get_all_stores(db)
     if not stores:
         raise HTTPException(status_code=404, detail="No stores configured.")
@@ -99,4 +117,4 @@ def trigger_orders_sync_range(
             created_at_min=start,
             created_at_max=end,
         )
-    return {"status": "ok", "message": f"Order sync (range) kicked off for all stores.", "start": start, "end": end}
+    return {"status": "ok", "message": "Order sync (range) kicked off for all stores.", "start": start, "end": end}
