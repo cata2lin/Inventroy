@@ -1,8 +1,12 @@
 # routes/inventory_v2.py
+from __future__ import annotations
+
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, date
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, literal, func, cast, Date
@@ -23,6 +27,45 @@ except Exception:  # pragma: no cover
     crud_inventory_v2 = None  # type: ignore
 
 router = APIRouter(prefix="/api/v2/inventory", tags=["inventory_v2"])
+pages = APIRouter(tags=["pages"])
+templates = Jinja2Templates(directory="templates")
+
+
+# ---------- helpers ----------
+def _parse_int_list_csv(value: Optional[str]) -> Optional[List[int]]:
+    if not value:
+        return None
+    out: List[int] = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except ValueError:
+            continue
+    return list(sorted(set(out))) or None
+
+
+def _parse_str_list_csv(value: Optional[str]) -> Optional[List[str]]:
+    if not value:
+        return None
+    out: List[str] = []
+    for part in value.split(","):
+        part = part.strip()
+        if part:
+            out.append(part)
+    return list(sorted(set(out))) or None
+
+
+def _group_expr(GM, Variant):
+    # Same grouping logic the report uses
+    return func.coalesce(
+        GM.group_id,
+        Variant.barcode_normalized,
+        Variant.barcode,
+        literal("UNKNOWN"),
+    )
 
 
 # ---------- Filters ----------
@@ -60,32 +103,6 @@ def get_filters(db: Session = Depends(get_db)):
     ]
 
     return {"stores": stores, "types": product_types, "statuses": statuses}
-
-
-def _parse_int_list_csv(value: Optional[str]) -> Optional[List[int]]:
-    if not value:
-        return None
-    out: List[int] = []
-    for part in value.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            out.append(int(part))
-        except ValueError:
-            continue
-    return list(sorted(set(out))) or None
-
-
-def _parse_str_list_csv(value: Optional[str]) -> Optional[List[str]]:
-    if not value:
-        return None
-    out: List[str] = []
-    for part in value.split(","):
-        part = part.strip()
-        if part:
-            out.append(part)
-    return list(sorted(set(out))) or None
 
 
 # ---------- Report ----------
@@ -171,8 +188,8 @@ def get_product_details(
     db: Session = Depends(get_db),
 ):
     """
-    Returns committed orders, all orders (last 100), and stock movements for the group key,
-    which can be: GroupMembership.group_id OR normalized barcode OR barcode.
+    Returns committed orders, all orders (last 200), and stock movements for the group key,
+    which can be: GroupMembership.group_id OR normalized barcode OR barcode (or SKU fallback).
     """
     if not barcode_or_group:
         raise HTTPException(status_code=400, detail="group key is required")
@@ -199,6 +216,7 @@ def get_product_details(
         .all()
     )
     if not variants_q:
+        # Fallback: direct match by barcode/normalized/sku
         variants_q = (
             db.query(
                 Variant.id.label("variant_id"),
@@ -605,7 +623,7 @@ def product_analytics(
 
 # ---------- Make Primary ----------
 class MakePrimaryPayload(BaseModel):
-    barcode: str
+    barcode: Optional[str] = None
     variant_id: int
 
 
@@ -615,6 +633,7 @@ def make_primary_variant(payload: MakePrimaryPayload, db: Session = Depends(get_
     """
     Sets `is_primary_variant=True` on the selected variant, and False on all other
     variants in the same barcode group (by GroupMembership/group key).
+    Fix: use explicit select_from(ProductVariant) when resolving group to avoid ambiguous joins.
     """
     Variant = models.ProductVariant
     GM = models.GroupMembership
@@ -624,13 +643,23 @@ def make_primary_variant(payload: MakePrimaryPayload, db: Session = Depends(get_
     if not variant:
         raise HTTPException(status_code=404, detail="Variant not found")
 
-    # Determine group key from payload.barcode OR existing membership
-    group_key = (
-        db.query(func.coalesce(GM.group_id, Variant.barcode_normalized, Variant.barcode))
-        .outerjoin(GM, GM.variant_id == Variant.id)
-        .filter(Variant.id == variant.id)
-        .scalar()
-    ) or payload.barcode
+    # If payload.barcode is empty/UNKNOWN, derive it from the variant using the same coalesce chain
+    derive_key = (not payload.barcode) or (payload.barcode.strip().upper() == "UNKNOWN")
+    if derive_key:
+        group_key = (
+            db.query(
+                func.coalesce(GM.group_id, Variant.barcode_normalized, Variant.barcode)
+            )
+            .select_from(Variant)
+            .outerjoin(GM, GM.variant_id == Variant.id)
+            .filter(Variant.id == variant.id)
+            .scalar()
+        )
+    else:
+        group_key = payload.barcode
+
+    if not group_key:
+        raise HTTPException(status_code=404, detail="Group not found for selected variant")
 
     # All variants in this group
     group_variants = (
@@ -640,14 +669,14 @@ def make_primary_variant(payload: MakePrimaryPayload, db: Session = Depends(get_
         .all()
     )
     if not group_variants:
-        raise HTTPException(status_code=404, detail="Group not found")
+        raise HTTPException(status_code=404, detail="No variants found in the resolved group")
 
     # Update flags
     for v in group_variants:
         v.is_primary_variant = (v.id == variant.id)
 
     db.commit()
-    return {"ok": True, "group": group_key, "primary_variant_id": variant.id}
+    return {"ok": True, "group": group_key, "primary_variant_id": variant.id, "count": len(group_variants)}
 
 
 # ---------- Details (legacy compatibility) ----------
@@ -662,3 +691,14 @@ def get_details(
     if not barcode:
         raise HTTPException(status_code=400, detail="barcode is required")
     return get_product_details(barcode_or_group=barcode, db=db)
+
+
+# ---------- Pages (inventory + product details) ----------
+@pages.get("/inventory")
+def inventory_page(request: Request):
+    return templates.TemplateResponse("inventory.html", {"request": request})
+
+
+@pages.get("/inventory/product/{group_key}")
+def product_details_page(request: Request, group_key: str):
+    return templates.TemplateResponse("product_details.html", {"request": request, "group_key": group_key})
