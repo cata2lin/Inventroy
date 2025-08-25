@@ -28,7 +28,6 @@ router = APIRouter(prefix="/api/v2/inventory", tags=["inventory_v2"])
 @router.get("/filters/")
 def get_filters(
     db: Session = Depends(get_db),
-    store_ids: Optional[str] = Query(default=None, description="Comma-separated store ids"),
 ):
     """
     Returns filter data for the Inventory Report UI.
@@ -81,6 +80,12 @@ def get_report(
     stores: Optional[str] = Query(
         None, description="Comma-separated store ids: e.g., '1,2,3'"
     ),
+    statuses: Optional[str] = Query(
+        None, description="Comma-separated product statuses"
+    ),
+    types: Optional[str] = Query(
+        None, description="Comma-separated product types"
+    ),
     totals_mode: str = Query("grouped"),
 ):
     """
@@ -91,7 +96,7 @@ def get_report(
     - totals ALWAYS come from grouped-deduped logic so we don't triple-count
       products that exist in multiple stores.
     """
-    # Simple validation for view/totals_mode to avoid pattern/regex differences
+    # Simple validation for view/totals_mode
     v = (view or "").lower()
     if v not in ("individual", "grouped"):
         raise HTTPException(status_code=400, detail="view must be 'individual' or 'grouped'")
@@ -99,6 +104,7 @@ def get_report(
     if (totals_mode or "").lower() != "grouped":
         raise HTTPException(status_code=400, detail="totals_mode must be 'grouped'")
 
+    # parse store ids
     store_list: Optional[List[int]] = None
     if stores:
         tmp: List[int] = []
@@ -112,6 +118,15 @@ def get_report(
                 continue
         store_list = list(sorted(set(tmp))) or None
 
+    # parse statuses/types
+    status_list: Optional[List[str]] = None
+    if statuses:
+        status_list = list(sorted(set([s.strip() for s in statuses.split(",") if s.strip()])))
+
+    type_list: Optional[List[str]] = None
+    if types:
+        type_list = list(sorted(set([t.strip() for t in types.split(",") if t.strip()])))
+
     rows, totals, total_count = crud_inventory_report.get_inventory_report(
         db,
         skip=skip,
@@ -121,10 +136,16 @@ def get_report(
         view=v,
         search=search,
         store_ids=store_list,
+        statuses=status_list,
+        product_types=type_list,
         totals_mode="grouped",
     )
 
     # Shape response exactly as the frontend expects
+    # Ensure arrays are always present (avoids `.map` on undefined)
+    if rows is None:
+        rows = []
+
     return {
         "inventory": rows,
         "total_count": total_count,
@@ -180,9 +201,11 @@ def get_details(
             Variant.title,
             Product.title.label("product_title"),
             Store.name.label("store_name"),
+            Product.status.label("status"),
+            Product.product_type.label("product_type"),
         )
         .outerjoin(GM, GM.variant_id == Variant.id)
-        .outerjoin(Product, Product.id == Variant.product_id)
+        .join(Product, Product.id == Variant.product_id)
         .join(Store, Store.id == Variant.store_id)
         .filter(
             or_(
@@ -203,6 +226,8 @@ def get_details(
             "variant_title": v.title,
             "product_title": v.product_title,
             "store_name": v.store_name,
+            "status": v.status,
+            "product_type": v.product_type,
         }
         for v in members_q
     ]
