@@ -1,48 +1,97 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container-fluid">
-    <hgroup>
-        <h1>Inventory Report</h1>
-        <h2>Detailed view of all product variants across all stores.</h2>
-    </hgroup>
+<div class="container">
+  <header class="page-header">
+    <h1>Inventory Report</h1>
+    <p class="muted">Search, filter, and analyze inventory. Click a product image to open its details page.</p>
+  </header>
 
-    <article class="filter-container">
-        <section id="metrics-container" class="grid"></section>
-        <section class="controls-grid">
-            <input type="search" id="search-input" placeholder="Search SKU, Barcode, Name...">
-            <select id="store-filter"><option value="">All Stores</option></select>
-            <select id="type-filter"><option value="">All Types</option></select>
-            <select id="category-filter"><option value="">All Categories</option></select>
-            <select id="status-filter"><option value="">All Statuses</option><option value="ACTIVE">Active</option><option value="DRAFT">Draft</option><option value="ARCHIVED">Archived</option></select>
-            <input type="number" id="min-retail-input" placeholder="Min Retail Value">
-            <input type="number" id="max-retail-input" placeholder="Max Retail Value">
-            <input type="number" id="min-inv-input" placeholder="Min Inv. Value">
-            <input type="number" id="max-inv-input" placeholder="Max Inv. Value">
-            <fieldset><label for="group-toggle"><input type="checkbox" id="group-toggle" name="group-toggle" role="switch"> Group by Barcode</label></fieldset>
-            <button id="reset-filters" class="secondary outline">Reset</button>
-        </section>
-    </article>
+  <!-- Filters / Controls -->
+  <article class="controls-grid" style="row-gap: .75rem;">
+    <div class="grid" style="gap:.5rem;">
+      <div>
+        <label for="search-input">Search</label>
+        <input id="search-input" type="search" placeholder="Title, SKU, barcode, group…" autocomplete="off">
+      </div>
 
-    <article id="inventory-table-container" aria-busy="true"><p>Loading...</p></article>
+      <div>
+        <label for="store-filter">Store</label>
+        <select id="store-filter">
+          <option value="">All Stores</option>
+          <!-- options populated by JS -->
+        </select>
+      </div>
 
-    <div class="grid pagination-controls">
-        <button id="prev-button" class="secondary outline" disabled>&larr; Previous</button>
-        <span id="page-indicator">Page 1</span>
-        <button id="next-button" class="secondary outline">Next &rarr;</button>
+      <div>
+        <label for="type-filter">Product Type</label>
+        <select id="type-filter">
+          <option value="">All Types</option>
+          <!-- options populated by JS -->
+        </select>
+      </div>
+
+      <div>
+        <label for="status-filter">Status</label>
+        <select id="status-filter">
+          <option value="">All Statuses</option>
+          <!-- options populated by JS -->
+        </select>
+      </div>
+
+      <div>
+        <label for="view-toggle">View</label>
+        <select id="view-toggle">
+          <option value="individual" selected>Individual (per variant)</option>
+          <option value="grouped">Grouped (by barcode/group)</option>
+        </select>
+      </div>
     </div>
 
-    <dialog id="details-modal">
-      <article>
-        <header>
-            <button class="close" aria-label="Close" data-target="details-modal"></button>
-            <strong id="modal-title">Product Details</strong>
-        </header>
-        <div id="modal-content" aria-busy="true">
-            <p>Loading details...</p>
-        </div>
-      </article>
-    </dialog>
+    <!-- Optional numeric filters (present so JS can bind; you can style/hide if unused) -->
+    <div class="grid" style="gap:.5rem;">
+      <div>
+        <label for="min-retail-input">Min Retail Value</label>
+        <input id="min-retail-input" type="number" step="0.01" placeholder="e.g. 0">
+      </div>
+      <div>
+        <label for="max-retail-input">Max Retail Value</label>
+        <input id="max-retail-input" type="number" step="0.01" placeholder="e.g. 10000">
+      </div>
+      <div>
+        <label for="min-inv-input">Min On Hand</label>
+        <input id="min-inv-input" type="number" step="1" placeholder="e.g. 0">
+      </div>
+      <div>
+        <label for="max-inv-input">Max On Hand</label>
+        <input id="max-inv-input" type="number" step="1" placeholder="e.g. 9999">
+      </div>
+
+      <!-- Category filter placeholder (not used by API, kept to satisfy JS references) -->
+      <div style="display:none">
+        <label for="category-filter">Category</label>
+        <select id="category-filter"><option value="">All</option></select>
+      </div>
+    </div>
+  </article>
+
+  <!-- Top metrics -->
+  <article id="metrics-container" class="metrics-grid" style="margin-top: .5rem;">
+    <!-- Filled by JS: total retail value, inventory value, total on hand -->
+  </article>
+
+  <!-- Table / Groups container -->
+  <section id="inventory-table-container" class="card" style="margin-top: .75rem; overflow:auto;">
+    <!-- Filled by JS with individual or grouped view -->
+    <div style="padding:1rem; color:var(--muted-color);">Loading inventory…</div>
+  </section>
+
+  <!-- Pagination -->
+  <nav class="pagination-bar" aria-label="Pagination" style="display:flex; align-items:center; gap:.5rem; margin-top: .75rem;">
+    <button id="prev-button" class="outline" type="button">Prev</button>
+    <span id="page-indicator" class="muted">Page 1 / 1</span>
+    <button id="next-button" class="outline" type="button">Next</button>
+  </nav>
 </div>
 {% endblock %}
 

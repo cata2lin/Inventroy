@@ -1,19 +1,15 @@
 // static/js/inventory.js
+// Robust, null-safe inventory UI (individual & grouped views)
 
 document.addEventListener('DOMContentLoaded', () => {
-  // --- Element References ---
+  // ---- Element refs (some may be missing; we guard all uses) ----
   const elements = {
     metrics: document.getElementById('metrics-container'),
     filters: {
       search: document.getElementById('search-input'),
       store: document.getElementById('store-filter'),
       type: document.getElementById('type-filter'),
-      category: document.getElementById('category-filter'),
       status: document.getElementById('status-filter'),
-      minRetail: document.getElementById('min-retail-input'),
-      maxRetail: document.getElementById('max-retail-input'),
-      minInv: document.getElementById('min-inv-input'),
-      maxInv: document.getElementById('max-inv-input'),
       view: document.getElementById('view-toggle'),
     },
     tableContainer: document.getElementById('inventory-table-container'),
@@ -24,20 +20,26 @@ document.addEventListener('DOMContentLoaded', () => {
     },
   };
 
-  // --- State ---
+  // ---- State ----
+  const getURLView = () => {
+    const m = /[?&]view=([^&]+)/.exec(location.search);
+    return m ? decodeURIComponent(m[1]) : null;
+  };
+  const initialView = (elements.filters.view && elements.filters.view.value) || getURLView() || 'individual';
   const state = {
     page: 1,
     pageSize: 50,
     sortBy: 'on_hand',
     sortOrder: 'desc',
-    view: (elements.filters.view?.value || 'individual'),
+    view: initialView,
     search: '',
     store: '',
     status: '',
     type: '',
+    totalCount: 0,
   };
 
-  // --- Helpers ---
+  // ---- Helpers ----
   const qs = (obj) =>
     Object.entries(obj)
       .filter(([, v]) => v !== undefined && v !== null && v !== '')
@@ -50,33 +52,52 @@ document.addEventListener('DOMContentLoaded', () => {
     return res.json();
   };
 
-  // --- Load filters ---
+  const setBusy = (busy) => {
+    if (!elements.tableContainer) return;
+    if (busy) {
+      elements.tableContainer.setAttribute('aria-busy', 'true');
+    } else {
+      elements.tableContainer.removeAttribute('aria-busy');
+    }
+  };
+
+  // ---- Filters data ----
   const loadFilters = async () => {
     try {
       const data = await fetchJSON('/api/v2/inventory/filters/');
-      (data.stores || []).forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s.id; opt.textContent = s.name;
-        elements.filters.store.appendChild(opt);
-      });
-      (data.types || []).forEach(t => {
-        const opt = document.createElement('option');
-        opt.value = t; opt.textContent = t;
-        elements.filters.type.appendChild(opt);
-      });
-      (data.statuses || []).forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s; opt.textContent = s;
-        elements.filters.status.appendChild(opt);
-      });
+      if (elements.filters.store) {
+        (data.stores || []).forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = s.name;
+          elements.filters.store.appendChild(opt);
+        });
+      }
+      if (elements.filters.type) {
+        (data.types || []).forEach(t => {
+          const opt = document.createElement('option');
+          opt.value = t;
+          opt.textContent = t;
+          elements.filters.type.appendChild(opt);
+        });
+      }
+      if (elements.filters.status) {
+        (data.statuses || []).forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s;
+          opt.textContent = s;
+          elements.filters.status.appendChild(opt);
+        });
+      }
     } catch (e) {
       console.error('Failed loading filters', e);
     }
   };
 
-  // --- Load page ---
+  // ---- Page load ----
   const loadPage = async () => {
-    elements.tableContainer.setAttribute('aria-busy', 'true');
+    if (!elements.tableContainer) return;
+    setBusy(true);
     const skip = (state.page - 1) * state.pageSize;
     const params = {
       skip,
@@ -92,37 +113,65 @@ document.addEventListener('DOMContentLoaded', () => {
     const url = `/api/v2/inventory/report/?${qs(params)}`;
     try {
       const data = await fetchJSON(url);
+      state.totalCount = data.total_count || 0;
       renderAll(data);
     } catch (e) {
       console.error(e);
       elements.tableContainer.innerHTML = `<p class="error">Failed to load inventory.</p>`;
     } finally {
-      elements.tableContainer.removeAttribute('aria-busy');
+      setBusy(false);
     }
   };
 
-  const renderAll = (data) => {
-    renderMetrics(data);
-    if (state.view === 'grouped') {
-      renderGroupedView(data.inventory || []);
-    } else {
-      renderIndividualView(data.inventory || []);
-    }
-    updatePagination(data.total_count || 0);
-  };
+  const fmtCurrency = (v) =>
+    (Number(v) || 0).toLocaleString('ro-RO', { maximumFractionDigits: 2 }) + ' RON';
 
   const renderMetrics = (data) => {
-    const fmtCurrency = (v) => (v || 0).toLocaleString('ro-RO', { maximumFractionDigits: 2 }) + ' RON';
+    if (!elements.metrics) return;
     elements.metrics.innerHTML = `
       <div class="metric"><h4>${fmtCurrency(data.total_retail_value)}</h4><p>Total Retail Value</p></div>
       <div class="metric"><h4>${fmtCurrency(data.total_inventory_value)}</h4><p>Total Inventory Value</p></div>
       <div class="metric"><h4>${(data.total_on_hand || 0).toLocaleString()}</h4><p>Total Products On Hand</p></div>`;
   };
 
-  // --- Views ---
+  const updatePagination = () => {
+    const totalPages = Math.max(1, Math.ceil((state.totalCount || 0) / state.pageSize));
+    if (elements.pagination.indicator) {
+      elements.pagination.indicator.textContent = `Page ${state.page} / ${totalPages}`;
+    }
+    if (elements.pagination.prev) elements.pagination.prev.disabled = state.page <= 1;
+    if (elements.pagination.next) elements.pagination.next.disabled = state.page >= totalPages;
+  };
+
   const openDetailsPage = (groupKey) => {
     if (!groupKey) return;
     window.location.href = `/inventory/product/${encodeURIComponent(groupKey)}`;
+  };
+  window.__openDetails = openDetailsPage;
+
+  window.__makePrimary = async (groupKey, variantId) => {
+    try {
+      await fetch('/api/v2/inventory/set-primary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ barcode: groupKey, variant_id: variantId }),
+      });
+      loadPage();
+    } catch (e) {
+      console.error('Failed to set primary', e);
+    }
+  };
+
+  // ---- Renderers ----
+  const renderAll = (data) => {
+    renderMetrics(data);
+    const items = Array.isArray(data.inventory) ? data.inventory : [];
+    if (state.view === 'grouped') {
+      renderGroupedView(items);
+    } else {
+      renderIndividualView(items);
+    }
+    updatePagination();
   };
 
   const renderIndividualView = (inventory) => {
@@ -140,25 +189,27 @@ document.addEventListener('DOMContentLoaded', () => {
       { key: 'retail_value', label: 'Retail Value' },
       { key: 'inventory_value', label: 'Inv. Value' },
     ];
-    let tableHtml = '<div class="overflow-auto"><table><thead><tr>';
+
+    let html = '<div class="overflow-auto"><table><thead><tr>';
     headers.forEach(h => {
       const sortClass = state.sortBy === h.key ? `class="${state.sortOrder}"` : '';
       const sortable = h.sortable !== false ? `data-sort-by="${h.key}"` : '';
-      tableHtml += `<th ${sortable} ${sortClass}>${h.label}</th>`;
+      html += `<th ${sortable} ${sortClass}>${h.label}</th>`;
     });
-    tableHtml += '</tr></thead><tbody>';
+    html += '</tr></thead><tbody>';
 
     (inventory || []).forEach(item => {
       const onHand = item.on_hand || 0;
       const price = Number(item.price) || 0;
       const cost = Number(item.cost) || 0;
-      const retailValue = onHand * price;
-      const invValue = onHand * cost;
+      const rv = onHand * price;
+      const iv = onHand * cost;
       const groupKey = item.group_id || item.barcode || item.sku || '';
-      tableHtml += `
+      html += `
         <tr>
           <td>
-            <img src="${item.image_url || '/static/img/placeholder.png'}" alt="${item.product_title || ''}" style="width:48px;height:48px;cursor:pointer;border-radius:6px"
+            <img src="${item.image_url || '/static/img/placeholder.png'}" alt="${item.product_title || ''}"
+                 style="width:48px;height:48px;cursor:pointer;border-radius:6px"
                  onclick="window.__openDetails('${groupKey}')">
           </td>
           <td>${item.product_title || ''}<br><small>${item.variant_title || ''}</small></td>
@@ -170,26 +221,22 @@ document.addEventListener('DOMContentLoaded', () => {
           <td>${onHand}</td>
           <td>${item.committed || 0}</td>
           <td>${item.available || 0}</td>
-          <td>${retailValue.toFixed(2)}</td>
-          <td>${invValue.toFixed(2)}</td>
+          <td>${rv.toFixed(2)}</td>
+          <td>${iv.toFixed(2)}</td>
         </tr>`;
     });
 
-    tableHtml += '</tbody></table></div>';
-    elements.tableContainer.innerHTML = tableHtml;
+    html += '</tbody></table></div>';
+    elements.tableContainer.innerHTML = html;
 
-    // column sorting
+    // header sorting
     elements.tableContainer.querySelectorAll('th[data-sort-by]').forEach(th => {
-      th.onclick = () => {
+      th.addEventListener('click', () => {
         const k = th.getAttribute('data-sort-by');
-        if (state.sortBy === k) {
-          state.sortOrder = state.sortOrder === 'asc' ? 'desc' : 'asc';
-        } else {
-          state.sortBy = k;
-          state.sortOrder = 'desc';
-        }
+        if (state.sortBy === k) state.sortOrder = state.sortOrder === 'asc' ? 'desc' : 'asc';
+        else { state.sortBy = k; state.sortOrder = 'desc'; }
         loadPage();
-      };
+      });
     });
   };
 
@@ -228,10 +275,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td>${v.sku || ''}</td>
                     <td>${v.store_name || ''}</td>
                     <td>${v.status || ''}</td>
-                    <td>${!v.is_primary
-                      ? `<button class="outline" onclick="window.__makePrimary('${groupKey}', ${v.variant_id})">Make Primary</button>`
-                      : '<strong>Primary</strong>'}
-                    </td>
+                    <td>${
+                      !v.is_primary
+                        ? `<button class="outline" onclick="window.__makePrimary('${groupKey}', ${v.variant_id})">Make Primary</button>`
+                        : '<strong>Primary</strong>'
+                    }</td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -242,42 +290,55 @@ document.addEventListener('DOMContentLoaded', () => {
     elements.tableContainer.innerHTML = html;
   };
 
-  // Global helpers for onclick in markup
-  window.__openDetails = (groupKey) => openDetailsPage(groupKey);
-  window.__makePrimary = async (groupKey, variantId) => {
-    try {
-      await fetch('/api/v2/inventory/set-primary', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ barcode: groupKey, variant_id: variantId }),
-      });
-      loadPage(); // refresh list
-    } catch (e) {
-      console.error('Failed to set primary', e);
-    }
-  };
+  // ---- Events (ALL NULL-SAFE) ----
+  if (elements.filters.view) {
+    elements.filters.view.value = state.view;
+    elements.filters.view.addEventListener('change', () => {
+      state.view = elements.filters.view.value || 'individual';
+      state.page = 1;
+      loadPage();
+    });
+  }
+  if (elements.filters.search) {
+    elements.filters.search.addEventListener('input', (e) => {
+      state.search = e.target.value.trim();
+      state.page = 1;
+      loadPage();
+    });
+  }
+  if (elements.filters.store) {
+    elements.filters.store.addEventListener('change', () => {
+      state.store = elements.filters.store.value;
+      state.page = 1;
+      loadPage();
+    });
+  }
+  if (elements.filters.type) {
+    elements.filters.type.addEventListener('change', () => {
+      state.type = elements.filters.type.value;
+      state.page = 1;
+      loadPage();
+    });
+  }
+  if (elements.filters.status) {
+    elements.filters.status.addEventListener('change', () => {
+      state.status = elements.filters.status.value;
+      state.page = 1;
+      loadPage();
+    });
+  }
+  if (elements.pagination.prev) {
+    elements.pagination.prev.addEventListener('click', () => {
+      if (state.page > 1) { state.page -= 1; loadPage(); }
+    });
+  }
+  if (elements.pagination.next) {
+    elements.pagination.next.addEventListener('click', () => {
+      const totalPages = Math.max(1, Math.ceil((state.totalCount || 0) / state.pageSize));
+      if (state.page < totalPages) { state.page += 1; loadPage(); }
+    });
+  }
 
-  // --- Pagination ---
-  const updatePagination = (totalCount) => {
-    const totalPages = Math.max(1, Math.ceil((totalCount || 0) / state.pageSize));
-    elements.pagination.indicator.textContent = `Page ${state.page} / ${totalPages}`;
-    elements.pagination.prev.disabled = state.page <= 1;
-    elements.pagination.next.disabled = state.page >= totalPages;
-  };
-  elements.pagination.prev.onclick = () => {
-    if (state.page > 1) { state.page -= 1; loadPage(); }
-  };
-  elements.pagination.next.onclick = () => {
-    state.page += 1; loadPage();
-  };
-
-  // --- Filters / events ---
-  elements.filters.view.onchange = () => { state.view = elements.filters.view.value; state.page = 1; loadPage(); };
-  elements.filters.search.oninput = (e) => { state.search = e.target.value.trim(); state.page = 1; loadPage(); };
-  elements.filters.store.onchange = () => { state.store = elements.filters.store.value; state.page = 1; loadPage(); };
-  elements.filters.type.onchange = () => { state.type = elements.filters.type.value; state.page = 1; loadPage(); };
-  elements.filters.status.onchange = () => { state.status = elements.filters.status.value; state.page = 1; loadPage(); };
-
-  // Init
+  // ---- Init ----
   loadFilters().then(loadPage);
 });
