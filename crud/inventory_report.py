@@ -11,7 +11,7 @@ import models
 def _normalize_store_ids(store_ids: Optional[List[int]]) -> Optional[List[int]]:
     if not store_ids:
         return None
-    ids = []
+    ids: List[int] = []
     for s in store_ids:
         if s is None:
             continue
@@ -30,7 +30,12 @@ def _group_key_expr(GM, Variant):
     Prefer explicit barcode group (group_id). Fallback order:
       normalized_barcode -> barcode -> "UNKNOWN"
     """
-    return func.coalesce(GM.group_id, Variant.barcode_normalized, Variant.barcode, literal("UNKNOWN"))
+    return func.coalesce(
+        GM.group_id,
+        Variant.barcode_normalized,
+        Variant.barcode,
+        literal("UNKNOWN"),
+    )
 
 
 def _apply_common_filters(
@@ -196,18 +201,38 @@ def _build_variant_aggregate_query(db: Session, filters: Dict[str, Any]):
 
 
 def _map_sort(sort_by: str, sort_order: str, columns: Dict[str, Any]):
+    """
+    Return a SQLAlchemy sort expression without ever evaluating a SQL clause in boolean context.
+    Also map common aliases between grouped/individual views.
+    """
     desc = (sort_order or "").lower() == "desc"
     key = (sort_by or "on_hand").lower()
-    alias_map = {
-        "retail_value": "retail_value",
-        "inventory_value": "inventory_value",
-        "price": "price",
-        "cost": "cost_per_item",
-        "on_hand": "on_hand",
-        "available": "available",
-    }
-    key = alias_map.get(key, key)
-    col = columns.get(key) or next(iter(columns.values()))
+
+    # Normalize aliases
+    if key == "cost":
+        key = "cost_per_item"
+
+    # Build candidate keys (to bridge grouped vs individual naming)
+    candidates: List[str] = [key]
+    if key == "price" and "price" not in columns and "max_price" in columns:
+        candidates.append("max_price")
+    if key in ("cost_per_item",) and key not in columns:
+        for alt in ("max_cost", "cost_per_item"):
+            if alt not in candidates:
+                candidates.append(alt)
+
+    # Pick the first available column
+    col = None
+    for c in candidates:
+        if c in columns:
+            col = columns[c]
+            break
+    if col is None:
+        col = columns.get("on_hand")
+    if col is None:
+        # deterministic fallback (first value)
+        col = next(iter(columns.values()))
+
     return col.desc() if desc else col.asc()
 
 
@@ -241,8 +266,12 @@ def get_inventory_report(
     totals_row = db.query(
         func.coalesce(func.sum(g_subq.c.on_hand), 0).label("on_hand"),
         func.coalesce(func.sum(g_subq.c.available), 0).label("available"),
-        func.coalesce(func.sum(g_subq.c.on_hand * func.coalesce(g_subq.c.max_cost, 0.0)), 0.0).label("inventory_value"),
-        func.coalesce(func.sum(g_subq.c.on_hand * func.coalesce(g_subq.c.max_price, 0.0)), 0.0).label("retail_value"),
+        func.coalesce(
+            func.sum(g_subq.c.on_hand * func.coalesce(g_subq.c.max_cost, 0.0)), 0.0
+        ).label("inventory_value"),
+        func.coalesce(
+            func.sum(g_subq.c.on_hand * func.coalesce(g_subq.c.max_price, 0.0)), 0.0
+        ).label("retail_value"),
     ).one()
 
     totals = {
@@ -275,23 +304,29 @@ def get_inventory_report(
         }
 
         # count groups
-        total_count = db.query(func.count(literal(1))).select_from(g_subq).scalar() or 0
+        total_count = (
+            db.query(func.count(literal(1))).select_from(g_subq).scalar() or 0
+        )
 
-        q = db.query(
-            g_subq.c.group_id,
-            g_subq.c.product_title,
-            g_subq.c.variant_title,
-            g_subq.c.sku,
-            g_subq.c.barcode,
-            g_subq.c.primary_image_url,
-            g_subq.c.primary_store,
-            g_subq.c.on_hand,
-            g_subq.c.available,
-            g_subq.c.max_cost,
-            g_subq.c.max_price,
-            (g_subq.c.on_hand * g_subq.c.max_cost).label("inventory_value"),
-            (g_subq.c.on_hand * g_subq.c.max_price).label("retail_value"),
-        ).select_from(g_subq).order_by(_map_sort(sort_by, sort_order, columns))
+        q = (
+            db.query(
+                g_subq.c.group_id,
+                g_subq.c.product_title,
+                g_subq.c.variant_title,
+                g_subq.c.sku,
+                g_subq.c.barcode,
+                g_subq.c.primary_image_url,
+                g_subq.c.primary_store,
+                g_subq.c.on_hand,
+                g_subq.c.available,
+                g_subq.c.max_cost,
+                g_subq.c.max_price,
+                (g_subq.c.on_hand * g_subq.c.max_cost).label("inventory_value"),
+                (g_subq.c.on_hand * g_subq.c.max_price).label("retail_value"),
+            )
+            .select_from(g_subq)
+            .order_by(_map_sort(sort_by, sort_order, columns))
+        )
 
         if skip:
             q = q.offset(skip)
@@ -300,21 +335,23 @@ def get_inventory_report(
 
         for rec in q.all():
             committed = int((rec.on_hand or 0) - (rec.available or 0))
-            rows.append({
-                "group_id": rec.group_id,
-                "primary_title": rec.product_title,
-                "primary_image_url": rec.primary_image_url,
-                "primary_store": rec.primary_store,
-                "sku": rec.sku,
-                "barcode": rec.barcode,
-                "on_hand": int(rec.on_hand or 0),
-                "available": int(rec.available or 0),
-                "committed": committed,
-                "max_cost": float(rec.max_cost or 0.0),
-                "max_price": float(rec.max_price or 0.0),
-                "inventory_value": float(rec.inventory_value or 0.0),
-                "retail_value": float(rec.retail_value or 0.0),
-            })
+            rows.append(
+                {
+                    "group_id": rec.group_id,
+                    "primary_title": rec.product_title,
+                    "primary_image_url": rec.primary_image_url,
+                    "primary_store": rec.primary_store,
+                    "sku": rec.sku,
+                    "barcode": rec.barcode,
+                    "on_hand": int(rec.on_hand or 0),
+                    "available": int(rec.available or 0),
+                    "committed": committed,
+                    "max_cost": float(rec.max_cost or 0.0),
+                    "max_price": float(rec.max_price or 0.0),
+                    "inventory_value": float(rec.inventory_value or 0.0),
+                    "retail_value": float(rec.retail_value or 0.0),
+                }
+            )
 
     else:
         v_subq = _build_variant_aggregate_query(db, filters).subquery()
@@ -337,24 +374,30 @@ def get_inventory_report(
         }
 
         # count variants
-        total_count = db.query(func.count(literal(1))).select_from(v_subq).scalar() or 0
+        total_count = (
+            db.query(func.count(literal(1))).select_from(v_subq).scalar() or 0
+        )
 
-        q = db.query(
-            v_subq.c.variant_id,
-            v_subq.c.group_id,
-            v_subq.c.product_title,
-            v_subq.c.variant_title,
-            v_subq.c.sku,
-            v_subq.c.barcode,
-            v_subq.c.image_url,
-            v_subq.c.store_name,
-            v_subq.c.on_hand,
-            v_subq.c.available,
-            v_subq.c.cost_per_item,
-            v_subq.c.price,
-            (v_subq.c.on_hand * v_subq.c.cost_per_item).label("inventory_value"),
-            (v_subq.c.on_hand * v_subq.c.price).label("retail_value"),
-        ).select_from(v_subq).order_by(_map_sort(sort_by, sort_order, columns))
+        q = (
+            db.query(
+                v_subq.c.variant_id,
+                v_subq.c.group_id,
+                v_subq.c.product_title,
+                v_subq.c.variant_title,
+                v_subq.c.sku,
+                v_subq.c.barcode,
+                v_subq.c.image_url,
+                v_subq.c.store_name,
+                v_subq.c.on_hand,
+                v_subq.c.available,
+                v_subq.c.cost_per_item,
+                v_subq.c.price,
+                (v_subq.c.on_hand * v_subq.c.cost_per_item).label("inventory_value"),
+                (v_subq.c.on_hand * v_subq.c.price).label("retail_value"),
+            )
+            .select_from(v_subq)
+            .order_by(_map_sort(sort_by, sort_order, columns))
+        )
 
         if skip:
             q = q.offset(skip)
@@ -363,23 +406,25 @@ def get_inventory_report(
 
         for rec in q.all():
             committed = int((rec.on_hand or 0) - (rec.available or 0))
-            rows.append({
-                "variant_id": int(rec.variant_id),
-                "group_id": rec.group_id,
-                "product_title": rec.product_title,
-                "variant_title": rec.variant_title,
-                "sku": rec.sku,
-                "barcode": rec.barcode,
-                "image_url": rec.image_url,
-                "store_name": rec.store_name,
-                "on_hand": int(rec.on_hand or 0),
-                "available": int(rec.available or 0),
-                "committed": committed,
-                "cost_per_item": float(rec.cost_per_item or 0.0),
-                "cost": float(rec.cost_per_item or 0.0),  # UI alias
-                "price": float(rec.price or 0.0),
-                "inventory_value": float(rec.inventory_value or 0.0),
-                "retail_value": float(rec.retail_value or 0.0),
-            })
+            rows.append(
+                {
+                    "variant_id": int(rec.variant_id),
+                    "group_id": rec.group_id,
+                    "product_title": rec.product_title,
+                    "variant_title": rec.variant_title,
+                    "sku": rec.sku,
+                    "barcode": rec.barcode,
+                    "image_url": rec.image_url,
+                    "store_name": rec.store_name,
+                    "on_hand": int(rec.on_hand or 0),
+                    "available": int(rec.available or 0),
+                    "committed": committed,
+                    "cost_per_item": float(rec.cost_per_item or 0.0),
+                    "cost": float(rec.cost_per_item or 0.0),  # UI alias
+                    "price": float(rec.price or 0.0),
+                    "inventory_value": float(rec.inventory_value or 0.0),
+                    "retail_value": float(rec.retail_value or 0.0),
+                }
+            )
 
     return rows, totals, int(total_count)

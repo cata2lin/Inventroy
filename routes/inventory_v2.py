@@ -4,8 +4,9 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import or_, literal  # used in details fallback
 
-# Prefer the unified session helper if you have both session.py and database.py
+# Prefer the unified session helper if both exist
 try:
     from session import get_db  # type: ignore
 except Exception:
@@ -14,7 +15,7 @@ except Exception:
 import models
 from crud import inventory_report as crud_inventory_report
 
-# We'll try to reuse any existing "details"/"filters" helpers if present.
+# Reuse legacy helpers if present
 try:
     from crud import inventory_v2 as crud_inventory_v2  # type: ignore
 except Exception:  # pragma: no cover
@@ -33,7 +34,6 @@ def get_filters(
     Returns filter data for the Inventory Report UI.
     If a legacy helper exists in crud.inventory_v2, reuse it; otherwise compute here.
     """
-    # Delegate to existing helper if available (keeps compatibility with your UI)
     if crud_inventory_v2 and hasattr(crud_inventory_v2, "get_filters"):
         return crud_inventory_v2.get_filters(db)  # type: ignore
 
@@ -43,7 +43,6 @@ def get_filters(
         for s in db.query(models.Store).order_by(models.Store.name.asc()).all()
     ]
 
-    # product types & statuses, taken from existing data (distinct)
     product_types = [
         r[0]
         for r in db.query(models.Product.product_type)
@@ -77,12 +76,12 @@ def get_report(
     limit: int = Query(50, ge=0, le=500),
     sort_by: str = Query("on_hand"),
     sort_order: str = Query("desc"),
-    view: str = Query("individual", regex="^(individual|grouped)$"),
+    view: str = Query("individual"),
     search: Optional[str] = Query(None),
     stores: Optional[str] = Query(
         None, description="Comma-separated store ids: e.g., '1,2,3'"
     ),
-    totals_mode: str = Query("grouped", regex="^(grouped)$"),
+    totals_mode: str = Query("grouped"),
 ):
     """
     Inventory report data source for the Inventory Report UI.
@@ -92,6 +91,14 @@ def get_report(
     - totals ALWAYS come from grouped-deduped logic so we don't triple-count
       products that exist in multiple stores.
     """
+    # Simple validation for view/totals_mode to avoid pattern/regex differences
+    v = (view or "").lower()
+    if v not in ("individual", "grouped"):
+        raise HTTPException(status_code=400, detail="view must be 'individual' or 'grouped'")
+
+    if (totals_mode or "").lower() != "grouped":
+        raise HTTPException(status_code=400, detail="totals_mode must be 'grouped'")
+
     store_list: Optional[List[int]] = None
     if stores:
         tmp: List[int] = []
@@ -111,10 +118,10 @@ def get_report(
         limit=limit,
         sort_by=sort_by,
         sort_order=sort_order,
-        view=view,
+        view=v,
         search=search,
         store_ids=store_list,
-        totals_mode=totals_mode,
+        totals_mode="grouped",
     )
 
     # Shape response exactly as the frontend expects
@@ -140,12 +147,9 @@ def get_details(
     if not barcode:
         raise HTTPException(status_code=400, detail="barcode is required")
 
-    # If your project already provides a rich details helper, reuse it.
     if crud_inventory_v2 and hasattr(crud_inventory_v2, "get_inventory_details"):
-        # Expected to return recent orders, committed, movements, etc.
         return crud_inventory_v2.get_inventory_details(db, barcode=barcode)  # type: ignore
 
-    # Minimal fallback: basic group context + member variants
     Variant = models.ProductVariant
     GM = models.GroupMembership
     Product = models.Product
@@ -184,7 +188,7 @@ def get_details(
             or_(
                 Variant.barcode == barcode,
                 Variant.barcode_normalized == barcode,
-                GM.group_id == group_id if group_id is not None else literal(False),
+                (GM.group_id == group_id) if group_id is not None else literal(False),
             )
         )
         .all()
@@ -207,6 +211,4 @@ def get_details(
         "barcode": barcode,
         "group_id": group_id,
         "members": members,
-        # The richer payload (recent orders, stock movements, committed by store)
-        # can still be returned if your crud.inventory_v2 helper is present.
     }
