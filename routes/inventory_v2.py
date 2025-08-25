@@ -179,10 +179,9 @@ def get_product_details(
 
     Variant = models.ProductVariant
     GM = models.GroupMembership
-    Product = models.Product
-    Store = models.Store
     Order = models.Order
     LineItem = models.LineItem
+    Store = models.Store
     StockMovement = getattr(models, "StockMovement", None)
 
     # Grouping key (same as report)
@@ -315,13 +314,6 @@ def product_analytics(
     """
     Compute analytics for a product group identified by the same group key used in the report:
       GroupMembership.group_id -> Variant.barcode_normalized -> Variant.barcode
-
-    Returns:
-      - header: primary title/image, member variants (per store)
-      - inventory_snapshot: on_hand/available deduped across stores (min of per-store sums)
-      - sales_by_day: [{day, units, orders}]
-      - stock_movements_by_day: [{day, change}]
-      - metrics: velocities, averages, days of cover, life on shelf, etc.
     """
     if not group_key:
         raise HTTPException(status_code=400, detail="group_key is required")
@@ -399,19 +391,14 @@ def product_analytics(
             "header": {"group_key": group_key, "members": []},
             "inventory_snapshot": {"on_hand": 0, "available": 0, "committed": 0},
             "sales_by_day": [],
+            "sales_by_month": [],
             "stock_movements_by_day": [],
             "metrics": {},
         }
         return payload
 
     # Choose primary
-    primary = None
-    for m in members:
-        if m.is_primary:
-            primary = m
-            break
-    if not primary:
-        primary = members[0]
+    primary = next((m for m in members if m.is_primary), members[0])
 
     variant_ids = [int(m.variant_id) for m in members]
     skus = [m.sku for m in members if m.sku]
@@ -525,8 +512,7 @@ def product_analytics(
         {"dow": int(r.dow), "avg_units": float(r.units or 0) / float(total_weeks)} for r in wday_q
     ]
 
-    # Life on shelf (first seen)
-    # Prefer earliest product.created_at; fallback to earliest order; fallback to earliest inventory update.
+    # Life on shelf
     first_product_date = (
         db.query(func.min(Product.created_at))
         .join(Variant, Variant.product_id == Product.id)
@@ -577,8 +563,8 @@ def product_analytics(
     payload = {
         "header": {
             "group_key": group_key,
-            "title": primary.product_title,
-            "image_url": primary.image_url,
+            "title": getattr(primary, "product_title", None),
+            "image_url": getattr(primary, "image_url", None),
             "members": [
                 {
                     "variant_id": int(m.variant_id),
@@ -611,6 +597,7 @@ def product_analytics(
             "first_seen": first_seen.isoformat() if first_seen else None,
             "start": start_d.isoformat(),
             "end": end_d.isoformat(),
+            "avg_by_weekday": avg_by_weekday,
         },
     }
     return payload
