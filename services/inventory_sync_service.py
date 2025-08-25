@@ -48,13 +48,6 @@ def _is_recent_echo(db: Session, variant_id: int, current_available: int, window
     )
     return bool(row and int(row.target_available) == int(current_available))
 
-def _ensure_no_open_tx(db: Session):
-    try:
-        if db.in_transaction():
-            db.commit()
-    except Exception:
-        db.rollback()
-
 def _pick_best_location(level_rows: List[dict]) -> Optional[int]:
     """
     Choose a good sync location when a store has multiple.
@@ -73,6 +66,10 @@ def _pick_best_location(level_rows: List[dict]) -> Optional[int]:
     return best
 
 def _autolearn_store_location(db: Session, store: models.Store, inventory_item_id: int) -> Optional[int]:
+    """
+    Auto-detect a store's sync location. IMPORTANT: does NOT commit.
+    Caller decides when to commit.
+    """
     svc = ShopifyService(store_url=store.shopify_url, token=store.api_token)
     rows = svc.get_inventory_levels_for_items([inventory_item_id]) or []
     if not rows:
@@ -81,18 +78,9 @@ def _autolearn_store_location(db: Session, store: models.Store, inventory_item_i
     locs = {}
     for r in rows:
         locs[int(r["location_id"])] = r
-    chosen = None
-    if len(locs) == 1:
-        chosen = next(iter(locs.keys()))
-    else:
-        chosen = _pick_best_location(list(locs.values()))
+    chosen = next(iter(locs.keys())) if len(locs) == 1 else _pick_best_location(list(locs.values()))
     if chosen:
         store.sync_location_id = int(chosen)
-        try:
-            db.commit()
-            print(f"[init] auto-learned sync_location_id={chosen} for store '{store.name}'")
-        except Exception:
-            db.rollback()
     return store.sync_location_id
 
 def _refresh_member_snapshot(
@@ -102,6 +90,9 @@ def _refresh_member_snapshot(
     inventory_item_id: int,
     location_id: int,
 ) -> Optional[models.InventoryLevel]:
+    """
+    Read live from Shopify and upsert InventoryLevel row. IMPORTANT: does NOT commit.
+    """
     svc = ShopifyService(store_url=store_url, token=token)
     rows = svc.get_inventory_levels_for_items([inventory_item_id]) or []
     lvl = next(
@@ -138,11 +129,15 @@ def _refresh_member_snapshot(
     return snap
 
 def _get_fresh_snap(db: Session, member: models.ProductVariant) -> Optional[models.InventoryLevel]:
+    """
+    Ensure we have a reasonably fresh snapshot for member at its store's sync_location.
+    IMPORTANT: never commits — caller commits after the plan.
+    """
     m_store = member.product.store
     if not m_store.enabled:
         return None
 
-    # NEW: auto-learn per-store sync location if missing
+    # Auto-learn per-store sync location if missing (no commit here)
     if not m_store.sync_location_id:
         _autolearn_store_location(db, m_store, member.inventory_item_id)
         if not m_store.sync_location_id:
@@ -163,11 +158,6 @@ def _get_fresh_snap(db: Session, member: models.ProductVariant) -> Optional[mode
             inventory_item_id=member.inventory_item_id,
             location_id=m_store.sync_location_id,
         )
-        if snap_live:
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
         return snap_live or m_snap
     return m_snap
 
@@ -196,7 +186,7 @@ def process_inventory_update_event(
         owns_session = True
 
     try:
-        # Idempotency
+        # Idempotency record (commit outside of any group lock)
         if db.query(models.DeliveredEvent).filter_by(shop_domain=shop_domain, event_id=event_id).first():
             print(f"[idempotent] {event_id} already processed")
             return
@@ -223,14 +213,12 @@ def process_inventory_update_event(
             print(f"[skip] store disabled: {store.name}")
             return
 
-        # Origin store: ensure sync location if missing, but process ANY location event.
+        # Ensure store has a sync location quickly (commit OK here; not under lock yet)
         if not store.sync_location_id:
             store.sync_location_id = int(location_id)
             db.commit()
             print(f"[init] store '{store.name}' sync_location_id set to {store.sync_location_id}")
         else:
-            # If event came from a different location, we still process it as a source of truth
-            # for this item. We'll compute delta against that location's last snapshot and fan it out.
             if int(location_id) != int(store.sync_location_id):
                 print(f"[info] event at non-sync location (event={location_id}, sync={store.sync_location_id}); processing anyway")
 
@@ -242,7 +230,7 @@ def process_inventory_update_event(
             print("[skip] group is conflicted")
             return
 
-        # Live truth at origin
+        # Live truth at origin location (where webhook fired)
         svc_origin = ShopifyService(store_url=store.shopify_url, token=store.api_token)
         origin_rows = svc_origin.get_inventory_levels_for_items([inventory_item_id]) or []
         origin_lvl = next(
@@ -252,7 +240,7 @@ def process_inventory_update_event(
             None,
         )
         if not origin_lvl:
-            print("[abort] live inventory at sync location not found")
+            print("[abort] live inventory at event location not found")
             return
 
         current_available = int(origin_lvl.get("available", 0))
@@ -263,15 +251,13 @@ def process_inventory_update_event(
             print("[echo] drop")
             return
 
-        # Lock and plan writes
         planned_writes: List[Tuple[models.ProductVariant, int, int, bool]] = []
         first_bootstrap = group.last_reconciled_at is None
+        stores_changed_sync_loc: List[models.Store] = []
 
-        _ensure_no_open_tx(db)
-        tx = db.begin()
-        try:
+        # -------- LOCKED SECTION (no db.commit inside) --------
+        with db.begin():  # opens a transaction; closes on exit
             if not _acquire_lock(db, group.id):
-                tx.rollback()
                 print(f"[lock-miss] group={group.id}")
                 return
 
@@ -288,7 +274,7 @@ def process_inventory_update_event(
             last_available = int(snap_origin.available) if snap_origin and snap_origin.available is not None else 0
             delta_at_origin = current_available - last_available
 
-            # Update/insert origin snapshot (both available and on_hand)
+            # Update/insert origin snapshot (no commit here)
             now = _utcnow()
             if snap_origin:
                 snap_origin.available = current_available
@@ -305,7 +291,7 @@ def process_inventory_update_event(
                     )
                 )
 
-            # Load members and ensure fresh snapshots (auto-learn where needed)
+            # Load group members (will use snapshots and/or live reads; no commits here)
             members = (
                 db.query(models.ProductVariant)
                 .options(
@@ -323,12 +309,13 @@ def process_inventory_update_event(
                 if not m_store.enabled:
                     continue
                 if not m_store.sync_location_id:
-                    _autolearn_store_location(db, m_store, member.inventory_item_id)
+                    if _autolearn_store_location(db, m_store, member.inventory_item_id):
+                        stores_changed_sync_loc.append(m_store)
                     if not m_store.sync_location_id:
                         continue
                 if getattr(member, "tracked", True) is False:
                     continue
-                m_snap = _get_fresh_snap(db, member)
+                m_snap = _get_fresh_snap(db, member)  # never commits
                 if m_snap:
                     fresh_snaps.append(m_snap)
 
@@ -368,13 +355,16 @@ def process_inventory_update_event(
 
                 if m_current_av != target:
                     planned_writes.append((member, target, m_current_av, bypass_on_hand))
+        # -------- END LOCKED SECTION --------
 
-            tx.commit()
-        except Exception:
-            tx.rollback()
-            raise
+        # Persist any auto-learned sync_location_id updates (safe to commit now)
+        if stores_changed_sync_loc:
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
 
-        # Apply planned writes outside the lock to reduce contention
+        # Apply planned writes (each write logged; refresh live snapshot; commit between steps)
         for member, target, current, _bypass_on_hand in planned_writes:
             m_store = member.product.store
             try:
@@ -399,12 +389,8 @@ def process_inventory_update_event(
                         written_at=_utcnow(),
                     )
                 )
-                try:
-                    db.commit()
-                except Exception:
-                    db.rollback()
 
-                # NEW: refresh live values and persist both available and on_hand
+                # Refresh live values and persist both available and on_hand (no nested tx)
                 snap_live = _refresh_member_snapshot(
                     db,
                     store_url=m_store.shopify_url,
@@ -412,11 +398,11 @@ def process_inventory_update_event(
                     inventory_item_id=member.inventory_item_id,
                     location_id=m_store.sync_location_id,
                 )
-                if snap_live:
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
+
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
 
             except Exception as e:
                 print(f"[write-fail] store={m_store.name} variant={member.id} target={target}: {e}")

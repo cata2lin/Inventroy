@@ -1,119 +1,71 @@
 # services/product_sync_runner.py
-from typing import Any, Dict, List, Optional
-import uuid
-import inspect
+from __future__ import annotations
+
+from typing import Optional
 import traceback
 
 from sqlalchemy.orm import Session
 
-# The Shopify client lives at project root
-from shopify_service import ShopifyService
+try:
+    from session import SessionLocal
+except Exception:
+    from database import SessionLocal  # type: ignore
 
-# Tiny in-memory tracker (services/sync_tracker.py)
-from services import sync_tracker
-
-# CRUD module we call into
+from crud import store as crud_store
 from crud import product as crud_product
-
-
-def _call_crud_upsert(db: Session, store_id: int, page: List[Any]) -> None:
-    """
-    Be tolerant to different CRUD signatures:
-      - create_or_update_products(db, store_id, page)
-      - create_or_update_products(db=db, store_id=..., page=page)
-      - create_or_update_products(db=db, store_id=..., products=page)
-      - alternative names: upsert_products / create_or_update_products_batch / bulk_upsert_products
-    """
-    fn = None
-    for name in (
-        "create_or_update_products",
-        "create_or_update_products_batch",
-        "upsert_products",
-        "bulk_upsert_products",
-    ):
-        maybe = getattr(crud_product, name, None)
-        if callable(maybe):
-            fn = maybe
-            break
-    if fn is None:
-        raise RuntimeError("crud.product has no suitable upsert function (tried several names).")
-
-    # Try positional first (avoids keyword mismatches)
-    try:
-        fn(db, store_id, page)  # type: ignore[misc]
-        return
-    except TypeError:
-        pass
-
-    # Common keyword sets
-    try:
-        fn(db=db, store_id=store_id, page=page)  # type: ignore[misc]
-        return
-    except TypeError:
-        pass
-
-    try:
-        fn(db=db, store_id=store_id, products=page)  # type: ignore[misc]
-        return
-    except TypeError:
-        pass
-
-    # Last resort: introspect and map
-    sig = inspect.signature(fn)
-    kwargs: Dict[str, Any] = {}
-    for p in sig.parameters.values():
-        if p.name in ("db", "session"):
-            kwargs[p.name] = db
-        elif p.name in ("store_id", "storeid", "sid"):
-            kwargs[p.name] = store_id
-        elif p.name in ("page", "products", "items", "records", "batch"):
-            kwargs[p.name] = page
-    fn(**kwargs)  # type: ignore[misc]
+from services import sync_tracker
+from shopify_service import ShopifyService
 
 
 def run_product_sync_for_store(
-    db_factory,
-    store_id: int,
-    shop_url: str,
-    api_token: str,
+    db_factory=SessionLocal,
+    store_id: int = 0,
+    shop_url: Optional[str] = None,     # legacy compatibility
+    api_token: Optional[str] = None,    # legacy compatibility
     task_id: Optional[str] = None,
 ):
     """
-    Background job: pull all products+variants and upsert into DB.
+    Background task that syncs all products & variants for ONE store.
 
-    IMPORTANT: We pass 'page' through untouched so CRUD receives exactly
-    what ShopifyService yields (dicts with {'product', 'variants'} whose values
-    are your Pydantic models). CRUD handles shapes and aliases robustly.
+    Accepts both signatures:
+      NEW:    (db_factory, store_id, task_id)
+      LEGACY: (db_factory, store_id, shop_url, api_token, task_id)
+
+    If shop_url/api_token are missing, they’re looked up via store_id.
     """
-    if not task_id:
-        task_id = str(uuid.uuid4())
-
-    print(f"Starting product data fetch from https://{shop_url}/admin/api/2025-04/graphql.json...")
-
     db: Session = db_factory()
     processed = 0
     try:
-        svc = ShopifyService(store_url=shop_url, token=api_token)
+        store = crud_store.get_store(db, store_id)
+        if not store:
+            raise RuntimeError(f"Store id {store_id} not found")
 
+        shop = shop_url or store.shopify_url
+        token = api_token or store.api_token
+        if not shop or not token:
+            raise RuntimeError(f"Missing credentials for store id {store_id}")
+
+        if task_id:
+            sync_tracker.step(task_id, 0, note=f"Fetching products from {shop}...")
+
+        svc = ShopifyService(store_url=shop, token=token)
+
+        # Expect generator of product “pages” (lists of dicts or model-like objects)
         for page in svc.get_all_products_and_variants():
-            # DO NOT normalize to dicts — CRUD now supports both dict & Pydantic shapes
-            try:
-                _call_crud_upsert(db, store_id, page)
-                db.commit()
-            except Exception:
-                db.rollback()
-                raise
+            if not page:
+                continue
+            crud_product.create_or_update_products(db, store_id=store_id, items=page)
+            db.commit()
+            processed += len(page)
+            if task_id:
+                sync_tracker.step(task_id, processed, note=f"Upserted {processed} products so far")
 
-            processed += len(page or [])
-            sync_tracker.step(task_id, processed, note=f"Upserted {processed} items so far")
-
-        sync_tracker.finish_task(task_id, ok=True, note=f"Completed. Total items: {processed}")
+        if task_id:
+            sync_tracker.finish_task(task_id, ok=True, note=f"Completed. Total: {processed}")
 
     except Exception as e:
-        sync_tracker.finish_task(task_id, ok=False, note=f"Failed after {processed}. {e}")
-        print(
-            f"CRITICAL BACKGROUND ERROR in task {task_id}: {e}\n"
-            f"{traceback.format_exc()}"
-        )
+        if task_id:
+            sync_tracker.finish_task(task_id, ok=False, note=f"Failed after {processed}. {e}")
+        print(f"[product-sync][store={store_id}] ERROR: {e}\n{traceback.format_exc()}")
     finally:
         db.close()

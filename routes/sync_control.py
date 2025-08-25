@@ -1,120 +1,178 @@
 # routes/sync_control.py
+from __future__ import annotations
 
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Body
+from typing import Optional, Dict, Any, List
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Body, Query
 from sqlalchemy.orm import Session
 
-from database import get_db, SessionLocal
+# DB session helpers
+try:
+    from session import get_db, SessionLocal  # preferred, if present
+except Exception:
+    from database import get_db, SessionLocal  # fallback
 
 from crud import store as crud_store
-from services import product_sync_runner
-from services import order_sync_runner
+from services import product_sync_runner, order_sync_runner, sync_tracker
 
 router = APIRouter(prefix="/api/sync-control", tags=["Sync Control"])
 
 
+# ---------- Status (polled by UI) ----------
+@router.get("/status")
+def get_all_task_status() -> Dict[str, Any]:
+    """
+    Returns a list of all ongoing/recent tasks for the UI to render progress bars.
+    """
+    # Optionally prune very old finished tasks
+    try:
+        sync_tracker.clear_finished(older_than_seconds=3600)
+    except Exception:
+        pass
+    return {"tasks": sync_tracker.list_tasks()}
+
+
+@router.get("/tasks/{task_id}")
+def get_task_status(task_id: str) -> Dict[str, Any]:
+    task = sync_tracker.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+# ---------- Products sync ----------
 @router.post("/products")
-def trigger_product_sync(
+def trigger_products_sync(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
+    # Accept both body or query for compatibility
+    payload: Dict[str, Any] = Body(default={}),
+    store_id: Optional[int] = Query(None, description="If provided, sync only this store"),
 ) -> Dict[str, Any]:
-    stores = crud_store.get_all_stores(db)
-    if not stores:
-        raise HTTPException(status_code=404, detail="No stores configured.")
-    for s in stores:
+    """
+    Trigger products sync:
+      - If 'store_id' provided (query or JSON), sync that single store.
+      - Else, sync ALL enabled stores.
+    """
+    sid = payload.get("store_id") if isinstance(payload, dict) else None
+    if store_id is None and isinstance(sid, int):
+        store_id = sid
+
+    tasks: List[Dict[str, Any]] = []
+
+    if store_id is not None:
+        store = crud_store.get_store(db, int(store_id))
+        if not store or not store.enabled:
+            raise HTTPException(status_code=404, detail="Store not found or disabled")
+        task_id = sync_tracker.add_task(f"Products sync for {store.name}")
+        # Runner supports both legacy/new signatures:
         background_tasks.add_task(
             product_sync_runner.run_product_sync_for_store,
-            db_factory=SessionLocal,
-            store_id=s.id,
+            SessionLocal,
+            store.id,
+            store.shopify_url,
+            store.api_token,
+            task_id,
         )
-    return {"status": "ok", "message": "Product sync kicked off for all stores."}
+        tasks.append({"store_id": store.id, "store": store.name, "task_id": task_id})
+        return {"status": "ok", "message": f"Product sync started for {store.name}.", "tasks": tasks}
+
+    # All enabled stores
+    stores = crud_store.get_enabled_stores(db)
+    if not stores:
+        raise HTTPException(status_code=404, detail="No enabled stores configured.")
+
+    for s in stores:
+        task_id = sync_tracker.add_task(f"Products sync for {s.name}")
+        background_tasks.add_task(
+            product_sync_runner.run_product_sync_for_store,
+            SessionLocal,
+            s.id,
+            s.shopify_url,
+            s.api_token,
+            task_id,
+        )
+        tasks.append({"store_id": s.id, "store": s.name, "task_id": task_id})
+
+    return {"status": "ok", "message": "Product sync kicked off for all stores.", "tasks": tasks}
 
 
-@router.post("/products/{store_id}")
-def trigger_product_sync_for_store(
-    store_id: int,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-) -> Dict[str, Any]:
-    store = crud_store.get_store(db, store_id)
-    if not store:
-        raise HTTPException(status_code=404, detail="Store not found.")
-    background_tasks.add_task(
-        product_sync_runner.run_product_sync_for_store,
-        db_factory=SessionLocal,
-        store_id=store.id,
-    )
-    return {"status": "ok", "message": f"Product sync kicked off for store {store.name}."}
-
-
-# ---------------- Orders ----------------
-
+# ---------- Orders sync ----------
 @router.post("/orders")
-def trigger_orders_sync_all(
+def trigger_orders_sync(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-) -> Dict[str, Any]:
-    stores = crud_store.get_all_stores(db)
-    if not stores:
-        raise HTTPException(status_code=404, detail="No stores configured.")
-    for s in stores:
-        background_tasks.add_task(
-            order_sync_runner.run_orders_sync_for_store,
-            db_factory=SessionLocal,
-            store_id=s.id,
-            created_at_min=None,
-            created_at_max=None,
-        )
-    return {"status": "ok", "message": "Order sync kicked off for all stores."}
-
-
-@router.post("/orders/{store_id}")
-def trigger_orders_sync_for_store(
-    store_id: int,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-) -> Dict[str, Any]:
-    store = crud_store.get_store(db, store_id)
-    if not store:
-        raise HTTPException(status_code=404, detail="Store not found.")
-    background_tasks.add_task(
-        order_sync_runner.run_orders_sync_for_store,
-        db_factory=SessionLocal,
-        store_id=store.id,
-        created_at_min=None,
-        created_at_max=None,
-    )
-    return {"status": "ok", "message": f"Order sync kicked off for store {store.name}."}
-
-
-@router.post("/orders/range")
-def trigger_orders_sync_range(
-    payload: Dict[str, Optional[str]] = Body(
-        ...,
-        example={"start": "2025-08-01T00:00:00Z", "end": "2025-08-22T23:59:59Z"},
-    ),
-    background_tasks: BackgroundTasks = ...,
-    db: Session = Depends(get_db),
+    payload: Dict[str, Any] = Body(default={}),
+    # Accept query too (compat)
+    store_id: Optional[int] = Query(None, description="If provided, sync only this store"),
+    start: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    end: Optional[str] = Query(None, description="YYYY-MM-DD"),
 ) -> Dict[str, Any]:
     """
-    Kick off order sync for all stores in a date window.
-    Provide ISO8601 timestamps (UTC recommended) in 'start' and/or 'end'.
+    Trigger orders sync:
+      - If 'store_id' provided (query or JSON), sync that single store.
+      - Optional date window via ('start'/'end') or ('start_date'/'end_date') in JSON.
+      - Else, sync ALL enabled stores.
     """
-    start = payload.get("start")
-    end = payload.get("end")
-    if not start and not end:
-        raise HTTPException(status_code=400, detail="Provide at least one of 'start' or 'end'.")
+    # Resolve inputs (support multiple naming variants used by the UI)
+    sid_body = payload.get("store_id") if isinstance(payload, dict) else None
+    if store_id is None and isinstance(sid_body, int):
+        store_id = sid_body
 
-    stores = crud_store.get_all_stores(db)
-    if not stores:
-        raise HTTPException(status_code=404, detail="No stores configured.")
+    start_body = None
+    end_body = None
+    if isinstance(payload, dict):
+        start_body = payload.get("start") or payload.get("start_date")
+        end_body = payload.get("end") or payload.get("end_date")
 
-    for s in stores:
+    start = start or start_body
+    end = end or end_body
+
+    tasks: List[Dict[str, Any]] = []
+
+    if store_id is not None:
+        store = crud_store.get_store(db, int(store_id))
+        if not store or not store.enabled:
+            raise HTTPException(status_code=404, detail="Store not found or disabled")
+
+        task_id = sync_tracker.add_task(f"Orders sync for {store.name}")
         background_tasks.add_task(
             order_sync_runner.run_orders_sync_for_store,
-            db_factory=SessionLocal,
-            store_id=s.id,
-            created_at_min=start,
-            created_at_max=end,
+            SessionLocal,
+            store.id,
+            start,
+            end,
+            task_id,
         )
-    return {"status": "ok", "message": "Order sync (range) kicked off for all stores.", "start": start, "end": end}
+        tasks.append({"store_id": store.id, "store": store.name, "task_id": task_id})
+        return {
+            "status": "ok",
+            "message": f"Order sync started for {store.name}.",
+            "start": start,
+            "end": end,
+            "tasks": tasks,
+        }
+
+    # All enabled stores
+    stores = crud_store.get_enabled_stores(db)
+    if not stores:
+        raise HTTPException(status_code=404, detail="No enabled stores configured.")
+
+    for s in stores:
+        task_id = sync_tracker.add_task(f"Orders sync for {s.name}")
+        background_tasks.add_task(
+            order_sync_runner.run_orders_sync_for_store,
+            SessionLocal,
+            s.id,
+            start,
+            end,
+            task_id,
+        )
+        tasks.append({"store_id": s.id, "store": s.name, "task_id": task_id})
+
+    return {
+        "status": "ok",
+        "message": "Order sync kicked off for all stores.",
+        "start": start,
+        "end": end,
+        "tasks": tasks,
+    }
