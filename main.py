@@ -14,43 +14,41 @@ sys.path.append(str(ROOT_DIR))
 
 from database import engine, Base
 from routes import (
-    orders, 
-    dashboard_v2, 
-    inventory_v2,
-    mutations, 
-    products, 
-    sync_control,
+    dashboard,
+    dashboard_v2,
+    orders,
+    products,
+    inventory,       # legacy endpoints
+    inventory_v2,    # new endpoints
     bulk_update,
+    webhooks,
+    sync_control,
     config,
-    webhooks # --- ADDED: Import the webhooks router ---
 )
 
-Base.metadata.create_all(bind=engine)
 load_dotenv()
 
-app = FastAPI(
-    title="Inventory Intelligence Platform",
-    description="A central hub for managing inventory and orders from multiple Shopify stores.",
-    version="1.0.0"
-)
+app = FastAPI(title="Inventory Suite")
+app.mount("/static", StaticFiles(directory=str(ROOT_DIR / "static")), name="static")
 
-# Mount static files (CSS, JS)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-# Point to the new templates directory
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory=str(ROOT_DIR / "templates"))
 
-# Include all API routers
-app.include_router(orders.router, prefix="/api")
+# Create tables if needed
+Base.metadata.create_all(bind=engine)
+
+# Routers
+app.include_router(dashboard.router)
 app.include_router(dashboard_v2.router)
-app.include_router(inventory_v2.router)
-app.include_router(mutations.router)
-app.include_router(products.router, prefix="/api")
-app.include_router(sync_control.router)
+app.include_router(orders.router)
+app.include_router(products.router)
+app.include_router(inventory.router)
+app.include_router(inventory_v2.router)  # v2 inventory + analytics
 app.include_router(bulk_update.router)
+app.include_router(sync_control.router)
 app.include_router(config.router)
-app.include_router(webhooks.router) # --- ADDED: Include the webhooks router ---
+app.include_router(webhooks.router)
 
-# --- HTML Page Routes ---
+# ---------- HTML Page Routes ----------
 @app.get("/", response_class=RedirectResponse, include_in_schema=False)
 async def read_root():
     return RedirectResponse(url="/dashboard-v2")
@@ -78,3 +76,12 @@ async def get_sync_control_page(request: Request):
 @app.get("/config", response_class=HTMLResponse, include_in_schema=False)
 async def get_config_page(request: Request):
     return templates.TemplateResponse("config.html", {"request": request, "title": "Configuration"})
+
+# NEW: Dedicated Product Details page
+@app.get("/inventory/product/{group_key}", response_class=HTMLResponse, include_in_schema=False)
+async def get_product_details_page(request: Request, group_key: str):
+    # Just pass group_key; JS will fetch analytics data
+    return templates.TemplateResponse(
+        "product_details.html",
+        {"request": request, "title": f"Product {group_key}", "group_key": group_key},
+    )
