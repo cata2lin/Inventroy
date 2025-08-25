@@ -24,7 +24,7 @@ def get_status_filters(db: Session):
 def _get_filtered_query(db: Session, store_ids, start_date, end_date, financial_status, fulfillment_status, has_note, tags, search):
     """Helper function to build the base filtered query."""
     
-    # --- FIX: Subquery to get the most recent hold reason for an order ---
+    # FIX: Subquery to get the most recent hold reason for an order
     hold_reason_sq = db.query(
         models.Fulfillment.order_id,
         models.Fulfillment.hold_reason
@@ -90,7 +90,6 @@ def get_orders_for_dashboard(
         'total_price': models.Order.total_price, 'financial_status': models.Order.financial_status,
         'fulfillment_status': models.Order.fulfillment_status, 'cancelled': models.Order.cancelled_at,
         'note': models.Order.note, 'tags': models.Order.tags,
-        # ADDED: Allow sorting by hold reason
         'hold_reason': 'hold_reason' 
     }
     sort_column = sort_column_map.get(sort_by, models.Order.created_at)

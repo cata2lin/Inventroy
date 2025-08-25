@@ -12,8 +12,11 @@ import models
 # Prefer package imports; fallback to root-level service files
 try:
     from services.shopify_service import ShopifyService
+    # FIX: Import ProductService for mutations
+    from services.product_service import ProductService
 except Exception:
     from shopify_service import ShopifyService  # type: ignore
+    from product_service import ProductService # type: ignore
 
 # ---------------- config-ish constants ----------------
 ECHO_WINDOW_SECONDS = 60
@@ -365,12 +368,16 @@ def process_inventory_update_event(
                 delta = int(target) - int(current)
                 if delta == 0:
                     continue
-
-                svc = ShopifyService(store_url=m_store.shopify_url, token=m_store.api_token)
-                # Use inventoryAdjustQuantities (delta) targeting the store's sync_location
-                svc.adjust_inventory_quantity(
-                    inventory_item_id=member.inventory_item_id,
-                    location_id=m_store.sync_location_id,
+                
+                # FIX: Use ProductService for mutations
+                ps = ProductService(store_url=m_store.shopify_url, token=m_store.api_token)
+                # FIX: Use GIDs for GraphQL API calls
+                inventory_item_gid = f"gid://shopify/InventoryItem/{member.inventory_item_id}"
+                location_gid = f"gid://shopify/Location/{m_store.sync_location_id}"
+                
+                ps.adjust_inventory_quantity(
+                    inventory_item_id=inventory_item_gid,
+                    location_id=location_gid,
                     available_delta=delta,
                 )
 

@@ -137,6 +137,8 @@ class InventoryItemModel(APIBase):
 class ProductModel(APIBase):
     legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
     title: Optional[str] = None
+    # FIX: Added body_html with alias to handle API response
+    body_html: Optional[str] = Field(None, alias="bodyHtml")
     product_type: Optional[str] = Field(None, alias="productType")
     status: Optional[str] = None
     created_at: Optional[datetime] = Field(None, alias="createdAt")

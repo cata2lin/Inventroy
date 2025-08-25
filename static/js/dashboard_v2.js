@@ -205,7 +205,7 @@ document.addEventListener('DOMContentLoaded', () => {
             page: parseInt(params.get('page') || '1', 10),
             sortBy: params.get('sortBy') || 'created_at',
             sortOrder: params.get('sortOrder') || 'desc',
-            // MODIFIED: Hide the new column by default
+            // FIX: Hide the new hold_reason column by default
             hiddenColumns: params.getAll('hide').length > 0 ? params.getAll('hide') : ['hold_reason'],
             filters: {
                 search: params.get('search') || '',

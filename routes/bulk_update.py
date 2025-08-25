@@ -164,18 +164,18 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                     inventory_changes['available'] = changes.pop('available')
 
                 if product_changes:
-                    service.update_product(variant_db.product.shopify_gid, product_changes)
+                    service.product_update({"id": variant_db.product.shopify_gid, **product_changes})
 
                 for key, value in changes.items():
                     if key == 'cost':
                         variant_changes['inventoryItem'] = {'cost': value}
-                    elif key in ["price", "barcode", "sku"]:
+                    elif key in ["price", "barcode", "sku", "title"]:
                         variant_changes[key] = value
 
                 if len(variant_changes) > 1:
-                    service.update_variant_details(variant_db.product.shopify_gid, variant_changes)
+                    service.variants_bulk_update(variant_db.product.shopify_gid, [variant_changes])
 
-                # MODIFIED: This block now correctly handles both 'available' and 'onHand' inventory changes.
+                # FIX: Handle inventory updates for both onHand and available
                 if inventory_changes and variant_db.inventory_levels:
                     location_gid = f"gid://shopify/Location/{variant_db.inventory_levels[0].location_id}"
                     inventory_item_gid = f"gid://shopify/InventoryItem/{variant_db.inventory_item_id}"
@@ -187,6 +187,7 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                             service.adjust_inventory_quantity(inventory_item_gid, location_gid, delta)
                     
                     if 'onHand' in inventory_changes:
+                        # Shopify does not have a direct `setOnHand` mutation, adjusting `available` has the same effect for this purpose
                         current_on_hand = variant_db.inventory_levels[0].on_hand or 0
                         delta = int(inventory_changes['onHand']) - current_on_hand
                         if delta != 0:
