@@ -11,7 +11,7 @@
     <!-- Top metrics -->
     <section id="metrics-container" class="grid"></section>
 
-    <!-- Controls bar (kept same layout/scale as before) -->
+    <!-- Controls bar -->
     <section class="controls-grid">
       <input type="search" id="search-input" placeholder="Search SKU, Barcode, Name...">
       <select id="store-filter"><option value="">All Stores</option></select>
@@ -25,10 +25,13 @@
       <input type="number" id="min-inv-input" placeholder="Min On Hand" step="1">
       <input type="number" id="max-inv-input" placeholder="Max On Hand" step="1">
 
-      <!-- Group by barcode toggle (styled to avoid overlap) -->
-      <label style="display:inline-flex;align-items:center;gap:.5rem;white-space:nowrap;padding:.25rem .5rem;border:1px solid var(--muted-border-color);border-radius:20px; margin-right:.5rem;">
-        <input type="checkbox" id="group-toggle">
-        <span>Group by barcode</span>
+      <!-- Group by barcode slider with label below (no overlap with Reset) -->
+      <label id="group-toggle-wrap" class="toggle-pill" style="display:inline-flex;flex-direction:column;align-items:center;gap:.25rem;width:fit-content;margin-right:.5rem;">
+        <input type="checkbox" id="group-toggle" style="display:none">
+        <span class="slider" style="position:relative;width:44px;height:24px;border-radius:999px;background:var(--muted-border-color);transition:background .2s;">
+          <span style="position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:var(--card-bg,#fff);box-shadow:0 1px 3px rgba(0,0,0,.2);transition:transform .2s;"></span>
+        </span>
+        <small>Group by barcode</small>
       </label>
 
       <button id="reset-filters" class="secondary outline" type="button" style="margin-left:.25rem;">Reset</button>
@@ -84,6 +87,22 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+  // Slider visual toggle
+  (function(){
+    const wrap = document.getElementById('group-toggle-wrap');
+    const input = document.getElementById('group-toggle');
+    const slider = wrap?.querySelector('.slider');
+    if (!wrap || !input || !slider) return;
+    const knob = slider.firstElementChild;
+    const sync = () => {
+      slider.style.background = input.checked ? 'var(--primary, #0d6efd)' : 'var(--muted-border-color)';
+      if (knob) knob.style.transform = input.checked ? 'translateX(20px)' : 'translateX(0)';
+    };
+    input.addEventListener('change', sync);
+    sync();
+  })();
+</script>
 <script src="/static/js/config.js"></script>
 <script src="/static/js/inventory.js"></script>
 {% endblock %}

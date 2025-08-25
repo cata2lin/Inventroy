@@ -13,7 +13,6 @@ document.addEventListener('DOMContentLoaded', () => {
       maxRetail: document.getElementById('max-retail-input'),
       minInv: document.getElementById('min-inv-input'),
       maxInv: document.getElementById('max-inv-input'),
-      // support either a <select id="view-toggle"> or a <input type="checkbox" id="group-toggle">
       viewSelect: document.getElementById('view-toggle'),
       groupToggle: document.getElementById('group-toggle'),
       reset: document.getElementById('reset-filters'),
@@ -53,7 +52,7 @@ document.addEventListener('DOMContentLoaded', () => {
     pageSize: 50,
     sortBy: (urlParams.get('sortBy') || 'on_hand').toLowerCase(),
     sortOrder: (urlParams.get('sortOrder') || 'desc').toLowerCase(),
-    view: (urlParams.get('view') || (elements.viewSelect?.value || (elements.groupToggle?.checked ? 'grouped' : 'individual')) || 'individual').toLowerCase(),
+    view: (urlParams.get('view') || (elements.groupToggle?.checked ? 'grouped' : 'individual') || 'individual').toLowerCase(),
     search: urlParams.get('search') || '',
     store: urlParams.get('store') || '',
     status: urlParams.get('statuses') || '',
@@ -65,7 +64,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (elements.filters.store) elements.filters.store.value = state.store;
   if (elements.filters.type) elements.filters.type.value = state.type;
   if (elements.filters.status) elements.filters.status.value = state.status;
-  if (elements.filters.viewSelect) elements.filters.viewSelect.value = state.view;
   if (elements.filters.groupToggle) elements.filters.groupToggle.checked = state.view === 'grouped';
   if (elements.groupedSort.by) elements.groupedSort.by.value = state.sortBy;
   if (elements.groupedSort.order) elements.groupedSort.order.value = state.sortOrder;
@@ -95,7 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  // --- Load page ---
+  // --- URL sync ---
   const pushURL = () => {
     const params = new URLSearchParams(window.location.search);
     params.set('page', String(state.page));
@@ -109,6 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
     history.replaceState(null, '', `?${params.toString()}`);
   };
 
+  // --- Load page ---
   const loadPage = async () => {
     pushURL();
     elements.tableContainer.setAttribute('aria-busy', 'true');
@@ -154,7 +153,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="metric"><h4>${(data.total_on_hand || 0).toLocaleString()}</h4><p>Total Products On Hand</p></div>`;
   };
 
-  // Navigate to product details page
+  // Navigate to product details page (on image click only)
   const openDetailsPage = (groupKey) => {
     if (!groupKey) return;
     window.location.href = `/inventory/product/${encodeURIComponent(groupKey)}`;
@@ -247,20 +246,39 @@ document.addEventListener('DOMContentLoaded', () => {
       html += `
         <details class="grouped-item">
           <summary>
-            <div class="grid">
-              <img src="${group.primary_image_url || '/static/img/placeholder.png'}"
-                   alt="${group.primary_title || ''}"
-                   style="cursor:pointer;width:60px;height:60px;border-radius:6px"
-                   onclick="window.__openDetails('${groupKey}')">
-              <div class="product-info">
-                <strong>${group.primary_title || group.product_title || ''}</strong>
-                <small>Group: ${groupKey} &nbsp; • &nbsp; Primary store: ${group.primary_store || ''}</small>
+            <div class="group-summary" style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+              <div class="left" style="display:flex;align-items:center;gap:.75rem;min-width:260px;">
+                <img src="${group.primary_image_url || '/static/img/placeholder.png'}"
+                     alt="${group.primary_title || ''}"
+                     style="cursor:pointer;width:60px;height:60px;border-radius:6px;flex:0 0 auto"
+                     onclick="window.__openDetails('${groupKey}')">
+                <div class="product-info" style="min-width:160px;">
+                  <strong>${group.primary_title || group.product_title || ''}</strong><br>
+                  <small>Group: ${groupKey} • ${group.primary_store || ''}</small>
+                </div>
               </div>
-              <div class="quantity-display"><h2>${available}</h2><p>Available</p></div>
-              <div class="quantity-display"><h2>${committed}</h2><p>Committed</p></div>
-              <div class="quantity-display"><h2>${totalStock}</h2><p>Total stock</p></div>
-              <div class="quantity-display"><h2>${retailValue.toFixed(2)}</h2><p>Retail value</p></div>
-              <div class="quantity-display"><h2>${invValue.toFixed(2)}</h2><p>Inv. value</p></div>
+              <div class="metrics-row" style="display:flex;gap:1rem;align-items:center;flex-wrap:nowrap;overflow:auto;white-space:nowrap;">
+                <div class="metric-pill" title="Available (deduped across stores)" style="display:flex;flex-direction:column;align-items:center;min-width:90px;">
+                  <span class="value" style="font-weight:700">${available}</span>
+                  <span class="label">Available</span>
+                </div>
+                <div class="metric-pill" title="Committed across all stores" style="display:flex;flex-direction:column;align-items:center;min-width:90px;">
+                  <span class="value" style="font-weight:700">${committed}</span>
+                  <span class="label">Committed</span>
+                </div>
+                <div class="metric-pill" title="Available + Committed" style="display:flex;flex-direction:column;align-items:center;min-width:90px;">
+                  <span class="value" style="font-weight:700">${totalStock}</span>
+                  <span class="label">Total stock</span>
+                </div>
+                <div class="metric-pill" title="Available × Price" style="display:flex;flex-direction:column;align-items:center;min-width:110px;">
+                  <span class="value" style="font-weight:700">${retailValue.toFixed(2)}</span>
+                  <span class="label">Retail value</span>
+                </div>
+                <div class="metric-pill" title="Available × Cost" style="display:flex;flex-direction:column;align-items:center;min-width:110px;">
+                  <span class="value" style="font-weight:700">${invValue.toFixed(2)}</span>
+                  <span class="label">Inv. value</span>
+                </div>
+              </div>
             </div>
           </summary>
           <div class="variant-details">
@@ -316,14 +334,6 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // --- Filters / events ---
-  if (elements.filters.viewSelect) {
-    elements.filters.viewSelect.onchange = () => {
-      state.view = elements.filters.viewSelect.value;
-      if (elements.groupedSort.wrapper) elements.groupedSort.wrapper.style.display = (state.view === 'grouped' ? 'flex' : 'none');
-      state.page = 1;
-      loadPage();
-    };
-  }
   if (elements.filters.groupToggle) {
     elements.filters.groupToggle.onchange = () => {
       state.view = elements.filters.groupToggle.checked ? 'grouped' : 'individual';
@@ -344,7 +354,7 @@ document.addEventListener('DOMContentLoaded', () => {
     state.status = '';
     state.sortBy = 'on_hand';
     state.sortOrder = 'desc';
-    state.view = (elements.filters.groupToggle?.checked ? 'grouped' : (elements.filters.viewSelect?.value || 'individual'));
+    state.view = (elements.filters.groupToggle?.checked ? 'grouped' : 'individual');
     state.page = 1;
     if (elements.filters.search) elements.filters.search.value = '';
     if (elements.filters.store) elements.filters.store.value = '';

@@ -232,6 +232,7 @@ def _build_variant_aggregate_query(db: Session, filters: Dict[str, Any]):
             func.max(Product.image_url).label("image_url"),
             func.sum(func.coalesce(IL.on_hand, 0)).label("on_hand"),
             func.sum(func.coalesce(IL.available, 0)).label("available"),
+            (func.sum(func.coalesce(IL.on_hand, 0)) - func.sum(func.coalesce(IL.available, 0))).label("committed"),
             func.max(func.coalesce(cost_expr, 0.0)).label("cost_per_item"),
             func.max(func.coalesce(Variant.price, 0.0)).label("price"),
         )
@@ -256,36 +257,41 @@ def _map_sort(sort_by: str, sort_order: str, columns: Dict[str, Any]):
     desc = (sort_order or "").lower() == "desc"
     key = (sort_by or "on_hand").lower()
 
-    # Normalize aliases
+    # normalize some aliases (but don't map to non-existent keys)
     alias_map = {
-        "cost": "cost_per_item",
-        "committed": "committed_total",
         "inventoryvalue": "inventory_value",
         "retailvalue": "retail_value",
         "totalstock": "total_stock",
+        # 'committed' handled by columns provided for each view
     }
     key = alias_map.get(key, key)
 
-    # Fallback chain
+    # Candidate keys in order of preference
     candidates: List[str] = [key]
     if key == "price" and "price" not in columns and "max_price" in columns:
         candidates.append("max_price")
-    if key in ("cost_per_item",) and key not in columns:
-        for alt in ("max_cost", "cost_per_item"):
-            if alt not in candidates:
-                candidates.append(alt)
-    if key == "on_hand" and "on_hand" not in columns and "total_stock" in columns:
+    if key == "cost_per_item" and key not in columns:
+        if "max_cost" in columns:
+            candidates.append("max_cost")
+    if key == "on_hand" and key not in columns and "total_stock" in columns:
         candidates.append("total_stock")
+    if key == "committed" and key not in columns and "committed_total" in columns:
+        candidates.append("committed_total")
 
+    # Pick the first column that exists
     col = None
     for c in candidates:
         if c in columns:
             col = columns[c]
             break
     if col is None:
-        col = columns.get("available") or columns.get("on_hand")
-    if col is None:
-        col = next(iter(columns.values()))
+        # explicit fallback chain without boolean-evaluating SQL expressions
+        if "available" in columns:
+            col = columns["available"]
+        elif "on_hand" in columns:
+            col = columns["on_hand"]
+        else:
+            col = next(iter(columns.values()))
 
     return col.desc() if desc else col.asc()
 
@@ -356,7 +362,6 @@ def get_inventory_report(
 
     if (view or "").lower() == "grouped":
         # Add computed valuations and total_stock
-        # NOTE: inventory/retail values use available_dedup as requested
         g_subq = db.query(
             g_base.c.group_id,
             g_base.c.product_title,
@@ -388,6 +393,7 @@ def get_inventory_report(
             "primary_store": g_subq.c.primary_store,
             "available": g_subq.c.available,
             "committed_total": g_subq.c.committed_total,
+            "committed": g_subq.c.committed_total,  # alias for convenience
             "total_stock": g_subq.c.total_stock,
             "max_cost": g_subq.c.max_cost,
             "max_price": g_subq.c.max_price,
@@ -519,6 +525,7 @@ def get_inventory_report(
             "store_name": v_subq.c.store_name,
             "on_hand": v_subq.c.on_hand,
             "available": v_subq.c.available,
+            "committed": v_subq.c.committed,
             "cost_per_item": v_subq.c.cost_per_item,
             "price": v_subq.c.price,
             "inventory_value": v_subq.c.on_hand * v_subq.c.cost_per_item,
@@ -541,6 +548,7 @@ def get_inventory_report(
                 v_subq.c.store_name,
                 v_subq.c.on_hand,
                 v_subq.c.available,
+                v_subq.c.committed,
                 v_subq.c.cost_per_item,
                 v_subq.c.price,
                 (v_subq.c.on_hand * v_subq.c.cost_per_item).label("inventory_value"),
@@ -550,13 +558,7 @@ def get_inventory_report(
             .order_by(_map_sort(sort_by, sort_order, columns))
         )
 
-        if skip:
-            q = q.offset(skip)
-        if limit:
-            q = q.limit(limit)
-
-        for rec in q.all():
-            committed = int((rec.on_hand or 0) - (rec.available or 0))
+        for rec in (q.offset(skip).limit(limit) if limit else q.offset(skip)).all():
             rows.append(
                 {
                     "variant_id": int(rec.variant_id),
@@ -571,7 +573,7 @@ def get_inventory_report(
                     "store_name": rec.store_name,
                     "on_hand": int(rec.on_hand or 0),
                     "available": int(rec.available or 0),
-                    "committed": committed,
+                    "committed": int(rec.committed or 0),
                     "cost_per_item": float(rec.cost_per_item or 0.0),
                     "cost": float(rec.cost_per_item or 0.0),
                     "price": float(rec.price or 0.0),
