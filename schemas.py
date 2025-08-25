@@ -142,9 +142,10 @@ class ProductModel(APIBase):
     status: Optional[str] = None
     created_at: Optional[datetime] = Field(None, alias="createdAt")
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
-    # FIX: Added published_at with its alias to handle the API response
     published_at: Optional[datetime] = Field(None, alias="publishedAt")
-    category: Optional[Dict[str, Any]] = None # Shopify returns this as an object
+    category: Optional[Dict[str, Any]] = None
+    # FIX: Added featured_image with its alias to handle the API response
+    featured_image: Optional[Dict[str, Any]] = Field(None, alias="featuredImage")
 
 
 class VariantModel(APIBase):
