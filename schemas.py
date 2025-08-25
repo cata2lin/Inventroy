@@ -1,26 +1,30 @@
-# schemas.py
+# schemas.py  — Pydantic v2-compatible
 from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, ConfigDict
 
 
-# ---------------------------
-# Base configs
-# ---------------------------
+# =========================
+# Base model configurations
+# =========================
 
 class ORMBase(BaseModel):
-    class Config:
-        orm_mode = True
-        allow_population_by_field_name = True
-        extra = "allow"  # keep any extra fields we didn't explicitly model
+    """Base that plays nicely with SQLAlchemy rows and unknown fields."""
+    model_config = ConfigDict(
+        from_attributes=True,     # replaces orm_mode=True
+        populate_by_name=True,    # replaces allow_population_by_field_name=True
+        extra="allow",            # keep unexpected fields (we're permissive)
+    )
 
 
 class APIBase(BaseModel):
-    class Config:
-        allow_population_by_field_name = True
-        extra = "allow"
+    """Non-ORM payloads (webhooks/GraphQL/etc)."""
+    model_config = ConfigDict(
+        populate_by_name=True,
+        extra="allow",
+    )
 
 
 # ======================================================
@@ -102,8 +106,7 @@ class Inventory(ORMBase):
 
 
 # ======================================================
-# Shopify GraphQL ingest models (used by ShopifyService / crud.order)
-# They are intentionally permissive; we alias common camelCase→snake_case.
+# Shopify GraphQL ingest models (permissive; camelCase aliases)
 # ======================================================
 
 class Money(APIBase):
@@ -231,7 +234,7 @@ class FulfillmentOrderWebhook(APIBase):
 
 
 class ShopifyOrderWebhook(APIBase):
-    # Minimal fields we actually read in services/committed_projector.py
+    # Minimal fields we actually read in services/commited_projector.py etc.
     id: int
     admin_graphql_api_id: Optional[str] = None
     name: Optional[str] = None
