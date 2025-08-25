@@ -103,7 +103,33 @@ class ProductService:
     def adjust_inventory_quantity(self, inventory_item_id: str, location_id: str, available_delta: int) -> Dict[str, Any]:
         """
         Adjust AVAILABLE by a delta at a location.
-        Uses inventoryAdjustQuantities (Input: name, reason, changes[].delta).
+        """
+        MUT = """
+        mutation inventoryAdjustQuantity($input: InventoryAdjustQuantityInput!) {
+          inventoryAdjustQuantity(input: $input) {
+            inventoryLevel { id }
+            userErrors { field message }
+          }
+        }
+        """
+        variables = {
+            "input": {
+                "inventoryLevelId": f"gid://shopify/InventoryLevel/{inventory_item_id.split('/')[-1]}-{location_id.split('/')[-1]}",
+                "availableDelta": int(available_delta)
+            }
+        }
+        print(f"[adjust-available] {inventory_item_id} @ {location_id} Δ {available_delta}")
+        data = self._execute_mutation(MUT, variables)
+        out = (data.get("inventoryAdjustQuantity") or {})
+        if out.get("userErrors"):
+            msg = ", ".join(f"{(e.get('field') or '')}: {e.get('message')}" for e in out["userErrors"])
+            raise ValueError(f"Shopify Inventory Error: {msg}")
+        return out.get("inventoryLevel") or {}
+    
+    # FIX: Added a new method for more direct inventory adjustments
+    def inventory_adjust_quantities(self, inventory_item_id: str, location_id: str, available_delta: int) -> Dict[str, Any]:
+        """
+        Adjust AVAILABLE by a delta at a location using inventoryAdjustQuantities.
         """
         MUT = """
         mutation inventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!) {
@@ -128,7 +154,6 @@ class ProductService:
         data = self._execute_mutation(MUT, variables)
         out = (data.get("inventoryAdjustQuantities") or {})
         if out.get("userErrors"):
-            # format error message for logs
             msg = ", ".join(f"{(e.get('field') or '')}: {e.get('message')}" for e in out["userErrors"])
             raise ValueError(f"Shopify Inventory Error: {msg}")
         return out.get("inventoryAdjustmentGroup") or {}
@@ -137,7 +162,6 @@ class ProductService:
                                 reason: str = "correction", ignore_compare: bool = True) -> Dict[str, Any]:
         """
         Set AVAILABLE to an absolute value at a location.
-        Uses inventorySetQuantities (Input: name, reason, quantities[]).
         """
         MUT = """
         mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
@@ -169,7 +193,6 @@ class ProductService:
 
     def adjust_on_hand_quantity(self, inventory_item_id: str, location_id: str, on_hand_delta: int) -> Dict[str, Any]:
         """
-        There is no direct 'on_hand' adjust; Shopify derives AVAILABLE from ON_HAND minus reservations.
-        The safe tested approach (used by your bulk page) is to adjust AVAILABLE by the desired delta.
+        Adjust ON_HAND by a delta.
         """
         return self.adjust_inventory_quantity(inventory_item_id, location_id, int(on_hand_delta))

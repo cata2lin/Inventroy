@@ -12,7 +12,6 @@ import models
 # Prefer package imports; fallback to root-level service files
 try:
     from services.shopify_service import ShopifyService
-    # FIX: Import ProductService for mutations
     from services.product_service import ProductService
 except Exception:
     from shopify_service import ShopifyService  # type: ignore
@@ -258,37 +257,13 @@ def process_inventory_update_event(
                 print(f"[lock-miss] group={group.id}")
                 return
 
-            # Compute delta vs last snapshot BEFORE updating it
-            snap_origin = (
-                db.query(models.InventoryLevel)
-                .filter(
-                    models.InventoryLevel.inventory_item_id == variant.inventory_item_id,
-                    models.InventoryLevel.location_id == location_id,
-                )
-                .with_for_update(read=True)
-                .first()
-            )
-            last_available = int(snap_origin.available) if snap_origin and snap_origin.available is not None else 0
-            delta_at_origin = current_available - last_available
+            # FIX: The new "source of truth" is the inventory level from the triggering store
+            target_available = current_available
 
-            # Update/insert origin snapshot
-            now = _utcnow()
-            if snap_origin:
-                snap_origin.available = current_available
-                snap_origin.on_hand = current_on_hand
-                snap_origin.last_fetched_at = now
-            else:
-                db.add(
-                    models.InventoryLevel(
-                        inventory_item_id=variant.inventory_item_id,
-                        location_id=location_id,
-                        available=current_available,
-                        on_hand=current_on_hand,
-                        last_fetched_at=now,
-                    )
-                )
+            # Update the group's pool to reflect this new source of truth
+            group.pool_available = target_available
 
-            # Load group members
+            # Load group members to propagate the change
             members = (
                 db.query(models.ProductVariant)
                 .options(
@@ -300,81 +275,40 @@ def process_inventory_update_event(
                 .all()
             )
 
-            fresh_snaps: List[models.InventoryLevel] = []
             for member in members:
-                m_store = member.product.store
-                if not m_store.enabled:
+                # Skip the variant that triggered the event
+                if member.id == variant.id:
                     continue
-                if not m_store.sync_location_id:
-                    if _autolearn_store_location(db, m_store, member.inventory_item_id):
-                        stores_changed_sync_loc.append(m_store)
-                    if not m_store.sync_location_id:
-                        continue
-                if getattr(member, "tracked", True) is False:
-                    continue
-                m_snap = _get_fresh_snap(db, member)  # never commits
-                if m_snap:
-                    fresh_snaps.append(m_snap)
 
-            # Bootstrap or delta advance pool
-            if first_bootstrap or (snap_origin is None):
-                group.pool_available = _compute_bootstrap_pool_from_snaps(fresh_snaps)
-                group.last_reconciled_at = _utcnow()
-            else:
-                group.pool_available = max(0, int(group.pool_available) + int(delta_at_origin))
-
-            # Plan store targets (clamped by on_hand unless bootstrap bypass or continue_selling)
-            for member in members:
                 m_store = member.product.store
                 if not m_store.enabled or not m_store.sync_location_id or getattr(member, "tracked", True) is False:
                     continue
-
-                m_snap = next(
-                    (lvl for lvl in member.inventory_levels if int(lvl.location_id) == int(m_store.sync_location_id)),
-                    None,
-                )
+                
+                m_snap = _get_fresh_snap(db, member)
                 if not m_snap:
                     continue
 
                 m_current_av = int(m_snap.available or 0)
-                target = max(0, int(group.pool_available) - int(m_store.safety_buffer))
+                
+                # If the current member's available stock is different from the target, plan a write
+                if m_current_av != target_available:
+                    planned_writes.append((member, target_available, m_current_av, False))
 
-                bypass_on_hand = False
-                if first_bootstrap and BYPASS_ON_HAND_CLAMP_FOR_FIRST_BOOTSTRAP:
-                    values = [int(s.available or 0) for s in fresh_snaps]
-                    zeros = sum(1 for v in values if v == 0)
-                    positives = sum(1 for v in values if v > 0)
-                    if positives and zeros >= len(values) // 2 and group.pool_available > 0:
-                        bypass_on_hand = True
-
-                if not bypass_on_hand and not bool(getattr(m_store, "continue_selling", False)):
-                    target = min(target, int(m_snap.on_hand or 0))
-
-                if m_current_av != target:
-                    planned_writes.append((member, target, m_current_av, bypass_on_hand))
         # -------- END LOCKED SECTION --------
 
-        # Persist any auto-learned sync_location_id updates (safe to commit now)
-        if stores_changed_sync_loc:
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
-
-        # Apply planned writes (each write logged; refresh live snapshot; commit between steps)
-        for member, target, current, _bypass_on_hand in planned_writes:
+        # Apply planned writes
+        for member, target, current, _ in planned_writes:
             m_store = member.product.store
             try:
+                # Calculate the precise delta needed to reach the target
                 delta = int(target) - int(current)
                 if delta == 0:
                     continue
-                
-                # FIX: Use ProductService for mutations
+
                 ps = ProductService(store_url=m_store.shopify_url, token=m_store.api_token)
-                # FIX: Use GIDs for GraphQL API calls
                 inventory_item_gid = f"gid://shopify/InventoryItem/{member.inventory_item_id}"
                 location_gid = f"gid://shopify/Location/{m_store.sync_location_id}"
-                
+
                 ps.adjust_inventory_quantity(
                     inventory_item_id=inventory_item_gid,
                     location_id=location_gid,
@@ -391,22 +325,19 @@ def process_inventory_update_event(
                     )
                 )
 
-                # Refresh live values and persist both available and on_hand
-                _ = _refresh_member_snapshot(
+                _refresh_member_snapshot(
                     db,
                     store_url=m_store.shopify_url,
                     token=m_store.api_token,
                     inventory_item_id=member.inventory_item_id,
                     location_id=m_store.sync_location_id,
                 )
-
-                try:
-                    db.commit()
-                except Exception:
-                    db.rollback()
+                
+                db.commit()
 
             except Exception as e:
                 print(f"[write-fail] store={m_store.name} variant={member.id} target={target}: {e}")
+                db.rollback()
 
     finally:
         if owns_session and db is not None:

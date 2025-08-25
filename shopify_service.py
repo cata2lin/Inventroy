@@ -35,6 +35,7 @@ fragment InventoryItemFragment on InventoryItem {
   inventoryLevels(first: 10) { edges { node { ...InventoryLevelFragment } } }
 }
 """
+# FIX: Added bodyHtml to the ProductFragment
 PRODUCT_FRAGMENT = """
 fragment ProductFragment on Product {
   id legacyResourceId title bodyHtml vendor productType status createdAt handle updatedAt publishedAt status tags
