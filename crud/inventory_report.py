@@ -61,7 +61,7 @@ def _apply_common_filters(
     Variant,
     Product,
 ):
-    # store filter
+    # store filter (applies only where Location is joined)
     store_ids = _normalize_store_ids(filters.get("store_ids"))
     if store_ids:
         clauses.append(Location.store_id.in_(store_ids))
@@ -93,17 +93,39 @@ def _apply_common_filters(
         )
 
 
+def _text_filters_only(search: Optional[str], Product, Variant, GM):
+    """Search filter that doesn't depend on Location joins."""
+    if not search:
+        return None
+    q = f"%{search.strip()}%"
+    return or_(
+        Product.title.ilike(q),
+        Variant.title.ilike(q),
+        Variant.sku.ilike(q),
+        Variant.barcode.ilike(q),
+        Variant.barcode_normalized.ilike(q),
+        GM.group_id.ilike(q),
+    )
+
+
 # ---------- query builders ----------
 
 def _build_group_aggregate_query(db: Session, filters: Dict[str, Any]):
     """
     One row per barcode *group*.
 
-    We show:
+    Display fields (title, image, store, etc.) are taken from the group's
+    **primary variant** (Variant.is_primary_variant=True). If none is set,
+    we deterministically pick the lowest Variant.id in the group.
+
+    Quantities:
       - available_dedup = MIN(available per store) to avoid triple counting
       - committed_total = SUM( committed per store )
-      - total_stock     = available_dedup + committed_total  (equivalent to on_hand across stores)
-      - valuation       = based on available_dedup (requested behavior for grouped rows)
+      - total_stock     = available_dedup + committed_total
+
+    Valuation:
+      - uses available_dedup and the group-level max(cost) / max(price) across
+        variants participating under the current filters (same behavior as before).
     """
     Variant = models.ProductVariant
     GM = models.GroupMembership
@@ -112,15 +134,30 @@ def _build_group_aggregate_query(db: Session, filters: Dict[str, Any]):
     Product = models.Product
     Store = models.Store
 
-    # unified cost accessor: prefer cost_per_item, fall back to legacy cost
     cost_expr = func.coalesce(Variant.cost_per_item, Variant.cost, 0.0)
-
     group_key = _group_key_expr(GM, Variant)
-    where_clauses: List[Any] = []
-    _apply_common_filters(filters, where_clauses, Loc, Variant, Product)
 
-    # ---- stage 1: per (group_id, store_id) rollup
-    # Explicit left side avoids ambiguous-join errors in SQLAlchemy
+    # ---- WHERE clauses for inventory-anchored queries (join IL/Loc)
+    inv_where: List[Any] = []
+    _apply_common_filters(filters, inv_where, Loc, Variant, Product)
+
+    # ---- WHERE clauses for display-only query (no Loc joins)
+    disp_where: List[Any] = []
+    # product status/types apply equally to display
+    statuses = _normalize_str_list(filters.get("statuses"))
+    if statuses:
+        disp_where.append(Product.status.in_(statuses))
+    types_ = _normalize_str_list(filters.get("product_types"))
+    if types_:
+        disp_where.append(Product.product_type.in_(types_))
+    # text search
+    tf = _text_filters_only(filters.get("search"), Product, Variant, GM)
+    if tf is not None:
+        disp_where.append(tf)
+
+    # -------------------------------------------------------------------------
+    # 1) Per (group_id, store_id) rollup for quantities
+    # -------------------------------------------------------------------------
     per_store_q = (
         db.query(
             group_key.label("group_id"),
@@ -134,22 +171,65 @@ def _build_group_aggregate_query(db: Session, filters: Dict[str, Any]):
         .join(Loc, Loc.id == IL.location_id)
         .join(Product, Product.id == Variant.product_id)
     )
-    if where_clauses:
-        per_store_q = per_store_q.filter(and_(*where_clauses))
+    if inv_where:
+        per_store_q = per_store_q.filter(and_(*inv_where))
     per_store_q = per_store_q.group_by(group_key, Loc.store_id).subquery()
 
-    # ---- stage 2: sample/display fields (per group)
-    sample_q = (
+    # -------------------------------------------------------------------------
+    # 2) Primary display pick per group using window function:
+    #    order by is_primary_variant DESC, id ASC; rn = 1 is the chosen primary.
+    #    (No Loc/IL joins needed here.)
+    # -------------------------------------------------------------------------
+    rn = func.row_number().over(
+        partition_by=group_key,
+        order_by=(Variant.is_primary_variant.desc(), Variant.id.asc()),
+    )
+
+    ranked_disp = (
         db.query(
             group_key.label("group_id"),
-            func.max(Product.title).label("product_title"),
-            func.max(Variant.title).label("variant_title"),
-            func.max(Product.status).label("status"),
-            func.max(Product.product_type).label("product_type"),
-            func.max(Variant.sku).label("sku"),
-            func.max(Variant.barcode).label("barcode"),
-            func.max(Product.image_url).label("primary_image_url"),
-            func.max(Store.name).label("primary_store"),
+            Product.title.label("product_title"),
+            Variant.title.label("variant_title"),
+            Product.status.label("status"),
+            Product.product_type.label("product_type"),
+            Variant.sku.label("sku"),
+            Variant.barcode.label("barcode"),
+            Product.image_url.label("primary_image_url"),
+            Store.name.label("primary_store"),
+            rn.label("rn"),
+        )
+        .select_from(Variant)
+        .outerjoin(GM, GM.variant_id == Variant.id)
+        .join(Product, Product.id == Variant.product_id)
+        .join(Store, Store.id == Variant.store_id)
+    )
+    if disp_where:
+        ranked_disp = ranked_disp.filter(and_(*disp_where))
+    ranked_disp = ranked_disp.subquery()
+
+    primary_disp = (
+        db.query(
+            ranked_disp.c.group_id,
+            ranked_disp.c.product_title,
+            ranked_disp.c.variant_title,
+            ranked_disp.c.status,
+            ranked_disp.c.product_type,
+            ranked_disp.c.sku,
+            ranked_disp.c.barcode,
+            ranked_disp.c.primary_image_url,
+            ranked_disp.c.primary_store,
+        )
+        .select_from(ranked_disp)
+        .filter(ranked_disp.c.rn == 1)
+        .subquery()
+    )
+
+    # -------------------------------------------------------------------------
+    # 3) Max cost/price per group (respecting inventory-side filters incl. stores)
+    # -------------------------------------------------------------------------
+    agg_price_cost = (
+        db.query(
+            group_key.label("group_id"),
             func.max(func.coalesce(cost_expr, 0.0)).label("max_cost"),
             func.max(func.coalesce(Variant.price, 0.0)).label("max_price"),
         )
@@ -157,45 +237,46 @@ def _build_group_aggregate_query(db: Session, filters: Dict[str, Any]):
         .outerjoin(GM, GM.variant_id == Variant.id)
         .join(IL, IL.inventory_item_id == Variant.inventory_item_id)
         .join(Loc, Loc.id == IL.location_id)
-        .join(Store, Store.id == Loc.store_id)
         .join(Product, Product.id == Variant.product_id)
     )
-    if where_clauses:
-        sample_q = sample_q.filter(and_(*where_clauses))
-    sample_q = sample_q.group_by(group_key).subquery()
+    if inv_where:
+        agg_price_cost = agg_price_cost.filter(and_(*inv_where))
+    agg_price_cost = agg_price_cost.group_by(group_key).subquery()
 
-    # ---- final grouped aggregation
+    # -------------------------------------------------------------------------
+    # 4) Final grouped query: join primary display + per-store rollup + price/cost
+    # -------------------------------------------------------------------------
     grouped = (
         db.query(
-            sample_q.c.group_id,
-            sample_q.c.product_title,
-            sample_q.c.variant_title,
-            sample_q.c.status,
-            sample_q.c.product_type,
-            sample_q.c.sku,
-            sample_q.c.barcode,
-            sample_q.c.primary_image_url,
-            sample_q.c.primary_store,
-            sample_q.c.max_cost,
-            sample_q.c.max_price,
-            # Availability / commitment
-            func.min(per_store_q.c.available).label("available"),  # dedup
-            # committed_total across stores = SUM(on_hand - available)
+            primary_disp.c.group_id,
+            primary_disp.c.product_title,
+            primary_disp.c.variant_title,
+            primary_disp.c.status,
+            primary_disp.c.product_type,
+            primary_disp.c.sku,
+            primary_disp.c.barcode,
+            primary_disp.c.primary_image_url,
+            primary_disp.c.primary_store,
+            agg_price_cost.c.max_cost,
+            agg_price_cost.c.max_price,
+            func.min(per_store_q.c.available).label("available"),  # dedup across stores
             func.sum(per_store_q.c.on_hand - per_store_q.c.available).label("committed_total"),
         )
-        .join(per_store_q, per_store_q.c.group_id == sample_q.c.group_id)
+        .select_from(primary_disp)
+        .join(per_store_q, per_store_q.c.group_id == primary_disp.c.group_id)
+        .join(agg_price_cost, agg_price_cost.c.group_id == primary_disp.c.group_id)
         .group_by(
-            sample_q.c.group_id,
-            sample_q.c.product_title,
-            sample_q.c.variant_title,
-            sample_q.c.status,
-            sample_q.c.product_type,
-            sample_q.c.sku,
-            sample_q.c.barcode,
-            sample_q.c.primary_image_url,
-            sample_q.c.primary_store,
-            sample_q.c.max_cost,
-            sample_q.c.max_price,
+            primary_disp.c.group_id,
+            primary_disp.c.product_title,
+            primary_disp.c.variant_title,
+            primary_disp.c.status,
+            primary_disp.c.product_type,
+            primary_disp.c.sku,
+            primary_disp.c.barcode,
+            primary_disp.c.primary_image_url,
+            primary_disp.c.primary_store,
+            agg_price_cost.c.max_cost,
+            agg_price_cost.c.max_price,
         )
     )
     return grouped
@@ -240,7 +321,7 @@ def _build_variant_aggregate_query(db: Session, filters: Dict[str, Any]):
         .outerjoin(GM, GM.variant_id == Variant.id)
         .join(IL, IL.inventory_item_id == Variant.inventory_item_id)
         .join(Loc, Loc.id == IL.location_id)
-        .join(Store, Store.id == Loc.store_id)
+        .join(Store, Store.id == Variant.store_id)
         .join(Product, Product.id == Variant.product_id)
         .group_by(Variant.id, group_key)
     )
@@ -257,35 +338,31 @@ def _map_sort(sort_by: str, sort_order: str, columns: Dict[str, Any]):
     desc = (sort_order or "").lower() == "desc"
     key = (sort_by or "on_hand").lower()
 
-    # normalize some aliases (but don't map to non-existent keys)
     alias_map = {
         "inventoryvalue": "inventory_value",
         "retailvalue": "retail_value",
         "totalstock": "total_stock",
-        # 'committed' handled by columns provided for each view
+        "cost": "cost_per_item",
+        "committed": "committed",  # individual
     }
     key = alias_map.get(key, key)
 
-    # Candidate keys in order of preference
     candidates: List[str] = [key]
     if key == "price" and "price" not in columns and "max_price" in columns:
         candidates.append("max_price")
-    if key == "cost_per_item" and key not in columns:
-        if "max_cost" in columns:
-            candidates.append("max_cost")
+    if key == "cost_per_item" and key not in columns and "max_cost" in columns:
+        candidates.append("max_cost")
     if key == "on_hand" and key not in columns and "total_stock" in columns:
         candidates.append("total_stock")
     if key == "committed" and key not in columns and "committed_total" in columns:
         candidates.append("committed_total")
 
-    # Pick the first column that exists
     col = None
     for c in candidates:
         if c in columns:
             col = columns[c]
             break
     if col is None:
-        # explicit fallback chain without boolean-evaluating SQL expressions
         if "available" in columns:
             col = columns["available"]
         elif "on_hand" in columns:
@@ -316,7 +393,7 @@ def get_inventory_report(
     Returns (rows, totals, total_count).
 
     rows:
-      - view='grouped'    -> one row per barcode group
+      - view='grouped'    -> one row per barcode group (display from PRIMARY variant)
       - view='individual' -> one row per variant
     totals:
       - computed from grouped-deduped data
@@ -348,8 +425,7 @@ def get_inventory_report(
     )
 
     totals = {
-        # keep key name 'on_hand' for compatibility with the UI top metric
-        "on_hand": int(totals_row.available_sum or 0),
+        "on_hand": int(totals_row.available_sum or 0),  # legacy alias
         "available": int(totals_row.available_sum or 0),
         "committed": int(totals_row.committed_sum or 0),
         "inventory_value": float(totals_row.inventory_value or 0.0),
@@ -393,7 +469,7 @@ def get_inventory_report(
             "primary_store": g_subq.c.primary_store,
             "available": g_subq.c.available,
             "committed_total": g_subq.c.committed_total,
-            "committed": g_subq.c.committed_total,  # alias for convenience
+            "committed": g_subq.c.committed_total,  # alias for sorting
             "total_stock": g_subq.c.total_stock,
             "max_cost": g_subq.c.max_cost,
             "max_price": g_subq.c.max_price,
@@ -441,7 +517,7 @@ def get_inventory_report(
             group_ids.append(gid)
             rows_map[gid] = {
                 "group_id": rec.group_id,
-                "primary_title": rec.product_title,
+                "primary_title": rec.product_title,       # <- reflect PRIMARY
                 "product_title": rec.product_title,       # legacy
                 "variant_title": rec.variant_title,
                 "status": rec.status,
@@ -452,15 +528,14 @@ def get_inventory_report(
                 "store_name": rec.primary_store,          # legacy
                 "sku": rec.sku,
                 "barcode": rec.barcode,
-                "available": int(rec.available or 0),                     # renamed in UI
-                "committed": int(rec.committed_total or 0),               # total across stores
-                "total_stock": int(rec.total_stock or 0),                 # available + committed
+                "available": int(rec.available or 0),
+                "committed": int(rec.committed_total or 0),
+                "total_stock": int(rec.total_stock or 0),
                 "cost_per_item": float(rec.max_cost or 0.0),
                 "cost": float(rec.max_cost or 0.0),
                 "price": float(rec.max_price or 0.0),
                 "inventory_value": float(rec.inventory_value or 0.0),
                 "retail_value": float(rec.retail_value or 0.0),
-                # ensure arrays exist for UI .map
                 "variants_json": [],
                 "variants": [],
                 "members": [],
@@ -558,7 +633,12 @@ def get_inventory_report(
             .order_by(_map_sort(sort_by, sort_order, columns))
         )
 
-        for rec in (q.offset(skip).limit(limit) if limit else q.offset(skip)).all():
+        if skip:
+            q = q.offset(skip)
+        if limit:
+            q = q.limit(limit)
+
+        for rec in q.all():
             rows.append(
                 {
                     "variant_id": int(rec.variant_id),
