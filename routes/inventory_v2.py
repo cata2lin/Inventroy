@@ -1,10 +1,10 @@
 # routes/inventory_v2.py
 
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, literal  # used in details fallback
+from sqlalchemy import or_, literal, func
 
 # Prefer the unified session helper if both exist
 try:
@@ -67,6 +67,32 @@ def get_filters(
     }
 
 
+def _parse_int_list_csv(value: Optional[str]) -> Optional[List[int]]:
+    if not value:
+        return None
+    out: List[int] = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except ValueError:
+            continue
+    return list(sorted(set(out))) or None
+
+
+def _parse_str_list_csv(value: Optional[str]) -> Optional[List[str]]:
+    if not value:
+        return None
+    out: List[str] = []
+    for part in value.split(","):
+        part = part.strip()
+        if part:
+            out.append(part)
+    return list(sorted(set(out))) or None
+
+
 # ---------- Report ----------
 @router.get("/report/")
 def get_report(
@@ -77,15 +103,13 @@ def get_report(
     sort_order: str = Query("desc"),
     view: str = Query("individual"),
     search: Optional[str] = Query(None),
-    stores: Optional[str] = Query(
-        None, description="Comma-separated store ids: e.g., '1,2,3'"
-    ),
-    statuses: Optional[str] = Query(
-        None, description="Comma-separated product statuses"
-    ),
-    types: Optional[str] = Query(
-        None, description="Comma-separated product types"
-    ),
+    # accept both singular and plural params for compatibility with the JS
+    store: Optional[int] = Query(None, description="Single store id"),
+    stores: Optional[str] = Query(None, description="Comma-separated store ids e.g. '1,2,3'"),
+    status: Optional[str] = Query(None, description="Single product status"),
+    statuses: Optional[str] = Query(None, description="Comma-separated product statuses"),
+    type: Optional[str] = Query(None, description="Single product type"),
+    types: Optional[str] = Query(None, description="Comma-separated product types"),
     totals_mode: str = Query("grouped"),
 ):
     """
@@ -104,28 +128,26 @@ def get_report(
     if (totals_mode or "").lower() != "grouped":
         raise HTTPException(status_code=400, detail="totals_mode must be 'grouped'")
 
-    # parse store ids
-    store_list: Optional[List[int]] = None
-    if stores:
-        tmp: List[int] = []
-        for s in (stores or "").split(","):
-            s = s.strip()
-            if not s:
-                continue
-            try:
-                tmp.append(int(s))
-            except ValueError:
-                continue
-        store_list = list(sorted(set(tmp))) or None
+    # parse stores (accept 'store' and 'stores')
+    store_list = []
+    if store is not None:
+        try:
+            store_list.append(int(store))
+        except ValueError:
+            pass
+    store_list += _parse_int_list_csv(stores) or []
+    store_list = list(sorted(set(store_list))) or None
 
     # parse statuses/types
-    status_list: Optional[List[str]] = None
-    if statuses:
-        status_list = list(sorted(set([s.strip() for s in statuses.split(",") if s.strip()])))
+    status_list = _parse_str_list_csv(statuses) or []
+    if status:
+        status_list.append(status.strip())
+    status_list = list(sorted(set(status_list))) or None
 
-    type_list: Optional[List[str]] = None
-    if types:
-        type_list = list(sorted(set([t.strip() for t in types.split(",") if t.strip()])))
+    type_list = _parse_str_list_csv(types) or []
+    if type:
+        type_list.append(type.strip())
+    type_list = list(sorted(set(type_list))) or None
 
     rows, totals, total_count = crud_inventory_report.get_inventory_report(
         db,
@@ -141,7 +163,6 @@ def get_report(
         totals_mode="grouped",
     )
 
-    # Shape response exactly as the frontend expects
     # Ensure arrays are always present (avoids `.map` on undefined)
     if rows is None:
         rows = []
@@ -155,85 +176,165 @@ def get_report(
     }
 
 
-# ---------- Details (used by the modal in the UI) ----------
+# ---------- Product Details (used by the modal) ----------
+@router.get("/product-details/{barcode}")
+def get_product_details(
+    barcode: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Return:
+      {
+        committed_orders: [{ id, name, created_at, quantity, fulfillment_status, shopify_url }],
+        all_orders: [{ id, name, created_at, quantity, financial_status, fulfillment_status }],
+        stock_movements: [{ created_at, product_sku, change_quantity, new_quantity, reason, source_info }]
+      }
+    """
+    if not barcode:
+        raise HTTPException(status_code=400, detail="barcode is required")
+
+    Variant = models.ProductVariant
+    GM = models.GroupMembership
+    Product = models.Product
+    Store = models.Store
+    Order = models.Order
+    LineItem = models.LineItem
+    StockMovement = models.StockMovement
+
+    # Grouping key (same as report)
+    group_key = func.coalesce(GM.group_id, Variant.barcode_normalized, Variant.barcode)
+
+    # Variants in this group (across stores)
+    variants_q = (
+        db.query(
+            Variant.id.label("variant_id"),
+            Variant.sku.label("sku"),
+            Variant.store_id.label("store_id"),
+        )
+        .outerjoin(GM, GM.variant_id == Variant.id)
+        .filter(group_key == barcode)
+        .all()
+    )
+    if not variants_q:
+        # try to match by normalized barcode or exact barcode directly
+        variants_q = (
+            db.query(
+                Variant.id.label("variant_id"),
+                Variant.sku.label("sku"),
+                Variant.store_id.label("store_id"),
+            )
+            .filter(or_(Variant.barcode == barcode, Variant.barcode_normalized == barcode))
+            .all()
+        )
+        if not variants_q:
+            return {"committed_orders": [], "all_orders": [], "stock_movements": []}
+
+    variant_ids = [int(v.variant_id) for v in variants_q]
+    skus = [v.sku for v in variants_q if v.sku]
+
+    # Base order/line join
+    base_ol = (
+        db.query(
+            Order.id.label("order_id"),
+            Order.name.label("name"),
+            Order.created_at.label("created_at"),
+            Order.financial_status.label("financial_status"),
+            Order.fulfillment_status.label("fulfillment_status"),
+            LineItem.quantity.label("quantity"),
+            Store.shopify_url.label("shopify_url"),
+        )
+        .join(LineItem, LineItem.order_id == Order.id)
+        .join(Store, Store.id == Order.store_id)
+        .filter(LineItem.variant_id.in_(variant_ids))
+    )
+
+    # Committed orders: open/unfulfilled, not cancelled
+    committed = (
+        base_ol
+        .filter(
+            Order.cancelled_at.is_(None),
+            or_(Order.fulfillment_status.is_(None), Order.fulfillment_status.in_(["partial", "unfulfilled"]))
+        )
+        .order_by(Order.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    committed_orders = [
+        {
+            "id": int(r.order_id),
+            "name": r.name,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "quantity": int(r.quantity or 0),
+            "fulfillment_status": r.fulfillment_status,
+            "shopify_url": r.shopify_url,
+        }
+        for r in committed
+    ]
+
+    # All orders containing this product (last 100)
+    all_orders_q = (
+        base_ol
+        .order_by(Order.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    all_orders = [
+        {
+            "id": int(r.order_id),
+            "name": r.name,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "quantity": int(r.quantity or 0),
+            "financial_status": r.financial_status,
+            "fulfillment_status": r.fulfillment_status,
+        }
+        for r in all_orders_q
+    ]
+
+    # Stock movements for all SKUs in the group (last 100)
+    stock_movements: List[Dict[str, Any]] = []
+    if skus:
+        sm_q = (
+            db.query(
+                StockMovement.created_at,
+                StockMovement.product_sku,
+                StockMovement.change_quantity,
+                StockMovement.new_quantity,
+                StockMovement.reason,
+                StockMovement.source_info,
+            )
+            .filter(StockMovement.product_sku.in_(skus))
+            .order_by(StockMovement.created_at.desc())
+            .limit(100)
+            .all()
+        )
+        stock_movements = [
+            {
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "product_sku": r.product_sku,
+                "change_quantity": int(r.change_quantity or 0),
+                "new_quantity": int(r.new_quantity or 0),
+                "reason": r.reason,
+                "source_info": r.source_info,
+            }
+            for r in sm_q
+        ]
+
+    return {
+        "committed_orders": committed_orders,
+        "all_orders": all_orders,
+        "stock_movements": stock_movements,
+    }
+
+
+# ---------- Details (legacy compatibility) ----------
 @router.get("/details/")
 def get_details(
     barcode: str = Query(..., description="Exact barcode or normalized barcode"),
     db: Session = Depends(get_db),
 ):
     """
-    Details for a given barcode/group used by the report's details modal.
-    If a legacy helper exists, reuse it. Otherwise, return a minimal, safe payload.
+    Backward-compatible endpoint. Delegates to /product-details/{barcode}.
     """
     if not barcode:
         raise HTTPException(status_code=400, detail="barcode is required")
-
-    if crud_inventory_v2 and hasattr(crud_inventory_v2, "get_inventory_details"):
-        return crud_inventory_v2.get_inventory_details(db, barcode=barcode)  # type: ignore
-
-    Variant = models.ProductVariant
-    GM = models.GroupMembership
-    Product = models.Product
-    Store = models.Store
-
-    # Find group id (if any) by barcode / normalized barcode
-    group_id_q = (
-        db.query(GM.group_id)
-        .join(Variant, Variant.id == GM.variant_id)
-        .filter(
-            or_(
-                Variant.barcode == barcode,
-                Variant.barcode_normalized == barcode,
-            )
-        )
-        .distinct()
-        .first()
-    )
-    group_id = group_id_q[0] if group_id_q else None
-
-    # Member variants (across stores)
-    members_q = (
-        db.query(
-            Variant.id,
-            Variant.sku,
-            Variant.barcode,
-            Variant.barcode_normalized,
-            Variant.title,
-            Product.title.label("product_title"),
-            Store.name.label("store_name"),
-            Product.status.label("status"),
-            Product.product_type.label("product_type"),
-        )
-        .outerjoin(GM, GM.variant_id == Variant.id)
-        .join(Product, Product.id == Variant.product_id)
-        .join(Store, Store.id == Variant.store_id)
-        .filter(
-            or_(
-                Variant.barcode == barcode,
-                Variant.barcode_normalized == barcode,
-                (GM.group_id == group_id) if group_id is not None else literal(False),
-            )
-        )
-        .all()
-    )
-
-    members = [
-        {
-            "variant_id": v.id,
-            "sku": v.sku,
-            "barcode": v.barcode,
-            "barcode_normalized": v.barcode_normalized,
-            "variant_title": v.title,
-            "product_title": v.product_title,
-            "store_name": v.store_name,
-            "status": v.status,
-            "product_type": v.product_type,
-        }
-        for v in members_q
-    ]
-
-    return {
-        "barcode": barcode,
-        "group_id": group_id,
-        "members": members,
-    }
+    return get_product_details(barcode=barcode, db=db)

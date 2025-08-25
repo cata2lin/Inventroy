@@ -1,6 +1,7 @@
 # crud/inventory_report.py
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, DefaultDict
+from collections import defaultdict
 
 from sqlalchemy import and_, func, literal, or_
 from sqlalchemy.orm import Session
@@ -388,33 +389,78 @@ def get_inventory_report(
         if limit:
             q = q.limit(limit)
 
-        for rec in q.all():
+        recs = q.all()
+        rows_map: Dict[str, Dict[str, Any]] = {}
+        group_ids: List[str] = []
+        for rec in recs:
+            gid = rec.group_id
+            group_ids.append(gid)
             committed = int((rec.on_hand or 0) - (rec.available or 0))
-            # include both legacy and new keys so the UI never sees undefined
-            rows.append(
-                {
-                    "group_id": rec.group_id,
-                    "primary_title": rec.product_title,
-                    "product_title": rec.product_title,
-                    "variant_title": rec.variant_title,
-                    "status": rec.status,
-                    "product_type": rec.product_type,
-                    "primary_image_url": rec.primary_image_url,
-                    "image_url": rec.primary_image_url,
-                    "primary_store": rec.primary_store,
-                    "store_name": rec.primary_store,
-                    "sku": rec.sku,
-                    "barcode": rec.barcode,
-                    "on_hand": int(rec.on_hand or 0),
-                    "available": int(rec.available or 0),
-                    "committed": committed,
-                    "cost_per_item": float(rec.max_cost or 0.0),
-                    "cost": float(rec.max_cost or 0.0),  # alias for UI
-                    "price": float(rec.max_price or 0.0),
-                    "inventory_value": float(rec.inventory_value or 0.0),
-                    "retail_value": float(rec.retail_value or 0.0),
-                }
+            rows_map[gid] = {
+                "group_id": rec.group_id,
+                "primary_title": rec.product_title,
+                "product_title": rec.product_title,
+                "variant_title": rec.variant_title,
+                "status": rec.status,
+                "product_type": rec.product_type,
+                "primary_image_url": rec.primary_image_url,
+                "image_url": rec.primary_image_url,
+                "primary_store": rec.primary_store,
+                "store_name": rec.primary_store,
+                "sku": rec.sku,
+                "barcode": rec.barcode,
+                "on_hand": int(rec.on_hand or 0),
+                "available": int(rec.available or 0),
+                "committed": committed,
+                "cost_per_item": float(rec.max_cost or 0.0),
+                "cost": float(rec.max_cost or 0.0),  # alias for UI
+                "price": float(rec.max_price or 0.0),
+                "inventory_value": float(rec.inventory_value or 0.0),
+                "retail_value": float(rec.retail_value or 0.0),
+                "variants_json": [],  # filled below
+            }
+
+        # attach member variants (for the expandable list)
+        if group_ids:
+            Variant = models.ProductVariant
+            GM = models.GroupMembership
+            Store = models.Store
+            Product = models.Product
+
+            group_key = _group_key_expr(GM, Variant)
+
+            members_q = (
+                db.query(
+                    group_key.label("group_id"),
+                    Variant.id.label("variant_id"),
+                    Variant.sku.label("sku"),
+                    Store.name.label("store_name"),
+                    Product.status.label("status"),
+                    Variant.is_primary_variant.label("is_primary"),
+                )
+                .outerjoin(GM, GM.variant_id == Variant.id)
+                .join(Store, Store.id == Variant.store_id)
+                .join(Product, Product.id == Variant.product_id)
+                .filter(group_key.in_(group_ids))
+                .all()
             )
+
+            bucket: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
+            for m in members_q:
+                bucket[m.group_id].append(
+                    {
+                        "variant_id": int(m.variant_id),
+                        "sku": m.sku,
+                        "store_name": m.store_name,
+                        "status": m.status,
+                        "is_primary": bool(m.is_primary),
+                    }
+                )
+            for gid in group_ids:
+                if gid in rows_map:
+                    rows_map[gid]["variants_json"] = bucket.get(gid, [])
+
+        rows = list(rows_map.values())
 
     else:
         v_subq = _build_variant_aggregate_query(db, filters).subquery()

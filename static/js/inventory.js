@@ -137,45 +137,49 @@ document.addEventListener('DOMContentLoaded', () => {
         addSortEventListeners();
     };
 
-    const renderGroupedView = (inventory) => {
-        if (!inventory || inventory.length === 0) {
-            elements.tableContainer.innerHTML = '<p>No inventory groups found.</p>'; return;
-        }
-        let html = '';
-        inventory.forEach(group => {
-            html += `
-            <details class="grouped-item">
-                <summary class="clickable-row" onclick="openDetailsModal('${group.barcode}', '${group.primary_title}')">
-                    <div class="grid">
-                        <img src="${group.primary_image_url || 'https://via.placeholder.com/60'}" alt="${group.primary_title}">
-                        <div class="product-info">
-                            <strong>${group.primary_title}</strong>
-                            <small>Barcode: ${group.barcode} &nbsp;|&nbsp; Store: ${group.primary_store}</small>
-                        </div>
-                        <div class="quantity-display"><h2>${group.on_hand}</h2><p>On Hand</p></div>
-                        <div class="quantity-display"><h2>${group.committed}</h2><p>Committed</p></div>
-                        <div class="quantity-display"><h2>${group.available}</h2><p>Available</p></div>
-                    </div>
-                </summary>
-                <div class="variant-details">
-                    <table>
-                        <thead><tr><th>SKU</th><th>Store</th><th>Status</th><th>Action</th></tr></thead>
-                        <tbody>
-                            ${group.variants_json.map(v => `
-                                <tr>
-                                    <td>${v.sku}</td>
-                                    <td>${v.store_name}</td>
-                                    <td><span class="status-${(v.status || '').toLowerCase()}">${v.status}</span></td>
-                                    <td>${!v.is_primary ? `<button class="outline" onclick="setPrimaryVariant('${group.barcode}', ${v.variant_id})">Make Primary</button>` : '<strong>Primary</strong>'}</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                </div>
-            </details>`;
-        });
-        elements.tableContainer.innerHTML = html;
-    };
+const renderGroupedView = (inventory) => {
+  if (!inventory || inventory.length === 0) {
+    elements.tableContainer.innerHTML = '<p>No inventory groups found.</p>'; 
+    return;
+  }
+  let html = '';
+  inventory.forEach(group => {
+    html += `
+      <details class="grouped-item">
+        <summary class="clickable-row">
+          <div class="grid">
+            <img src="${group.primary_image_url || 'https://via.placeholder.com/60'}"
+                 alt="${group.primary_title}"
+                 style="cursor:pointer"
+                 onclick="openDetailsModal('${group.barcode}', '${group.primary_title}')">
+            <div class="product-info">
+              <strong>${group.primary_title}</strong>
+              <small>Barcode: ${group.barcode} &nbsp;|&nbsp; Store: ${group.primary_store}</small>
+            </div>
+            <div class="quantity-display"><h2>${group.on_hand}</h2><p>On Hand</p></div>
+            <div class="quantity-display"><h2>${group.committed}</h2><p>Committed</p></div>
+            <div class="quantity-display"><h2>${group.available}</h2><p>Available</p></div>
+          </div>
+        </summary>
+        <div class="variant-details">
+          <table>
+            <thead><tr><th>SKU</th><th>Store</th><th>Status</th><th>Action</th></tr></thead>
+            <tbody>
+              ${(group.variants_json || []).map(v => `
+                <tr>
+                  <td>${v.sku}</td>
+                  <td>${v.store_name}</td>
+                  <td><span class="status-${(v.status || '').toLowerCase()}">${v.status || ''}</span></td>
+                  <td>${!v.is_primary ? `<button class="outline" onclick="setPrimaryVariant('${group.barcode}', ${v.variant_id})">Make Primary</button>` : '<strong>Primary</strong>'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </details>`;
+  });
+  elements.tableContainer.innerHTML = html;
+};
     
     // --- NEW: Functions for the details modal ---
     window.openDetailsModal = async (barcode, title) => {
