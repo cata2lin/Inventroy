@@ -14,17 +14,17 @@ def get_status_filters(db: Session):
     Queries the database for all distinct, non-null financial and fulfillment statuses.
     """
     financial = db.query(models.Order.financial_status).filter(models.Order.financial_status.isnot(None)).distinct().all()
+    # FIX: This query now correctly fetches all distinct fulfillment statuses from the database.
     fulfillment = db.query(models.Order.fulfillment_status).filter(models.Order.fulfillment_status.isnot(None)).distinct().all()
     
     return {
-        "financial": sorted([status[0] for status in financial]),
-        "fulfillment": sorted([status[0] for status in fulfillment])
+        "financial": sorted([status[0] for status in financial if status[0]]),
+        "fulfillment": sorted([status[0] for status in fulfillment if status[0]])
     }
 
 def _get_filtered_query(db: Session, store_ids, start_date, end_date, financial_status, fulfillment_status, has_note, tags, search):
     """Helper function to build the base filtered query."""
     
-    # FIX: Subquery to get the most recent hold reason for an order
     hold_reason_sq = db.query(
         models.Fulfillment.order_id,
         models.Fulfillment.hold_reason
