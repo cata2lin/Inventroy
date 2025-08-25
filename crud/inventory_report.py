@@ -120,6 +120,7 @@ def _build_group_aggregate_query(db: Session, filters: Dict[str, Any]):
     _apply_common_filters(filters, where_clauses, Loc, Variant, Product)
 
     # ---- stage 1: per (group_id, store_id) rollup
+    # Explicit left side avoids ambiguous-join errors in SQLAlchemy
     per_store_q = (
         db.query(
             group_key.label("group_id"),
@@ -127,6 +128,7 @@ def _build_group_aggregate_query(db: Session, filters: Dict[str, Any]):
             func.sum(func.coalesce(IL.on_hand, 0)).label("on_hand"),
             func.sum(func.coalesce(IL.available, 0)).label("available"),
         )
+        .select_from(Variant)
         .outerjoin(GM, GM.variant_id == Variant.id)
         .join(IL, IL.inventory_item_id == Variant.inventory_item_id)
         .join(Loc, Loc.id == IL.location_id)
@@ -151,6 +153,7 @@ def _build_group_aggregate_query(db: Session, filters: Dict[str, Any]):
             func.max(func.coalesce(cost_expr, 0.0)).label("max_cost"),
             func.max(func.coalesce(Variant.price, 0.0)).label("max_price"),
         )
+        .select_from(Variant)
         .outerjoin(GM, GM.variant_id == Variant.id)
         .join(IL, IL.inventory_item_id == Variant.inventory_item_id)
         .join(Loc, Loc.id == IL.location_id)
@@ -232,6 +235,7 @@ def _build_variant_aggregate_query(db: Session, filters: Dict[str, Any]):
             func.max(func.coalesce(cost_expr, 0.0)).label("cost_per_item"),
             func.max(func.coalesce(Variant.price, 0.0)).label("price"),
         )
+        .select_from(Variant)
         .outerjoin(GM, GM.variant_id == Variant.id)
         .join(IL, IL.inventory_item_id == Variant.inventory_item_id)
         .join(Loc, Loc.id == IL.location_id)
@@ -322,16 +326,20 @@ def get_inventory_report(
     g_base = _build_group_aggregate_query(db, filters).subquery()
 
     # totals based on available_dedup and prices/costs
-    totals_row = db.query(
-        func.coalesce(func.sum(g_base.c.available), 0).label("available_sum"),
-        func.coalesce(func.sum(g_base.c.committed_total), 0).label("committed_sum"),
-        func.coalesce(
-            func.sum(g_base.c.available * func.coalesce(g_base.c.max_cost, 0.0)), 0.0
-        ).label("inventory_value"),
-        func.coalesce(
-            func.sum(g_base.c.available * func.coalesce(g_base.c.max_price, 0.0)), 0.0
-        ).label("retail_value"),
-    ).one()
+    totals_row = (
+        db.query(
+            func.coalesce(func.sum(g_base.c.available), 0).label("available_sum"),
+            func.coalesce(func.sum(g_base.c.committed_total), 0).label("committed_sum"),
+            func.coalesce(
+                func.sum(g_base.c.available * func.coalesce(g_base.c.max_cost, 0.0)), 0.0
+            ).label("inventory_value"),
+            func.coalesce(
+                func.sum(g_base.c.available * func.coalesce(g_base.c.max_price, 0.0)), 0.0
+            ).label("retail_value"),
+        )
+        .select_from(g_base)
+        .one()
+    )
 
     totals = {
         # keep key name 'on_hand' for compatibility with the UI top metric
@@ -438,9 +446,9 @@ def get_inventory_report(
                 "store_name": rec.primary_store,          # legacy
                 "sku": rec.sku,
                 "barcode": rec.barcode,
-                "available": int(rec.available or 0),
-                "committed": int(rec.committed_total or 0),
-                "total_stock": int(rec.total_stock or 0),
+                "available": int(rec.available or 0),                     # renamed in UI
+                "committed": int(rec.committed_total or 0),               # total across stores
+                "total_stock": int(rec.total_stock or 0),                 # available + committed
                 "cost_per_item": float(rec.max_cost or 0.0),
                 "cost": float(rec.max_cost or 0.0),
                 "price": float(rec.max_price or 0.0),
@@ -468,6 +476,7 @@ def get_inventory_report(
                     Product.status.label("status"),
                     Variant.is_primary_variant.label("is_primary"),
                 )
+                .select_from(Variant)
                 .outerjoin(GM, GM.variant_id == Variant.id)
                 .join(Store, Store.id == Variant.store_id)
                 .join(Product, Product.id == Variant.product_id)
