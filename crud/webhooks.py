@@ -46,7 +46,7 @@ def update_order_fulfillment_status_from_hold(db: Session, order_id: int, fulfil
             ).first()
             
             if not fulfillment:
-                # --- FIX: Extract the numeric ID from the GID for the primary key ---
+                # FIX: Extract the numeric ID from the GID for the primary key
                 fulfillment_order_id = gid_to_id(fulfillment_order_gid)
                 if fulfillment_order_id:
                     fulfillment = models.Fulfillment(

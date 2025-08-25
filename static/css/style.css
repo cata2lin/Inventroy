@@ -219,7 +219,7 @@ th[data-sort-by].desc::after { content: '▼'; }
 .status-pending, .status-partially_fulfilled, .status-draft { color: #f57c00; }
 .status-voided, .status-cancelled, .status-archived { color: #546e7a; }
 .status-refunded, .status-unfulfilled { color: #d32f2f; }
-/* ADDED: New color for on_hold status */
+/* FIX: Added new color for on_hold status */
 .status-on_hold { color: #0d6efd; }
 .pagination-controls { grid-template-columns: 1fr auto 1fr; }
 /* --- New Sidebar Layout Styles --- */
