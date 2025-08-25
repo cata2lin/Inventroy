@@ -15,12 +15,13 @@ import models
 from crud import store as crud_store
 from crud import product as crud_product
 from crud import order as crud_order
-# FIX: Import the webhooks crud module to call its functions
 from crud import webhooks as crud_webhook
 
 # Services
-from services import commited_projector as committed_projector  # note single 't' in filename
+from services import commited_projector as committed_projector
 from services import inventory_sync_service
+# FIX: Import the gid_to_id helper function to parse GraphQL IDs
+from shopify_service import gid_to_id
 
 try:
     import schemas  # optional
@@ -36,7 +37,7 @@ router = APIRouter(
 
 def _verify_hmac(secret: str, raw_body: bytes, header_hmac: Optional[str]) -> None:
     if not header_hmac:
-        raise HTTPException(status_code=400, detail="Missing X-Shopify-Hmac-SHA265 header.")
+        raise HTTPException(status_code=400, detail="Missing X-Shopify-Hmac-SHA256 header.")
     digest = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).digest()
     computed = base64.b64encode(digest).decode()
     if not hmac.compare_digest(computed, header_hmac):
@@ -130,18 +131,24 @@ async def receive_webhook(
         print(f"[refunds][error] store={store_id} topic={topic}: {e}")
 
     # --- handle HOLDS (order or fulfillment order hold/release) ---
-    # FIX: This block is rewritten to correctly handle the hold webhook payload
+    # FIX: This block is rewritten to correctly parse the hold webhook payload
     try:
         if topic in {"fulfillment_orders/placed_on_hold", "fulfillment_orders/hold_released"}:
             is_on_hold = topic == "fulfillment_orders/placed_on_hold"
             status = "ON_HOLD" if is_on_hold else "RELEASED"
             
-            fulfillment_order_data = payload.get('fulfillment_order', {})
-            order_id = fulfillment_order_data.get('order_id')
-            fulfillment_order_gid = fulfillment_order_data.get('id')
-            reason = None
-            if is_on_hold and 'hold' in fulfillment_order_data:
-                reason = fulfillment_order_data['hold'].get('reason')
+            # The payload for these webhooks is flat. We get the IDs from the top level.
+            order_id_from_payload = payload.get('order_id')
+            fulfillment_order_gid = payload.get('id') or payload.get('fulfillment_order_id')
+
+            # The order_id might be a GID or a legacy ID. We need the integer ID.
+            order_id = None
+            if isinstance(order_id_from_payload, int):
+                order_id = order_id_from_payload
+            elif isinstance(order_id_from_payload, str) and 'gid://' in order_id_from_payload:
+                order_id = gid_to_id(order_id_from_payload)
+            
+            reason = payload.get('reason')
 
             if order_id and fulfillment_order_gid:
                 crud_webhook.update_order_fulfillment_status_from_hold(
