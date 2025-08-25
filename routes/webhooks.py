@@ -4,7 +4,7 @@ import base64
 import hashlib
 import hmac
 from typing import Optional, Any
-import json # Import the json library for pretty-printing
+import json
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
@@ -21,7 +21,8 @@ from crud import webhooks as crud_webhook
 # Services
 from services import commited_projector as committed_projector
 from services import inventory_sync_service
-from shopify_service import gid_to_id
+# FIX: Import ShopifyService to resolve order_id from fulfillment_order_gid
+from shopify_service import ShopifyService, gid_to_id
 
 try:
     import schemas  # optional
@@ -78,16 +79,6 @@ async def receive_webhook(
     except Exception:
         payload = {}
 
-    # --- START: Diagnostic Logging ---
-    # This is the crucial part. It will print the exact payload to your console.
-    if topic in {"fulfillment_orders/placed_on_hold", "fulfillment_orders/hold_released"}:
-        print("\n--- RAW WEBHOOK PAYLOAD ---")
-        print(f"Topic: {topic}")
-        print(json.dumps(payload, indent=2))
-        print("--- END RAW WEBHOOK PAYLOAD ---\n")
-    # --- END: Diagnostic Logging ---
-
-
     # Always ack quickly; heavy work must never block Shopify
     response = Response(status_code=200, content="ok")
 
@@ -141,32 +132,36 @@ async def receive_webhook(
         print(f"[refunds][error] store={store_id} topic={topic}: {e}")
 
     # --- handle HOLDS (order or fulfillment order hold/release) ---
+    # FIX: This block is rewritten to correctly parse the hold webhook payload
     try:
         if topic in {"fulfillment_orders/placed_on_hold", "fulfillment_orders/hold_released"}:
             is_on_hold = topic == "fulfillment_orders/placed_on_hold"
             status = "ON_HOLD" if is_on_hold else "RELEASED"
             
-            order_id_from_payload = payload.get('order_id')
-            fulfillment_order_gid = payload.get('id') or payload.get('fulfillment_order_id')
-
-            order_id = None
-            if isinstance(order_id_from_payload, int):
-                order_id = order_id_from_payload
-            elif isinstance(order_id_from_payload, str) and 'gid://' in order_id_from_payload:
-                order_id = gid_to_id(order_id_from_payload)
+            fulfillment_order_data = payload.get('fulfillment_order', {})
+            fulfillment_order_gid = fulfillment_order_data.get('id')
             
-            reason = payload.get('reason')
+            reason = None
+            if is_on_hold and 'created_fulfillment_hold' in payload:
+                reason = payload['created_fulfillment_hold'].get('reason')
 
-            if order_id and fulfillment_order_gid:
-                crud_webhook.update_order_fulfillment_status_from_hold(
-                    db,
-                    order_id=order_id,
-                    fulfillment_order_gid=fulfillment_order_gid,
-                    status=status,
-                    reason=reason
-                )
+            if fulfillment_order_gid:
+                # Use ShopifyService to get the order_id from the fulfillment_order_gid
+                service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+                order_id = service.get_order_id_from_fulfillment_order_gid(fulfillment_order_gid)
+
+                if order_id:
+                    crud_webhook.update_order_fulfillment_status_from_hold(
+                        db,
+                        order_id=order_id,
+                        fulfillment_order_gid=fulfillment_order_gid,
+                        status=status,
+                        reason=reason
+                    )
+                else:
+                    print(f"[holds][error] Could not resolve order_id for fulfillment_order_gid: {fulfillment_order_gid}")
             else:
-                print(f"[holds][error] Could not extract order_id or fulfillment_order_gid from payload for topic: {topic}")
+                print(f"[holds][error] Could not extract fulfillment_order_gid from payload for topic: {topic}")
 
     except Exception as e:
         db.rollback()
@@ -181,7 +176,7 @@ async def receive_webhook(
             if inventory_item_id and location_id and event_id:
                 background_tasks.add_task(
                     inventory_sync_service.process_inventory_update_event,
-                    db_factory=SessionLocal,
+                    db_factory=SessionLocal,       # pass factory, not live session
                     shop_domain=store.shopify_url,
                     event_id=event_id,
                     inventory_item_id=int(inventory_item_id),
