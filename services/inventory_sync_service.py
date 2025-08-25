@@ -32,7 +32,7 @@ def _ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
 
 # ---------------- locking ----------------
 def _acquire_lock(db: Session, group_id: str) -> bool:
-    # Use pg advisory locks on hashtext(group_id) to serialize group writes
+    # pg advisory locks on hashtext(group_id) serialize writes per group
     q = text("SELECT pg_try_advisory_xact_lock(hashtext(:k))")
     row = db.execute(q, {"k": group_id}).scalar()
     return bool(row)
@@ -48,11 +48,9 @@ def _is_recent_echo(db: Session, variant_id: int, current_available: int, window
     )
     return bool(row and int(row.target_available) == int(current_available))
 
+# ---------------- location helpers (no commits inside) ----------------
 def _pick_best_location(level_rows: List[dict]) -> Optional[int]:
-    """
-    Choose a good sync location when a store has multiple.
-    Strategy: pick the location with the largest (available + on_hand).
-    """
+    """Choose a sync location: the one with the largest (available + on_hand)."""
     best = None
     best_score = None
     for r in level_rows:
@@ -66,18 +64,12 @@ def _pick_best_location(level_rows: List[dict]) -> Optional[int]:
     return best
 
 def _autolearn_store_location(db: Session, store: models.Store, inventory_item_id: int) -> Optional[int]:
-    """
-    Auto-detect a store's sync location. IMPORTANT: does NOT commit.
-    Caller decides when to commit.
-    """
+    """Auto-detect a store's sync location. IMPORTANT: does NOT commit."""
     svc = ShopifyService(store_url=store.shopify_url, token=store.api_token)
     rows = svc.get_inventory_levels_for_items([inventory_item_id]) or []
     if not rows:
         return None
-    # uniq by location
-    locs = {}
-    for r in rows:
-        locs[int(r["location_id"])] = r
+    locs = {int(r["location_id"]): r for r in rows}
     chosen = next(iter(locs.keys())) if len(locs) == 1 else _pick_best_location(list(locs.values()))
     if chosen:
         store.sync_location_id = int(chosen)
@@ -90,9 +82,7 @@ def _refresh_member_snapshot(
     inventory_item_id: int,
     location_id: int,
 ) -> Optional[models.InventoryLevel]:
-    """
-    Read live from Shopify and upsert InventoryLevel row. IMPORTANT: does NOT commit.
-    """
+    """Read live from Shopify and upsert InventoryLevel row. IMPORTANT: does NOT commit."""
     svc = ShopifyService(store_url=store_url, token=token)
     rows = svc.get_inventory_levels_for_items([inventory_item_id]) or []
     lvl = next(
@@ -129,15 +119,11 @@ def _refresh_member_snapshot(
     return snap
 
 def _get_fresh_snap(db: Session, member: models.ProductVariant) -> Optional[models.InventoryLevel]:
-    """
-    Ensure we have a reasonably fresh snapshot for member at its store's sync_location.
-    IMPORTANT: never commits — caller commits after the plan.
-    """
+    """Ensure a fresh-enough snapshot at the store's sync location. No commits here."""
     m_store = member.product.store
     if not m_store.enabled:
         return None
 
-    # Auto-learn per-store sync location if missing (no commit here)
     if not m_store.sync_location_id:
         _autolearn_store_location(db, m_store, member.inventory_item_id)
         if not m_store.sync_location_id:
@@ -148,25 +134,33 @@ def _get_fresh_snap(db: Session, member: models.ProductVariant) -> Optional[mode
         None,
     )
     last_ts = _ensure_aware(m_snap.last_fetched_at) if m_snap else None
-
-    # Refresh if missing or stale
     if not m_snap or not last_ts or (_utcnow() - last_ts) > timedelta(minutes=10):
-        snap_live = _refresh_member_snapshot(
+        return _refresh_member_snapshot(
             db,
             store_url=m_store.shopify_url,
             token=m_store.api_token,
             inventory_item_id=member.inventory_item_id,
             location_id=m_store.sync_location_id,
-        )
-        return snap_live or m_snap
+        ) or m_snap
     return m_snap
 
 def _compute_bootstrap_pool_from_snaps(snaps: List[models.InventoryLevel]) -> int:
-    """
-    Conservative pool = MIN(available across stores); ignores negatives.
-    """
+    """Conservative pool = MIN(available across stores); ignores negatives."""
     vals = [max(0, int(s.available or 0)) for s in snaps if s is not None]
     return min(vals) if vals else 0
+
+def _begin_ctx(db: Session):
+    """
+    Open a transaction context that works even if a transaction is already active.
+    Uses a SAVEPOINT via begin_nested() when a transaction is already begun.
+    """
+    try:
+        if hasattr(db, "in_transaction") and db.in_transaction():
+            return db.begin_nested()
+    except Exception:
+        # best-effort fallback
+        pass
+    return db.begin()
 
 # ---------------- main entry ----------------
 def process_inventory_update_event(
@@ -256,7 +250,7 @@ def process_inventory_update_event(
         stores_changed_sync_loc: List[models.Store] = []
 
         # -------- LOCKED SECTION (no db.commit inside) --------
-        with db.begin():  # opens a transaction; closes on exit
+        with _begin_ctx(db):  # supports nested tx if one is already active
             if not _acquire_lock(db, group.id):
                 print(f"[lock-miss] group={group.id}")
                 return
@@ -274,7 +268,7 @@ def process_inventory_update_event(
             last_available = int(snap_origin.available) if snap_origin and snap_origin.available is not None else 0
             delta_at_origin = current_available - last_available
 
-            # Update/insert origin snapshot (no commit here)
+            # Update/insert origin snapshot
             now = _utcnow()
             if snap_origin:
                 snap_origin.available = current_available
@@ -291,7 +285,7 @@ def process_inventory_update_event(
                     )
                 )
 
-            # Load group members (will use snapshots and/or live reads; no commits here)
+            # Load group members
             members = (
                 db.query(models.ProductVariant)
                 .options(
@@ -390,8 +384,8 @@ def process_inventory_update_event(
                     )
                 )
 
-                # Refresh live values and persist both available and on_hand (no nested tx)
-                snap_live = _refresh_member_snapshot(
+                # Refresh live values and persist both available and on_hand
+                _ = _refresh_member_snapshot(
                     db,
                     store_url=m_store.shopify_url,
                     token=m_store.api_token,
