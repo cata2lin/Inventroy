@@ -496,10 +496,13 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
                 if product and product.legacy_resource_id not in processed_product_ids:
                     processed_product_ids.add(product.legacy_resource_id)
                     
-                    # FIX: Safely access category name from dictionary
+                    # Safely access category name from dictionary or object
                     category_name = None
-                    if product.category and isinstance(product.category, dict):
-                        category_name = product.category.get('name')
+                    if product.category:
+                        if isinstance(product.category, dict):
+                            category_name = product.category.get('name')
+                        else:
+                            category_name = getattr(product.category, 'name', None)
 
                     all_products.append({
                         "id": product.legacy_resource_id,

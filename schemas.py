@@ -137,12 +137,14 @@ class InventoryItemModel(APIBase):
 class ProductModel(APIBase):
     legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
     title: Optional[str] = None
-    # FIX: Added body_html with alias to handle API response
     body_html: Optional[str] = Field(None, alias="bodyHtml")
     product_type: Optional[str] = Field(None, alias="productType")
     status: Optional[str] = None
     created_at: Optional[datetime] = Field(None, alias="createdAt")
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+    # FIX: Added published_at with its alias to handle the API response
+    published_at: Optional[datetime] = Field(None, alias="publishedAt")
+    category: Optional[Dict[str, Any]] = None # Shopify returns this as an object
 
 
 class VariantModel(APIBase):
