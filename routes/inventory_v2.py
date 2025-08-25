@@ -1,8 +1,8 @@
 # routes/inventory_v2.py
-
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, literal, func
 
@@ -26,9 +26,7 @@ router = APIRouter(prefix="/api/v2/inventory", tags=["inventory_v2"])
 
 # ---------- Filters ----------
 @router.get("/filters/")
-def get_filters(
-    db: Session = Depends(get_db),
-):
+def get_filters(db: Session = Depends(get_db)):
     """
     Returns filter data for the Inventory Report UI.
     If a legacy helper exists in crud.inventory_v2, reuse it; otherwise compute here.
@@ -60,11 +58,7 @@ def get_filters(
         .all()
     ]
 
-    return {
-        "stores": stores,
-        "types": product_types,
-        "statuses": statuses,
-    }
+    return {"stores": stores, "types": product_types, "statuses": statuses}
 
 
 def _parse_int_list_csv(value: Optional[str]) -> Optional[List[int]]:
@@ -114,17 +108,11 @@ def get_report(
 ):
     """
     Inventory report data source for the Inventory Report UI.
-
-    - view='grouped': one row per barcode group (deduped across stores)
-    - view='individual': one row per variant (summing its own per-location levels)
-    - totals ALWAYS come from grouped-deduped logic so we don't triple-count
-      products that exist in multiple stores.
+    Totals are always computed on grouped-deduped data.
     """
-    # Simple validation for view/totals_mode
     v = (view or "").lower()
     if v not in ("individual", "grouped"):
         raise HTTPException(status_code=400, detail="view must be 'individual' or 'grouped'")
-
     if (totals_mode or "").lower() != "grouped":
         raise HTTPException(status_code=400, detail="totals_mode must be 'grouped'")
 
@@ -163,7 +151,6 @@ def get_report(
         totals_mode="grouped",
     )
 
-    # Ensure arrays are always present (avoids `.map` on undefined)
     if rows is None:
         rows = []
 
@@ -176,53 +163,34 @@ def get_report(
     }
 
 
-# ---------- Product Details (used by the modal) ----------
+# ---------- Product Details ----------
 @router.get("/product-details/{barcode}")
-def get_product_details(
-    barcode: str,
-    db: Session = Depends(get_db),
-):
+def get_product_details(barcode: str, db: Session = Depends(get_db)):
     """
-    Return:
-      {
-        committed_orders: [{ id, name, created_at, quantity, fulfillment_status, shopify_url }],
-        all_orders: [{ id, name, created_at, quantity, financial_status, fulfillment_status }],
-        stock_movements: [{ created_at, product_sku, change_quantity, new_quantity, reason, source_info }]
-      }
+    Returns committed orders, all orders (last 100), and stock movements for the group identified by `barcode`.
     """
     if not barcode:
         raise HTTPException(status_code=400, detail="barcode is required")
 
     Variant = models.ProductVariant
     GM = models.GroupMembership
-    Product = models.Product
-    Store = models.Store
     Order = models.Order
     LineItem = models.LineItem
-    StockMovement = models.StockMovement
+    Store = models.Store
 
-    # Grouping key (same as report)
+    # Group key
     group_key = func.coalesce(GM.group_id, Variant.barcode_normalized, Variant.barcode)
 
     # Variants in this group (across stores)
     variants_q = (
-        db.query(
-            Variant.id.label("variant_id"),
-            Variant.sku.label("sku"),
-            Variant.store_id.label("store_id"),
-        )
+        db.query(Variant.id.label("variant_id"), Variant.sku.label("sku"), Variant.store_id.label("store_id"))
         .outerjoin(GM, GM.variant_id == Variant.id)
         .filter(group_key == barcode)
         .all()
     )
     if not variants_q:
-        # try to match by normalized barcode or exact barcode directly
         variants_q = (
-            db.query(
-                Variant.id.label("variant_id"),
-                Variant.sku.label("sku"),
-                Variant.store_id.label("store_id"),
-            )
+            db.query(Variant.id.label("variant_id"), Variant.sku.label("sku"), Variant.store_id.label("store_id"))
             .filter(or_(Variant.barcode == barcode, Variant.barcode_normalized == barcode))
             .all()
         )
@@ -232,7 +200,6 @@ def get_product_details(
     variant_ids = [int(v.variant_id) for v in variants_q]
     skus = [v.sku for v in variants_q if v.sku]
 
-    # Base order/line join
     base_ol = (
         db.query(
             Order.id.label("order_id"),
@@ -248,12 +215,11 @@ def get_product_details(
         .filter(LineItem.variant_id.in_(variant_ids))
     )
 
-    # Committed orders: open/unfulfilled, not cancelled
-    committed = (
-        base_ol
-        .filter(
+    # committed = open/unfulfilled
+    committed_q = (
+        base_ol.filter(
             Order.cancelled_at.is_(None),
-            or_(Order.fulfillment_status.is_(None), Order.fulfillment_status.in_(["partial", "unfulfilled"]))
+            or_(Order.fulfillment_status.is_(None), Order.fulfillment_status.in_(["partial", "unfulfilled"])),
         )
         .order_by(Order.created_at.desc())
         .limit(100)
@@ -268,16 +234,10 @@ def get_product_details(
             "fulfillment_status": r.fulfillment_status,
             "shopify_url": r.shopify_url,
         }
-        for r in committed
+        for r in committed_q
     ]
 
-    # All orders containing this product (last 100)
-    all_orders_q = (
-        base_ol
-        .order_by(Order.created_at.desc())
-        .limit(100)
-        .all()
-    )
+    all_orders_q = base_ol.order_by(Order.created_at.desc()).limit(100).all()
     all_orders = [
         {
             "id": int(r.order_id),
@@ -290,9 +250,10 @@ def get_product_details(
         for r in all_orders_q
     ]
 
-    # Stock movements for all SKUs in the group (last 100)
+    # Stock movements (optional model)
     stock_movements: List[Dict[str, Any]] = []
-    if skus:
+    StockMovement = getattr(models, "StockMovement", None)
+    if StockMovement and skus:
         sm_q = (
             db.query(
                 StockMovement.created_at,
@@ -319,19 +280,60 @@ def get_product_details(
             for r in sm_q
         ]
 
-    return {
-        "committed_orders": committed_orders,
-        "all_orders": all_orders,
-        "stock_movements": stock_movements,
-    }
+    return {"committed_orders": committed_orders, "all_orders": all_orders, "stock_movements": stock_movements}
+
+
+# ---------- Make Primary ----------
+class MakePrimaryPayload(BaseModel):
+    barcode: str
+    variant_id: int
+
+
+@router.post("/set-primary")
+@router.post("/make-primary")  # alias for compatibility
+def make_primary_variant(payload: MakePrimaryPayload, db: Session = Depends(get_db)):
+    """
+    Sets `is_primary_variant=True` on the selected variant, and False on all other
+    variants in the same barcode group (by GroupMembership/group key).
+    """
+    Variant = models.ProductVariant
+    GM = models.GroupMembership
+
+    # Find selected variant
+    variant = db.query(Variant).filter(Variant.id == payload.variant_id).first()
+    if not variant:
+        raise HTTPException(status_code=404, detail="Variant not found")
+
+    # Determine group key from payload.barcode OR existing membership
+    group_key = db.query(
+        func.coalesce(GM.group_id, Variant.barcode_normalized, Variant.barcode)
+    ).outerjoin(GM, GM.variant_id == Variant.id).filter(Variant.id == variant.id).scalar()
+
+    if not group_key:
+        # fallback to provided barcode
+        group_key = payload.barcode
+
+    # All variants in this group
+    group_variants = (
+        db.query(Variant)
+        .outerjoin(GM, GM.variant_id == Variant.id)
+        .filter(func.coalesce(GM.group_id, Variant.barcode_normalized, Variant.barcode) == group_key)
+        .all()
+    )
+    if not group_variants:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    # Update flags
+    for v in group_variants:
+        v.is_primary_variant = (v.id == variant.id)
+
+    db.commit()
+    return {"ok": True, "group": group_key, "primary_variant_id": variant.id}
 
 
 # ---------- Details (legacy compatibility) ----------
 @router.get("/details/")
-def get_details(
-    barcode: str = Query(..., description="Exact barcode or normalized barcode"),
-    db: Session = Depends(get_db),
-):
+def get_details(barcode: str = Query(..., description="Exact barcode or normalized barcode"), db: Session = Depends(get_db)):
     """
     Backward-compatible endpoint. Delegates to /product-details/{barcode}.
     """

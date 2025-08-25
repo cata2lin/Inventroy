@@ -1,5 +1,4 @@
 # crud/inventory_report.py
-
 from typing import Any, Dict, List, Optional, Tuple, DefaultDict
 from collections import defaultdict
 
@@ -245,7 +244,7 @@ def _build_variant_aggregate_query(db: Session, filters: Dict[str, Any]):
 
 def _map_sort(sort_by: str, sort_order: str, columns: Dict[str, Any]):
     """
-    Return a SQLAlchemy sort expression without ever evaluating a SQL clause in boolean context.
+    Return a SQLAlchemy sort expression without evaluating a SQL clause in boolean context.
     Also map common aliases between grouped/individual views.
     """
     desc = (sort_order or "").lower() == "desc"
@@ -255,7 +254,7 @@ def _map_sort(sort_by: str, sort_order: str, columns: Dict[str, Any]):
     if key == "cost":
         key = "cost_per_item"
 
-    # Build candidate keys (bridge grouped vs individual naming)
+    # Candidates bridge grouped vs individual naming
     candidates: List[str] = [key]
     if key == "price" and "price" not in columns and "max_price" in columns:
         candidates.append("max_price")
@@ -264,7 +263,6 @@ def _map_sort(sort_by: str, sort_order: str, columns: Dict[str, Any]):
             if alt not in candidates:
                 candidates.append(alt)
 
-    # Pick the first available column
     col = None
     for c in candidates:
         if c in columns:
@@ -273,7 +271,6 @@ def _map_sort(sort_by: str, sort_order: str, columns: Dict[str, Any]):
     if col is None:
         col = columns.get("on_hand")
     if col is None:
-        # deterministic fallback (first value)
         col = next(iter(columns.values()))
 
     return col.desc() if desc else col.asc()
@@ -302,8 +299,8 @@ def get_inventory_report(
       - view='grouped'    -> one row per barcode group (deduped across stores)
       - view='individual' -> one row per variant (aggregated across its locations)
     totals:
-      - ALWAYS computed from the grouped-deduped subquery so a product present
-        in multiple stores is *not* triple-counted.
+      - ALWAYS from the grouped-deduped subquery so products in multiple stores
+        are not triple-counted.
     """
     filters: Dict[str, Any] = {
         "search": search,
@@ -312,7 +309,7 @@ def get_inventory_report(
         "product_types": product_types,
     }
 
-    # ---------- Totals (DEDUPED by group) ----------
+    # Totals (deduped)
     g_subq = _build_group_aggregate_query(db, filters).subquery()
 
     totals_row = db.query(
@@ -334,7 +331,6 @@ def get_inventory_report(
         "mode": "grouped",
     }
 
-    # ---------- Rows (VIEW) ----------
     rows: List[Dict[str, Any]] = []
     total_count = 0
 
@@ -357,7 +353,6 @@ def get_inventory_report(
             "retail_value": g_subq.c.on_hand * func.coalesce(g_subq.c.max_price, 0.0),
         }
 
-        # count groups
         total_count = (
             db.query(func.count(literal(1))).select_from(g_subq).scalar() or 0
         )
@@ -399,25 +394,28 @@ def get_inventory_report(
             rows_map[gid] = {
                 "group_id": rec.group_id,
                 "primary_title": rec.product_title,
-                "product_title": rec.product_title,
+                "product_title": rec.product_title,      # legacy-friendly
                 "variant_title": rec.variant_title,
                 "status": rec.status,
                 "product_type": rec.product_type,
                 "primary_image_url": rec.primary_image_url,
-                "image_url": rec.primary_image_url,
+                "image_url": rec.primary_image_url,      # legacy-friendly
                 "primary_store": rec.primary_store,
-                "store_name": rec.primary_store,
+                "store_name": rec.primary_store,         # legacy-friendly
                 "sku": rec.sku,
                 "barcode": rec.barcode,
                 "on_hand": int(rec.on_hand or 0),
                 "available": int(rec.available or 0),
                 "committed": committed,
                 "cost_per_item": float(rec.max_cost or 0.0),
-                "cost": float(rec.max_cost or 0.0),  # alias for UI
+                "cost": float(rec.max_cost or 0.0),      # alias for UI
                 "price": float(rec.max_price or 0.0),
                 "inventory_value": float(rec.inventory_value or 0.0),
                 "retail_value": float(rec.retail_value or 0.0),
-                "variants_json": [],  # filled below
+                # ensure these exist so the UI never does `.map` on undefined
+                "variants_json": [],
+                "variants": [],
+                "members": [],
             }
 
         # attach member variants (for the expandable list)
@@ -458,7 +456,10 @@ def get_inventory_report(
                 )
             for gid in group_ids:
                 if gid in rows_map:
-                    rows_map[gid]["variants_json"] = bucket.get(gid, [])
+                    members = bucket.get(gid, [])
+                    rows_map[gid]["variants_json"] = members
+                    rows_map[gid]["variants"] = members
+                    rows_map[gid]["members"] = members
 
         rows = list(rows_map.values())
 
@@ -484,7 +485,6 @@ def get_inventory_report(
             "retail_value": v_subq.c.on_hand * v_subq.c.price,
         }
 
-        # count variants
         total_count = (
             db.query(func.count(literal(1))).select_from(v_subq).scalar() or 0
         )
