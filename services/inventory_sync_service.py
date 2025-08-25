@@ -15,41 +15,29 @@ try:
 except Exception:
     from shopify_service import ShopifyService  # type: ignore
 
-try:
-    from services.product_service import ProductService
-except Exception:
-    from product_service import ProductService  # type: ignore
+# ---------------- config-ish constants ----------------
+ECHO_WINDOW_SECONDS = 60
+BYPASS_ON_HAND_CLAMP_FOR_FIRST_BOOTSTRAP = True
 
-
-# ---------------- time helpers (UTC-aware) ----------------
+# ---------------- time helpers ----------------
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(tz=timezone.utc)
 
 def _ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
     if dt is None:
         return None
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
-
-# ---------------- constants / policy ----------------
-STALE_TTL_SECONDS = 10
-ECHO_WINDOW_SECONDS = 60
-
-BOOTSTRAP_IGNORE_ZERO_IF_MAJORITY_POSITIVE = True
-BYPASS_ON_HAND_CLAMP_FOR_FIRST_BOOTSTRAP = True
-
-# ---------------- PG advisory lock ----------------
-LOCK_SQL = text("SELECT pg_try_advisory_xact_lock(hashtext(:k))")
-
+# ---------------- locking ----------------
 def _acquire_lock(db: Session, group_id: str) -> bool:
-    try:
-        return bool(db.execute(LOCK_SQL, {"k": group_id}).scalar())
-    except Exception as e:
-        print(f"[lock] failed group={group_id}: {e}")
-        return False
+    # Use pg advisory locks on hashtext(group_id) to serialize group writes
+    q = text("SELECT pg_try_advisory_xact_lock(hashtext(:k))")
+    row = db.execute(q, {"k": group_id}).scalar()
+    return bool(row)
 
-
-# ---------------- helpers ----------------
+# ---------------- echo suppression ----------------
 def _is_recent_echo(db: Session, variant_id: int, current_available: int, window_s: int = ECHO_WINDOW_SECONDS) -> bool:
     since = _utcnow() - timedelta(seconds=window_s)
     row = (
@@ -84,16 +72,12 @@ def _pick_best_location(level_rows: List[dict]) -> Optional[int]:
             best_score = score
     return best
 
-def _autolearn_store_location(db: Session, store, inventory_item_id: int) -> Optional[int]:
-    """
-    If a store doesn't have sync_location_id, probe Shopify and set it.
-    """
+def _autolearn_store_location(db: Session, store: models.Store, inventory_item_id: int) -> Optional[int]:
     svc = ShopifyService(store_url=store.shopify_url, token=store.api_token)
     rows = svc.get_inventory_levels_for_items([inventory_item_id]) or []
-    rows = [r for r in rows if int(r["id"]) == int(inventory_item_id)]
     if not rows:
         return None
-    # If only one location exists, use it; otherwise pick best.
+    # uniq by location
     locs = {}
     for r in rows:
         locs[int(r["location_id"])] = r
@@ -169,44 +153,32 @@ def _get_fresh_snap(db: Session, member: models.ProductVariant) -> Optional[mode
         None,
     )
     last_ts = _ensure_aware(m_snap.last_fetched_at) if m_snap else None
-    stale = m_snap is None or last_ts is None or (_utcnow() - last_ts).total_seconds() > STALE_TTL_SECONDS
-    if stale:
-        m_snap = _refresh_member_snapshot(
+
+    # Refresh if missing or stale
+    if not m_snap or not last_ts or (_utcnow() - last_ts) > timedelta(minutes=10):
+        snap_live = _refresh_member_snapshot(
             db,
             store_url=m_store.shopify_url,
             token=m_store.api_token,
             inventory_item_id=member.inventory_item_id,
             location_id=m_store.sync_location_id,
         )
+        if snap_live:
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+        return snap_live or m_snap
     return m_snap
 
 def _compute_bootstrap_pool_from_snaps(snaps: List[models.InventoryLevel]) -> int:
-    vals = [int(s.available or 0) for s in snaps]
-    if not vals:
-        return 0
-    if BOOTSTRAP_IGNORE_ZERO_IF_MAJORITY_POSITIVE:
-        positives = [v for v in vals if v > 0]
-        zeros = [v for v in vals if v == 0]
-        if positives and len(zeros) >= len(vals) // 2:
-            return min(positives)
-    return min(vals)
+    """
+    Conservative pool = MIN(available across stores); ignores negatives.
+    """
+    vals = [max(0, int(s.available or 0)) for s in snaps if s is not None]
+    return min(vals) if vals else 0
 
-def _write_available_delta(
-    store_url: str,
-    token: str,
-    inventory_item_id: int,
-    location_id: int,
-    target_available: int,
-    current_available: int,
-):
-    delta = int(target_available) - int(current_available)
-    if delta == 0:
-        return
-    ps = ProductService(store_url=store_url, token=token)
-    inv_gid = f"gid://shopify/InventoryItem/{inventory_item_id}"
-    loc_gid = f"gid://shopify/Location/{location_id}"
-    ps.adjust_inventory_quantity(inv_gid, loc_gid, delta)
-
+# ---------------- main entry ----------------
 def process_inventory_update_event(
     shop_domain: str,
     event_id: str,
@@ -251,14 +223,16 @@ def process_inventory_update_event(
             print(f"[skip] store disabled: {store.name}")
             return
 
-        # Origin store: ensure sync location
+        # Origin store: ensure sync location if missing, but process ANY location event.
         if not store.sync_location_id:
             store.sync_location_id = int(location_id)
             db.commit()
             print(f"[init] store '{store.name}' sync_location_id set to {store.sync_location_id}")
-        elif int(location_id) != int(store.sync_location_id):
-            print(f"[skip] event not for store's sync location (event={location_id}, sync={store.sync_location_id})")
-            return
+        else:
+            # If event came from a different location, we still process it as a source of truth
+            # for this item. We'll compute delta against that location's last snapshot and fan it out.
+            if int(location_id) != int(store.sync_location_id):
+                print(f"[info] event at non-sync location (event={location_id}, sync={store.sync_location_id}); processing anyway")
 
         if getattr(variant, "tracked", True) is False:
             print("[skip] variant untracked")
@@ -274,7 +248,7 @@ def process_inventory_update_event(
         origin_lvl = next(
             (it for it in origin_rows
              if int(it["id"]) == int(inventory_item_id)
-             and int(it["location_id"]) == int(store.sync_location_id)),
+             and int(it["location_id"]) == int(location_id)),
             None,
         )
         if not origin_lvl:
@@ -306,7 +280,7 @@ def process_inventory_update_event(
                 db.query(models.InventoryLevel)
                 .filter(
                     models.InventoryLevel.inventory_item_id == variant.inventory_item_id,
-                    models.InventoryLevel.location_id == store.sync_location_id,
+                    models.InventoryLevel.location_id == location_id,
                 )
                 .with_for_update(read=True)
                 .first()
@@ -324,7 +298,7 @@ def process_inventory_update_event(
                 db.add(
                     models.InventoryLevel(
                         inventory_item_id=variant.inventory_item_id,
-                        location_id=store.sync_location_id,
+                        location_id=location_id,
                         available=current_available,
                         on_hand=current_on_hand,
                         last_fetched_at=now,
@@ -359,13 +333,13 @@ def process_inventory_update_event(
                     fresh_snaps.append(m_snap)
 
             # Bootstrap or delta advance pool
-            if first_bootstrap:
+            if first_bootstrap or (snap_origin is None):
                 group.pool_available = _compute_bootstrap_pool_from_snaps(fresh_snaps)
                 group.last_reconciled_at = _utcnow()
             else:
                 group.pool_available = max(0, int(group.pool_available) + int(delta_at_origin))
 
-            # Plan store targets (clamped by on_hand unless bootstrap bypass)
+            # Plan store targets (clamped by on_hand unless bootstrap bypass or continue_selling)
             for member in members:
                 m_store = member.product.store
                 if not m_store.enabled or not m_store.sync_location_id or getattr(member, "tracked", True) is False:
@@ -389,7 +363,7 @@ def process_inventory_update_event(
                     if positives and zeros >= len(values) // 2 and group.pool_available > 0:
                         bypass_on_hand = True
 
-                if not bypass_on_hand:
+                if not bypass_on_hand and not bool(getattr(m_store, "continue_selling", False)):
                     target = min(target, int(m_snap.on_hand or 0))
 
                 if m_current_av != target:
@@ -400,38 +374,35 @@ def process_inventory_update_event(
             tx.rollback()
             raise
 
-        # Writes outside the lock; then refresh live & persist both available/on_hand
-        correlation_id = uuid.uuid4()
-        for member, target, current_av, _bypass in planned_writes:
+        # Apply planned writes outside the lock to reduce contention
+        for member, target, current, _bypass_on_hand in planned_writes:
             m_store = member.product.store
             try:
-                # Delta write (tested path)
-                _write_available_delta(
-                    store_url=m_store.shopify_url,
-                    token=m_store.api_token,
+                delta = int(target) - int(current)
+                if delta == 0:
+                    continue
+
+                svc = ShopifyService(store_url=m_store.shopify_url, token=m_store.api_token)
+                # Use inventoryAdjustQuantities (delta) targeting the store's sync_location
+                svc.adjust_inventory_quantity(
                     inventory_item_id=member.inventory_item_id,
                     location_id=m_store.sync_location_id,
-                    target_available=int(target),
-                    current_available=int(current_av),
+                    available_delta=delta,
                 )
 
-                # Log and refresh snapshot with LIVE (available + on_hand)
-                _ensure_no_open_tx(db)
-                tx2 = db.begin()
-                try:
-                    db.add(
-                        models.PushLog(
-                            variant_id=member.id,
-                            target_available=int(target),
-                            correlation_id=str(correlation_id),
-                            write_source="sync",
-                            written_at=_utcnow(),
-                        )
+                # Log push for echo suppression
+                db.add(
+                    models.PushLog(
+                        variant_id=member.id,
+                        target_available=int(target),
+                        correlation_id=str(uuid.uuid4()),
+                        written_at=_utcnow(),
                     )
-                    tx2.commit()
+                )
+                try:
+                    db.commit()
                 except Exception:
-                    tx2.rollback()
-                    raise
+                    db.rollback()
 
                 # NEW: refresh live values and persist both available and on_hand
                 snap_live = _refresh_member_snapshot(
