@@ -15,6 +15,8 @@ import models
 from crud import store as crud_store
 from crud import product as crud_product
 from crud import order as crud_order
+# FIX: Import the webhooks crud module to call its functions
+from crud import webhooks as crud_webhook
 
 # Services
 from services import commited_projector as committed_projector  # note single 't' in filename
@@ -34,7 +36,7 @@ router = APIRouter(
 
 def _verify_hmac(secret: str, raw_body: bytes, header_hmac: Optional[str]) -> None:
     if not header_hmac:
-        raise HTTPException(status_code=400, detail="Missing X-Shopify-Hmac-SHA256 header.")
+        raise HTTPException(status_code=400, detail="Missing X-Shopify-Hmac-SHA265 header.")
     digest = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).digest()
     computed = base64.b64encode(digest).decode()
     if not hmac.compare_digest(computed, header_hmac):
@@ -128,19 +130,34 @@ async def receive_webhook(
         print(f"[refunds][error] store={store_id} topic={topic}: {e}")
 
     # --- handle HOLDS (order or fulfillment order hold/release) ---
+    # FIX: This block is rewritten to correctly handle the hold webhook payload
     try:
-        # Cover multiple possible topic spellings Shopify may use
-        if topic in {
-            "orders/hold",
-            "orders/release_hold",
-            "fulfillment_orders/hold",
-            "fulfillment_orders/release_hold",
-        }:
-            on_hold = topic.endswith("/hold")
-            crud_order.apply_order_hold_from_webhook(db, store.id, payload, on_hold=on_hold)
+        if topic in {"fulfillment_orders/placed_on_hold", "fulfillment_orders/hold_released"}:
+            is_on_hold = topic == "fulfillment_orders/placed_on_hold"
+            status = "ON_HOLD" if is_on_hold else "RELEASED"
+            
+            fulfillment_order_data = payload.get('fulfillment_order', {})
+            order_id = fulfillment_order_data.get('order_id')
+            fulfillment_order_gid = fulfillment_order_data.get('id')
+            reason = None
+            if is_on_hold and 'hold' in fulfillment_order_data:
+                reason = fulfillment_order_data['hold'].get('reason')
+
+            if order_id and fulfillment_order_gid:
+                crud_webhook.update_order_fulfillment_status_from_hold(
+                    db,
+                    order_id=order_id,
+                    fulfillment_order_gid=fulfillment_order_gid,
+                    status=status,
+                    reason=reason
+                )
+            else:
+                print(f"[holds][error] Could not extract order_id or fulfillment_order_gid from payload for topic: {topic}")
+
     except Exception as e:
         db.rollback()
         print(f"[holds][error] store={store_id} topic={topic}: {e}")
+
 
     # --- inventory_levels/update -> enqueue Golden Sync Loop ---
     if topic == "inventory_levels/update":
