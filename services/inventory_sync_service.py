@@ -257,7 +257,7 @@ def process_inventory_update_event(
                 print(f"[lock-miss] group={group.id}")
                 return
 
-            # FIX: The new "source of truth" is the inventory level from the triggering store
+            # The new "source of truth" is the inventory level from the triggering store
             target_available = current_available
 
             # Update the group's pool to reflect this new source of truth
@@ -309,7 +309,8 @@ def process_inventory_update_event(
                 inventory_item_gid = f"gid://shopify/InventoryItem/{member.inventory_item_id}"
                 location_gid = f"gid://shopify/Location/{m_store.sync_location_id}"
 
-                ps.adjust_inventory_quantity(
+                # FIX: Call the correct, non-deprecated inventory adjustment method
+                ps.inventory_adjust_quantities(
                     inventory_item_id=inventory_item_gid,
                     location_id=location_gid,
                     available_delta=delta,
