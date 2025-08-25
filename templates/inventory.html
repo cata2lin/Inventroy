@@ -1,101 +1,135 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container">
-  <header class="page-header">
+<div class="container-fluid">
+  <hgroup>
     <h1>Inventory Report</h1>
-    <p class="muted">Search, filter, and analyze inventory. Click a product image to open its details page.</p>
-  </header>
+    <h2>Detailed view of all product variants across all stores.</h2>
+  </hgroup>
 
-  <!-- Filters / Controls -->
-  <article class="controls-grid" style="row-gap: .75rem;">
-    <div class="grid" style="gap:.5rem;">
-      <div>
-        <label for="search-input">Search</label>
-        <input id="search-input" type="search" placeholder="Title, SKU, barcode, group…" autocomplete="off">
-      </div>
+  <article class="filter-container">
+    <!-- Top metrics (filled by JS) -->
+    <section id="metrics-container" class="grid"></section>
 
-      <div>
-        <label for="store-filter">Store</label>
-        <select id="store-filter">
-          <option value="">All Stores</option>
-          <!-- options populated by JS -->
-        </select>
-      </div>
+    <!-- Filters / Controls bar -->
+    <section class="controls-grid">
+      <!-- Left block: main filters (same layout/classes as before) -->
+      <input type="search" id="search-input" placeholder="Search SKU, Barcode, Name...">
+      <select id="store-filter"><option value="">All Stores</option></select>
+      <select id="type-filter"><option value="">All Types</option></select>
+      <select id="category-filter"><option value="">All Categories</option></select>
+      <select id="status-filter"><option value="">All Statuses</option></select>
 
-      <div>
-        <label for="type-filter">Product Type</label>
-        <select id="type-filter">
-          <option value="">All Types</option>
-          <!-- options populated by JS -->
-        </select>
-      </div>
+      <!-- Numeric filters your JS references (kept compact) -->
+      <input type="number" id="min-retail-input" placeholder="Min Retail" step="0.01">
+      <input type="number" id="max-retail-input" placeholder="Max Retail" step="0.01">
+      <input type="number" id="min-inv-input" placeholder="Min On Hand" step="1">
+      <input type="number" id="max-inv-input" placeholder="Max On Hand" step="1">
 
-      <div>
-        <label for="status-filter">Status</label>
-        <select id="status-filter">
-          <option value="">All Statuses</option>
-          <!-- options populated by JS -->
-        </select>
-      </div>
+      <!-- Group toggle (checkbox, as your JS expects) -->
+      <label style="display:flex;align-items:center;gap:.5rem;white-space:nowrap">
+        <input type="checkbox" id="group-toggle">
+        Group by barcode
+      </label>
 
-      <div>
-        <label for="view-toggle">View</label>
-        <select id="view-toggle">
-          <option value="individual" selected>Individual (per variant)</option>
-          <option value="grouped">Grouped (by barcode/group)</option>
-        </select>
-      </div>
-    </div>
+      <!-- Reset (wired by your JS) -->
+      <button id="reset-filters" class="secondary outline" type="button">Reset</button>
 
-    <!-- Optional numeric filters (present so JS can bind; you can style/hide if unused) -->
-    <div class="grid" style="gap:.5rem;">
-      <div>
-        <label for="min-retail-input">Min Retail Value</label>
-        <input id="min-retail-input" type="number" step="0.01" placeholder="e.g. 0">
-      </div>
-      <div>
-        <label for="max-retail-input">Max Retail Value</label>
-        <input id="max-retail-input" type="number" step="0.01" placeholder="e.g. 10000">
-      </div>
-      <div>
-        <label for="min-inv-input">Min On Hand</label>
-        <input id="min-inv-input" type="number" step="1" placeholder="e.g. 0">
-      </div>
-      <div>
-        <label for="max-inv-input">Max On Hand</label>
-        <input id="max-inv-input" type="number" step="1" placeholder="e.g. 9999">
-      </div>
-
-      <!-- Category filter placeholder (not used by API, kept to satisfy JS references) -->
-      <div style="display:none">
-        <label for="category-filter">Category</label>
-        <select id="category-filter"><option value="">All</option></select>
-      </div>
-    </div>
+      <!-- Grouped sorting controls (compact; only used in grouped view) -->
+      <span id="group-sort-controls" style="display:flex;align-items:center;gap:.5rem; margin-left:auto;">
+        <label style="display:flex;align-items:center;gap:.4rem;">
+          <small>Sort</small>
+          <select id="group-sort-by" style="min-width:10rem;">
+            <option value="on_hand">On hand</option>
+            <option value="committed">Committed</option>
+            <option value="available">Available</option>
+            <option value="retail_value">Retail value</option>
+            <option value="inventory_value">Inventory value</option>
+          </select>
+        </label>
+        <label style="display:flex;align-items:center;gap:.4rem;">
+          <small>Order</small>
+          <select id="group-sort-order">
+            <option value="desc">Descending</option>
+            <option value="asc">Ascending</option>
+          </select>
+        </label>
+        <button id="apply-group-sort" class="secondary" type="button" title="Apply sorting for grouped view">Apply</button>
+      </span>
+    </section>
   </article>
 
-  <!-- Top metrics -->
-  <article id="metrics-container" class="metrics-grid" style="margin-top: .5rem;">
-    <!-- Filled by JS: total retail value, inventory value, total on hand -->
-  </article>
+  <!-- Table / Groups container (filled by JS) -->
+  <article id="inventory-table-container" aria-busy="true"><p>Loading...</p></article>
 
-  <!-- Table / Groups container -->
-  <section id="inventory-table-container" class="card" style="margin-top: .75rem; overflow:auto;">
-    <!-- Filled by JS with individual or grouped view -->
-    <div style="padding:1rem; color:var(--muted-color);">Loading inventory…</div>
-  </section>
+  <!-- Pagination (kept identical) -->
+  <div class="grid pagination-controls">
+    <button id="prev-button" class="secondary outline" disabled>&larr; Previous</button>
+    <span id="page-indicator">Page 1</span>
+    <button id="next-button" class="secondary outline">Next &rarr;</button>
+  </div>
 
-  <!-- Pagination -->
-  <nav class="pagination-bar" aria-label="Pagination" style="display:flex; align-items:center; gap:.5rem; margin-top: .75rem;">
-    <button id="prev-button" class="outline" type="button">Prev</button>
-    <span id="page-indicator" class="muted">Page 1 / 1</span>
-    <button id="next-button" class="outline" type="button">Next</button>
-  </nav>
+  <!-- Details modal (kept identical; your JS fills this) -->
+  <dialog id="details-modal">
+    <article>
+      <header>
+        <button class="close" aria-label="Close" data-target="details-modal"></button>
+        <strong id="modal-title">Product Details</strong>
+      </header>
+      <div id="modal-content" aria-busy="true">
+        <p>Loading details...</p>
+      </div>
+    </article>
+  </dialog>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script src="/static/js/config.js"></script>
+<script>
+  // Small helper to preserve current filters in the URL when applying grouped sorting.
+  (function () {
+    const qs = new URLSearchParams(window.location.search);
+
+    // Reflect current sort/view into the controls on load
+    const sortBySel = document.getElementById('group-sort-by');
+    const sortOrderSel = document.getElementById('group-sort-order');
+    const applyBtn = document.getElementById('apply-group-sort');
+    const sortWrap = document.getElementById('group-sort-controls');
+    const groupToggle = document.getElementById('group-toggle');
+
+    const currentSortBy = (qs.get('sortBy') || 'on_hand').toLowerCase();
+    const currentSortOrder = (qs.get('sortOrder') || 'desc').toLowerCase();
+    const currentView = (qs.get('view') || 'individual').toLowerCase();
+
+    if (sortBySel) sortBySel.value = currentSortBy;
+    if (sortOrderSel) sortOrderSel.value = currentSortOrder;
+    if (groupToggle) groupToggle.checked = currentView === 'grouped';
+    if (sortWrap) sortWrap.style.display = (currentView === 'grouped') ? 'flex' : 'none';
+
+    // Toggle visibility of sorting controls when the checkbox changes
+    if (groupToggle) {
+      groupToggle.addEventListener('change', () => {
+        const v = groupToggle.checked ? 'grouped' : 'individual';
+        // keep all existing filters; only flip the view
+        const next = new URLSearchParams(window.location.search);
+        next.set('view', v);
+        // keep sort when toggling views
+        window.location.search = next.toString();
+      });
+    }
+
+    // Apply button sets sortBy/sortOrder and forces grouped view; preserves the rest
+    if (applyBtn) {
+      applyBtn.addEventListener('click', () => {
+        const next = new URLSearchParams(window.location.search);
+        next.set('view', 'grouped');
+        next.set('sortBy', (sortBySel && sortBySel.value) ? sortBySel.value : 'on_hand');
+        next.set('sortOrder', (sortOrderSel && sortOrderSel.value) ? sortOrderSel.value : 'desc');
+        window.location.search = next.toString();
+      });
+    }
+  })();
+</script>
 <script src="/static/js/inventory.js"></script>
 {% endblock %}
