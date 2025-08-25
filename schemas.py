@@ -1,4 +1,4 @@
-# schemas.py  — Pydantic v2-compatible
+# schemas.py  — Pydantic v2 compatible (uses ConfigDict)
 from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
@@ -269,3 +269,71 @@ class ShopifyRefundWebhook(APIBase):
 
 class DeletePayload(APIBase):
     id: int
+
+
+# ======================================================
+# **NEW**: Product webhook payloads (expected by crud/webhooks.py)
+# Permissive models that match Shopify REST product webhooks.
+# ======================================================
+
+class ShopifyImageWebhook(APIBase):
+    id: Optional[int] = None
+    src: Optional[str] = None
+    alt: Optional[str] = None
+    position: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    variant_ids: Optional[List[int]] = Field(default=None, alias="variant_ids")
+
+
+class ShopifyOptionWebhook(APIBase):
+    id: Optional[int] = None
+    name: Optional[str] = None
+    position: Optional[int] = None
+    values: Optional[List[str]] = None
+
+
+class ShopifyVariantWebhook(APIBase):
+    id: int
+    product_id: Optional[int] = None
+    title: Optional[str] = None
+    sku: Optional[str] = None
+    barcode: Optional[str] = None
+    price: Optional[float] = None
+    compare_at_price: Optional[float] = Field(None, alias="compare_at_price")
+    inventory_item_id: Optional[int] = None
+    old_inventory_quantity: Optional[int] = None
+    option1: Optional[str] = None
+    option2: Optional[str] = None
+    option3: Optional[str] = None
+    image_id: Optional[int] = None
+    tax_code: Optional[str] = None
+    requires_shipping: Optional[bool] = None
+    grams: Optional[int] = None
+    weight: Optional[float] = None
+    weight_unit: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ShopifyProductWebhook(APIBase):
+    id: int
+    admin_graphql_api_id: Optional[str] = None
+    title: Optional[str] = None
+    body_html: Optional[str] = None
+    vendor: Optional[str] = None
+    product_type: Optional[str] = None
+    status: Optional[str] = None
+    handle: Optional[str] = None
+    tags: Optional[str] = None  # Shopify sends comma-separated string
+    # Collections
+    variants: Optional[List[ShopifyVariantWebhook]] = None
+    options: Optional[List[ShopifyOptionWebhook]] = None
+    images: Optional[List[ShopifyImageWebhook]] = None
+    image: Optional[ShopifyImageWebhook] = None
+    # Timestamps
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    published_at: Optional[datetime] = None
