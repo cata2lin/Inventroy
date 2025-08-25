@@ -8,43 +8,42 @@
   </hgroup>
 
   <article class="filter-container">
-    <!-- Top metrics (filled by JS) -->
+    <!-- Top metrics -->
     <section id="metrics-container" class="grid"></section>
 
-    <!-- Filters / Controls bar -->
+    <!-- Controls bar (kept same layout/scale as before) -->
     <section class="controls-grid">
-      <!-- Left block: main filters (same layout/classes as before) -->
       <input type="search" id="search-input" placeholder="Search SKU, Barcode, Name...">
       <select id="store-filter"><option value="">All Stores</option></select>
       <select id="type-filter"><option value="">All Types</option></select>
       <select id="category-filter"><option value="">All Categories</option></select>
       <select id="status-filter"><option value="">All Statuses</option></select>
 
-      <!-- Numeric filters your JS references (kept compact) -->
+      <!-- Numeric placeholders (kept for compatibility) -->
       <input type="number" id="min-retail-input" placeholder="Min Retail" step="0.01">
       <input type="number" id="max-retail-input" placeholder="Max Retail" step="0.01">
       <input type="number" id="min-inv-input" placeholder="Min On Hand" step="1">
       <input type="number" id="max-inv-input" placeholder="Max On Hand" step="1">
 
-      <!-- Group toggle (checkbox, as your JS expects) -->
-      <label style="display:flex;align-items:center;gap:.5rem;white-space:nowrap">
+      <!-- Group by barcode toggle (styled to avoid overlap) -->
+      <label style="display:inline-flex;align-items:center;gap:.5rem;white-space:nowrap;padding:.25rem .5rem;border:1px solid var(--muted-border-color);border-radius:20px; margin-right:.5rem;">
         <input type="checkbox" id="group-toggle">
-        Group by barcode
+        <span>Group by barcode</span>
       </label>
 
-      <!-- Reset (wired by your JS) -->
-      <button id="reset-filters" class="secondary outline" type="button">Reset</button>
+      <button id="reset-filters" class="secondary outline" type="button" style="margin-left:.25rem;">Reset</button>
 
-      <!-- Grouped sorting controls (compact; only used in grouped view) -->
-      <span id="group-sort-controls" style="display:flex;align-items:center;gap:.5rem; margin-left:auto;">
+      <!-- Grouped sorting controls (visible only in grouped view; compact) -->
+      <span id="group-sort-controls" style="display:none;align-items:center;gap:.5rem;margin-left:auto;">
         <label style="display:flex;align-items:center;gap:.4rem;">
           <small>Sort</small>
           <select id="group-sort-by" style="min-width:10rem;">
-            <option value="on_hand">On hand</option>
-            <option value="committed">Committed</option>
+            <option value="on_hand">On hand/Total stock</option>
             <option value="available">Available</option>
+            <option value="committed">Committed</option>
             <option value="retail_value">Retail value</option>
             <option value="inventory_value">Inventory value</option>
+            <option value="total_stock">Total stock</option>
           </select>
         </label>
         <label style="display:flex;align-items:center;gap:.4rem;">
@@ -59,17 +58,17 @@
     </section>
   </article>
 
-  <!-- Table / Groups container (filled by JS) -->
+  <!-- Table / Groups container -->
   <article id="inventory-table-container" aria-busy="true"><p>Loading...</p></article>
 
-  <!-- Pagination (kept identical) -->
+  <!-- Pagination -->
   <div class="grid pagination-controls">
     <button id="prev-button" class="secondary outline" disabled>&larr; Previous</button>
     <span id="page-indicator">Page 1</span>
     <button id="next-button" class="secondary outline">Next &rarr;</button>
   </div>
 
-  <!-- Details modal (kept identical; your JS fills this) -->
+  <!-- Details modal (legacy; image click opens dedicated page) -->
   <dialog id="details-modal">
     <article>
       <header>
@@ -86,50 +85,5 @@
 
 {% block scripts %}
 <script src="/static/js/config.js"></script>
-<script>
-  // Small helper to preserve current filters in the URL when applying grouped sorting.
-  (function () {
-    const qs = new URLSearchParams(window.location.search);
-
-    // Reflect current sort/view into the controls on load
-    const sortBySel = document.getElementById('group-sort-by');
-    const sortOrderSel = document.getElementById('group-sort-order');
-    const applyBtn = document.getElementById('apply-group-sort');
-    const sortWrap = document.getElementById('group-sort-controls');
-    const groupToggle = document.getElementById('group-toggle');
-
-    const currentSortBy = (qs.get('sortBy') || 'on_hand').toLowerCase();
-    const currentSortOrder = (qs.get('sortOrder') || 'desc').toLowerCase();
-    const currentView = (qs.get('view') || 'individual').toLowerCase();
-
-    if (sortBySel) sortBySel.value = currentSortBy;
-    if (sortOrderSel) sortOrderSel.value = currentSortOrder;
-    if (groupToggle) groupToggle.checked = currentView === 'grouped';
-    if (sortWrap) sortWrap.style.display = (currentView === 'grouped') ? 'flex' : 'none';
-
-    // Toggle visibility of sorting controls when the checkbox changes
-    if (groupToggle) {
-      groupToggle.addEventListener('change', () => {
-        const v = groupToggle.checked ? 'grouped' : 'individual';
-        // keep all existing filters; only flip the view
-        const next = new URLSearchParams(window.location.search);
-        next.set('view', v);
-        // keep sort when toggling views
-        window.location.search = next.toString();
-      });
-    }
-
-    // Apply button sets sortBy/sortOrder and forces grouped view; preserves the rest
-    if (applyBtn) {
-      applyBtn.addEventListener('click', () => {
-        const next = new URLSearchParams(window.location.search);
-        next.set('view', 'grouped');
-        next.set('sortBy', (sortBySel && sortBySel.value) ? sortBySel.value : 'on_hand');
-        next.set('sortOrder', (sortOrderSel && sortOrderSel.value) ? sortOrderSel.value : 'desc');
-        window.location.search = next.toString();
-      });
-    }
-  })();
-</script>
 <script src="/static/js/inventory.js"></script>
 {% endblock %}

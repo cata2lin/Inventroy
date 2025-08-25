@@ -30,11 +30,15 @@
   <article class="grid">
     <div class="card">
       <header><strong>Snapshot</strong></header>
-      <div id="pd-snapshot" class="grid"></div>
+      <div id="pd-snapshot" class="grid">
+        <!-- filled by JS -->
+      </div>
     </div>
     <div class="card">
       <header><strong>Sales Velocity</strong></header>
-      <div id="pd-velocity" class="grid"></div>
+      <div id="pd-velocity" class="grid">
+        <!-- filled by JS -->
+      </div>
     </div>
   </article>
 
@@ -73,4 +77,40 @@
 </script>
 <script src="/static/js/config.js"></script>
 <script src="/static/js/product_details.js"></script>
+<script>
+  // Add info tooltips on render by overriding placeholders after JS populates
+  // product_details.js writes innerHTML for snapshot/velocity; we enrich labels with title="..."
+  const addMetricTooltips = () => {
+    const snap = document.getElementById('pd-snapshot');
+    const vel = document.getElementById('pd-velocity');
+    if (!snap || !vel) return;
+    // Snapshot labels map
+    const map = {
+      'On Hand (deduped)': 'Minimum available across stores + committed across all stores (to avoid double counting).',
+      'Committed': 'Units reserved on open/unfulfilled orders across all stores in this group.',
+      'Available': 'On-hand minus committed (deduped across stores).',
+      'Life on Shelf (days)': 'Days since first seen: earliest of product created, first order, or first inventory update.',
+    };
+    snap.querySelectorAll('.metric p').forEach(p => {
+      const t = p.textContent?.trim();
+      if (t && map[t]) p.innerHTML = `${t} <span title="${map[t]}" style="cursor:help;font-weight:bold;">i</span>`;
+    });
+    const vmap = {
+      'Avg Daily (period)': 'Total units sold in selected period divided by number of days.',
+      'Avg Monthly': 'Avg Daily × 30.',
+      'Velocity 7d': 'Average units/day sold over the last 7 days of the period.',
+      'Velocity 30d': 'Average units/day sold over the last 30 days of the period.',
+      'Velocity 90d': 'Average units/day sold over the last 90 days of the period.',
+      'Days of Cover (30d)': 'Available ÷ Velocity 30d. Estimated days until stock-out.',
+    };
+    vel.querySelectorAll('.metric p').forEach(p => {
+      const t = p.textContent?.trim();
+      if (t && vmap[t]) p.innerHTML = `${t} <span title="${vmap[t]}" style="cursor:help;font-weight:bold;">i</span>`;
+    });
+  };
+  // when the page fetch completes and fills content, we hook into a small delay
+  document.addEventListener('inventory:product_details_rendered', addMetricTooltips);
+  // Also try once after load (in case content is already there)
+  window.addEventListener('load', () => setTimeout(addMetricTooltips, 500));
+</script>
 {% endblock %}

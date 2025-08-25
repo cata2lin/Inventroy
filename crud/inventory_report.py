@@ -97,12 +97,13 @@ def _apply_common_filters(
 
 def _build_group_aggregate_query(db: Session, filters: Dict[str, Any]):
     """
-    One row per barcode *group*, DEDUPED across stores.
+    One row per barcode *group*.
 
-    Strategy:
-      1) Aggregate per (group_id, store_id): SUM(on_hand), SUM(available).
-      2) Aggregate per group_id: MIN across stores to avoid triple counting.
-      3) Join "sample" display fields + MAX(cost_per_item/price) for valuation.
+    We show:
+      - available_dedup = MIN(available per store) to avoid triple counting
+      - committed_total = SUM( committed per store )
+      - total_stock     = available_dedup + committed_total  (equivalent to on_hand across stores)
+      - valuation       = based on available_dedup (requested behavior for grouped rows)
     """
     Variant = models.ProductVariant
     GM = models.GroupMembership
@@ -118,11 +119,11 @@ def _build_group_aggregate_query(db: Session, filters: Dict[str, Any]):
     where_clauses: List[Any] = []
     _apply_common_filters(filters, where_clauses, Loc, Variant, Product)
 
-    # ---- stage 1: per (group_id, store_id)
+    # ---- stage 1: per (group_id, store_id) rollup
     per_store_q = (
         db.query(
             group_key.label("group_id"),
-            Variant.store_id.label("store_id"),
+            Loc.store_id.label("store_id"),
             func.sum(func.coalesce(IL.on_hand, 0)).label("on_hand"),
             func.sum(func.coalesce(IL.available, 0)).label("available"),
         )
@@ -133,7 +134,7 @@ def _build_group_aggregate_query(db: Session, filters: Dict[str, Any]):
     )
     if where_clauses:
         per_store_q = per_store_q.filter(and_(*where_clauses))
-    per_store_q = per_store_q.group_by(group_key, Variant.store_id).subquery()
+    per_store_q = per_store_q.group_by(group_key, Loc.store_id).subquery()
 
     # ---- stage 2: sample/display fields (per group)
     sample_q = (
@@ -160,7 +161,7 @@ def _build_group_aggregate_query(db: Session, filters: Dict[str, Any]):
         sample_q = sample_q.filter(and_(*where_clauses))
     sample_q = sample_q.group_by(group_key).subquery()
 
-    # ---- final grouped: MIN across stores + sample fields
+    # ---- final grouped aggregation
     grouped = (
         db.query(
             sample_q.c.group_id,
@@ -174,8 +175,10 @@ def _build_group_aggregate_query(db: Session, filters: Dict[str, Any]):
             sample_q.c.primary_store,
             sample_q.c.max_cost,
             sample_q.c.max_price,
-            func.min(per_store_q.c.on_hand).label("on_hand"),
-            func.min(per_store_q.c.available).label("available"),
+            # Availability / commitment
+            func.min(per_store_q.c.available).label("available"),  # dedup
+            # committed_total across stores = SUM(on_hand - available)
+            func.sum(per_store_q.c.on_hand - per_store_q.c.available).label("committed_total"),
         )
         .join(per_store_q, per_store_q.c.group_id == sample_q.c.group_id)
         .group_by(
@@ -210,7 +213,6 @@ def _build_variant_aggregate_query(db: Session, filters: Dict[str, Any]):
     _apply_common_filters(filters, where_clauses, Loc, Variant, Product)
 
     group_key = _group_key_expr(GM, Variant)
-
     cost_expr = func.coalesce(Variant.cost_per_item, Variant.cost, 0.0)
 
     q = (
@@ -245,16 +247,22 @@ def _build_variant_aggregate_query(db: Session, filters: Dict[str, Any]):
 def _map_sort(sort_by: str, sort_order: str, columns: Dict[str, Any]):
     """
     Return a SQLAlchemy sort expression without evaluating a SQL clause in boolean context.
-    Also map common aliases between grouped/individual views.
+    Maps common aliases between grouped/individual views.
     """
     desc = (sort_order or "").lower() == "desc"
     key = (sort_by or "on_hand").lower()
 
     # Normalize aliases
-    if key == "cost":
-        key = "cost_per_item"
+    alias_map = {
+        "cost": "cost_per_item",
+        "committed": "committed_total",
+        "inventoryvalue": "inventory_value",
+        "retailvalue": "retail_value",
+        "totalstock": "total_stock",
+    }
+    key = alias_map.get(key, key)
 
-    # Candidates bridge grouped vs individual naming
+    # Fallback chain
     candidates: List[str] = [key]
     if key == "price" and "price" not in columns and "max_price" in columns:
         candidates.append("max_price")
@@ -262,6 +270,8 @@ def _map_sort(sort_by: str, sort_order: str, columns: Dict[str, Any]):
         for alt in ("max_cost", "cost_per_item"):
             if alt not in candidates:
                 candidates.append(alt)
+    if key == "on_hand" and "on_hand" not in columns and "total_stock" in columns:
+        candidates.append("total_stock")
 
     col = None
     for c in candidates:
@@ -269,7 +279,7 @@ def _map_sort(sort_by: str, sort_order: str, columns: Dict[str, Any]):
             col = columns[c]
             break
     if col is None:
-        col = columns.get("on_hand")
+        col = columns.get("available") or columns.get("on_hand")
     if col is None:
         col = next(iter(columns.values()))
 
@@ -296,11 +306,10 @@ def get_inventory_report(
     Returns (rows, totals, total_count).
 
     rows:
-      - view='grouped'    -> one row per barcode group (deduped across stores)
-      - view='individual' -> one row per variant (aggregated across its locations)
+      - view='grouped'    -> one row per barcode group
+      - view='individual' -> one row per variant
     totals:
-      - ALWAYS from the grouped-deduped subquery so products in multiple stores
-        are not triple-counted.
+      - computed from grouped-deduped data
     """
     filters: Dict[str, Any] = {
         "search": search,
@@ -309,23 +318,26 @@ def get_inventory_report(
         "product_types": product_types,
     }
 
-    # Totals (deduped)
-    g_subq = _build_group_aggregate_query(db, filters).subquery()
+    # ------------- GROUPED base (for totals and, if requested, for rows)
+    g_base = _build_group_aggregate_query(db, filters).subquery()
 
+    # totals based on available_dedup and prices/costs
     totals_row = db.query(
-        func.coalesce(func.sum(g_subq.c.on_hand), 0).label("on_hand"),
-        func.coalesce(func.sum(g_subq.c.available), 0).label("available"),
+        func.coalesce(func.sum(g_base.c.available), 0).label("available_sum"),
+        func.coalesce(func.sum(g_base.c.committed_total), 0).label("committed_sum"),
         func.coalesce(
-            func.sum(g_subq.c.on_hand * func.coalesce(g_subq.c.max_cost, 0.0)), 0.0
+            func.sum(g_base.c.available * func.coalesce(g_base.c.max_cost, 0.0)), 0.0
         ).label("inventory_value"),
         func.coalesce(
-            func.sum(g_subq.c.on_hand * func.coalesce(g_subq.c.max_price, 0.0)), 0.0
+            func.sum(g_base.c.available * func.coalesce(g_base.c.max_price, 0.0)), 0.0
         ).label("retail_value"),
     ).one()
 
     totals = {
-        "on_hand": int(totals_row.on_hand or 0),
-        "available": int(totals_row.available or 0),
+        # keep key name 'on_hand' for compatibility with the UI top metric
+        "on_hand": int(totals_row.available_sum or 0),
+        "available": int(totals_row.available_sum or 0),
+        "committed": int(totals_row.committed_sum or 0),
         "inventory_value": float(totals_row.inventory_value or 0.0),
         "retail_value": float(totals_row.retail_value or 0.0),
         "mode": "grouped",
@@ -335,6 +347,27 @@ def get_inventory_report(
     total_count = 0
 
     if (view or "").lower() == "grouped":
+        # Add computed valuations and total_stock
+        # NOTE: inventory/retail values use available_dedup as requested
+        g_subq = db.query(
+            g_base.c.group_id,
+            g_base.c.product_title,
+            g_base.c.variant_title,
+            g_base.c.status,
+            g_base.c.product_type,
+            g_base.c.sku,
+            g_base.c.barcode,
+            g_base.c.primary_image_url,
+            g_base.c.primary_store,
+            g_base.c.available,
+            g_base.c.committed_total,
+            g_base.c.max_cost,
+            g_base.c.max_price,
+            (g_base.c.available + g_base.c.committed_total).label("total_stock"),
+            (g_base.c.available * g_base.c.max_cost).label("inventory_value"),
+            (g_base.c.available * g_base.c.max_price).label("retail_value"),
+        ).subquery()
+
         columns = {
             "group_id": g_subq.c.group_id,
             "product_title": g_subq.c.product_title,
@@ -345,17 +378,16 @@ def get_inventory_report(
             "barcode": g_subq.c.barcode,
             "primary_image_url": g_subq.c.primary_image_url,
             "primary_store": g_subq.c.primary_store,
-            "on_hand": g_subq.c.on_hand,
             "available": g_subq.c.available,
+            "committed_total": g_subq.c.committed_total,
+            "total_stock": g_subq.c.total_stock,
             "max_cost": g_subq.c.max_cost,
             "max_price": g_subq.c.max_price,
-            "inventory_value": g_subq.c.on_hand * func.coalesce(g_subq.c.max_cost, 0.0),
-            "retail_value": g_subq.c.on_hand * func.coalesce(g_subq.c.max_price, 0.0),
+            "inventory_value": g_subq.c.inventory_value,
+            "retail_value": g_subq.c.retail_value,
         }
 
-        total_count = (
-            db.query(func.count(literal(1))).select_from(g_subq).scalar() or 0
-        )
+        total_count = db.query(func.count(literal(1))).select_from(g_subq).scalar() or 0
 
         q = (
             db.query(
@@ -368,12 +400,13 @@ def get_inventory_report(
                 g_subq.c.barcode,
                 g_subq.c.primary_image_url,
                 g_subq.c.primary_store,
-                g_subq.c.on_hand,
                 g_subq.c.available,
+                g_subq.c.committed_total,
+                g_subq.c.total_stock,
                 g_subq.c.max_cost,
                 g_subq.c.max_price,
-                (g_subq.c.on_hand * g_subq.c.max_cost).label("inventory_value"),
-                (g_subq.c.on_hand * g_subq.c.max_price).label("retail_value"),
+                g_subq.c.inventory_value,
+                g_subq.c.retail_value,
             )
             .select_from(g_subq)
             .order_by(_map_sort(sort_by, sort_order, columns))
@@ -385,46 +418,45 @@ def get_inventory_report(
             q = q.limit(limit)
 
         recs = q.all()
+
+        # attach member variants for each group (expanders)
         rows_map: Dict[str, Dict[str, Any]] = {}
         group_ids: List[str] = []
         for rec in recs:
             gid = rec.group_id
             group_ids.append(gid)
-            committed = int((rec.on_hand or 0) - (rec.available or 0))
             rows_map[gid] = {
                 "group_id": rec.group_id,
                 "primary_title": rec.product_title,
-                "product_title": rec.product_title,      # legacy-friendly
+                "product_title": rec.product_title,       # legacy
                 "variant_title": rec.variant_title,
                 "status": rec.status,
                 "product_type": rec.product_type,
                 "primary_image_url": rec.primary_image_url,
-                "image_url": rec.primary_image_url,      # legacy-friendly
+                "image_url": rec.primary_image_url,       # legacy
                 "primary_store": rec.primary_store,
-                "store_name": rec.primary_store,         # legacy-friendly
+                "store_name": rec.primary_store,          # legacy
                 "sku": rec.sku,
                 "barcode": rec.barcode,
-                "on_hand": int(rec.on_hand or 0),
                 "available": int(rec.available or 0),
-                "committed": committed,
+                "committed": int(rec.committed_total or 0),
+                "total_stock": int(rec.total_stock or 0),
                 "cost_per_item": float(rec.max_cost or 0.0),
-                "cost": float(rec.max_cost or 0.0),      # alias for UI
+                "cost": float(rec.max_cost or 0.0),
                 "price": float(rec.max_price or 0.0),
                 "inventory_value": float(rec.inventory_value or 0.0),
                 "retail_value": float(rec.retail_value or 0.0),
-                # ensure these exist so the UI never does `.map` on undefined
+                # ensure arrays exist for UI .map
                 "variants_json": [],
                 "variants": [],
                 "members": [],
             }
 
-        # attach member variants (for the expandable list)
         if group_ids:
             Variant = models.ProductVariant
             GM = models.GroupMembership
             Store = models.Store
             Product = models.Product
-
             group_key = _group_key_expr(GM, Variant)
 
             members_q = (
@@ -442,7 +474,6 @@ def get_inventory_report(
                 .filter(group_key.in_(group_ids))
                 .all()
             )
-
             bucket: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
             for m in members_q:
                 bucket[m.group_id].append(
@@ -455,8 +486,8 @@ def get_inventory_report(
                     }
                 )
             for gid in group_ids:
+                members = bucket.get(gid, [])
                 if gid in rows_map:
-                    members = bucket.get(gid, [])
                     rows_map[gid]["variants_json"] = members
                     rows_map[gid]["variants"] = members
                     rows_map[gid]["members"] = members
@@ -485,9 +516,7 @@ def get_inventory_report(
             "retail_value": v_subq.c.on_hand * v_subq.c.price,
         }
 
-        total_count = (
-            db.query(func.count(literal(1))).select_from(v_subq).scalar() or 0
-        )
+        total_count = db.query(func.count(literal(1))).select_from(v_subq).scalar() or 0
 
         q = (
             db.query(
@@ -535,7 +564,7 @@ def get_inventory_report(
                     "available": int(rec.available or 0),
                     "committed": committed,
                     "cost_per_item": float(rec.cost_per_item or 0.0),
-                    "cost": float(rec.cost_per_item or 0.0),  # alias for UI
+                    "cost": float(rec.cost_per_item or 0.0),
                     "price": float(rec.price or 0.0),
                     "inventory_value": float(rec.inventory_value or 0.0),
                     "retail_value": float(rec.retail_value or 0.0),
