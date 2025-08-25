@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 from typing import Optional, Any
+import json # Import the json library for pretty-printing
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
@@ -20,7 +21,6 @@ from crud import webhooks as crud_webhook
 # Services
 from services import commited_projector as committed_projector
 from services import inventory_sync_service
-# FIX: Import the gid_to_id helper function to parse GraphQL IDs
 from shopify_service import gid_to_id
 
 try:
@@ -78,6 +78,16 @@ async def receive_webhook(
     except Exception:
         payload = {}
 
+    # --- START: Diagnostic Logging ---
+    # This is the crucial part. It will print the exact payload to your console.
+    if topic in {"fulfillment_orders/placed_on_hold", "fulfillment_orders/hold_released"}:
+        print("\n--- RAW WEBHOOK PAYLOAD ---")
+        print(f"Topic: {topic}")
+        print(json.dumps(payload, indent=2))
+        print("--- END RAW WEBHOOK PAYLOAD ---\n")
+    # --- END: Diagnostic Logging ---
+
+
     # Always ack quickly; heavy work must never block Shopify
     response = Response(status_code=200, content="ok")
 
@@ -131,17 +141,14 @@ async def receive_webhook(
         print(f"[refunds][error] store={store_id} topic={topic}: {e}")
 
     # --- handle HOLDS (order or fulfillment order hold/release) ---
-    # FIX: This block is rewritten to correctly parse the hold webhook payload
     try:
         if topic in {"fulfillment_orders/placed_on_hold", "fulfillment_orders/hold_released"}:
             is_on_hold = topic == "fulfillment_orders/placed_on_hold"
             status = "ON_HOLD" if is_on_hold else "RELEASED"
             
-            # The payload for these webhooks is flat. We get the IDs from the top level.
             order_id_from_payload = payload.get('order_id')
             fulfillment_order_gid = payload.get('id') or payload.get('fulfillment_order_id')
 
-            # The order_id might be a GID or a legacy ID. We need the integer ID.
             order_id = None
             if isinstance(order_id_from_payload, int):
                 order_id = order_id_from_payload
@@ -174,7 +181,7 @@ async def receive_webhook(
             if inventory_item_id and location_id and event_id:
                 background_tasks.add_task(
                     inventory_sync_service.process_inventory_update_event,
-                    db_factory=SessionLocal,       # pass factory, not live session
+                    db_factory=SessionLocal,
                     shop_domain=store.shopify_url,
                     event_id=event_id,
                     inventory_item_id=int(inventory_item_id),
@@ -183,5 +190,4 @@ async def receive_webhook(
         except Exception as e:
             print(f"[inventory-levels/update][enqueue-error] store={store_id}: {e}")
 
-    # Optionally: inventory_items/update for cost/tracked enrichment (not required)
     return response
