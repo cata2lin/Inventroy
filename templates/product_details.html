@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container">
+  <hgroup>
+    <h1 id="pd-title">Product Details</h1>
+    <h2 id="pd-subtitle"></h2>
+  </hgroup>
+
+  <article class="controls-grid">
+    <div>
+      <label>Period start</label>
+      <input type="date" id="pd-start">
+    </div>
+    <div>
+      <label>Period end</label>
+      <input type="date" id="pd-end">
+    </div>
+    <div>
+      <label>Store</label>
+      <select id="pd-store"><option value="">All Stores</option></select>
+    </div>
+    <div class="grid" style="gap: .5rem; align-items: end;">
+      <button id="pd-apply" class="secondary">Apply</button>
+      <button id="pd-7" class="outline">7d</button>
+      <button id="pd-30" class="outline">30d</button>
+      <button id="pd-90" class="outline">90d</button>
+    </div>
+  </article>
+
+  <article class="grid">
+    <div class="card">
+      <header><strong>Snapshot</strong></header>
+      <div id="pd-snapshot" class="grid"></div>
+    </div>
+    <div class="card">
+      <header><strong>Sales Velocity</strong></header>
+      <div id="pd-velocity" class="grid"></div>
+    </div>
+  </article>
+
+  <article class="card">
+    <header><strong>Sales by Day</strong></header>
+    <canvas id="pd-sales-canvas" height="220"></canvas>
+  </article>
+
+  <article class="grid">
+    <div class="card">
+      <header><strong>Stock Movements (by day)</strong></header>
+      <div class="overflow-auto" style="max-height:300px">
+        <table id="pd-sm-table"><thead><tr><th>Date</th><th>Change</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <header><strong>Committed Orders</strong></header>
+      <div class="overflow-auto" style="max-height:300px">
+        <table id="pd-committed"><thead><tr><th>Date</th><th>Order</th><th>Qty</th><th>Status</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+  </article>
+
+  <article class="card">
+    <header><strong>Recent Orders (last 200)</strong></header>
+    <div class="overflow-auto" style="max-height:360px">
+      <table id="pd-orders"><thead><tr><th>Date</th><th>Order</th><th>Qty</th><th>Financial</th><th>Fulfillment</th></tr></thead><tbody></tbody></table>
+    </div>
+  </article>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.__GROUP_KEY__ = "{{ group_key }}";
+</script>
+<script src="/static/js/config.js"></script>
+<script src="/static/js/product_details.js"></script>
+{% endblock %}

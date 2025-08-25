@@ -1,10 +1,11 @@
 # routes/inventory_v2.py
 from typing import List, Optional, Dict, Any
+from datetime import datetime, timedelta, date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, literal, func
+from sqlalchemy import or_, literal, func, cast, Date
 
 # Prefer the unified session helper if both exist
 try:
@@ -163,35 +164,55 @@ def get_report(
     }
 
 
-# ---------- Product Details ----------
-@router.get("/product-details/{barcode}")
-def get_product_details(barcode: str, db: Session = Depends(get_db)):
+# ---------- Product Details (legacy/modal) ----------
+@router.get("/product-details/{barcode_or_group}")
+def get_product_details(
+    barcode_or_group: str,
+    db: Session = Depends(get_db),
+):
     """
-    Returns committed orders, all orders (last 100), and stock movements for the group identified by `barcode`.
+    Returns committed orders, all orders (last 100), and stock movements for the group key,
+    which can be: GroupMembership.group_id OR normalized barcode OR barcode.
     """
-    if not barcode:
-        raise HTTPException(status_code=400, detail="barcode is required")
+    if not barcode_or_group:
+        raise HTTPException(status_code=400, detail="group key is required")
 
     Variant = models.ProductVariant
     GM = models.GroupMembership
+    Product = models.Product
+    Store = models.Store
     Order = models.Order
     LineItem = models.LineItem
-    Store = models.Store
+    StockMovement = getattr(models, "StockMovement", None)
 
-    # Group key
+    # Grouping key (same as report)
     group_key = func.coalesce(GM.group_id, Variant.barcode_normalized, Variant.barcode)
 
     # Variants in this group (across stores)
     variants_q = (
-        db.query(Variant.id.label("variant_id"), Variant.sku.label("sku"), Variant.store_id.label("store_id"))
+        db.query(
+            Variant.id.label("variant_id"),
+            Variant.sku.label("sku"),
+            Variant.store_id.label("store_id"),
+        )
         .outerjoin(GM, GM.variant_id == Variant.id)
-        .filter(group_key == barcode)
+        .filter(group_key == barcode_or_group)
         .all()
     )
     if not variants_q:
         variants_q = (
-            db.query(Variant.id.label("variant_id"), Variant.sku.label("sku"), Variant.store_id.label("store_id"))
-            .filter(or_(Variant.barcode == barcode, Variant.barcode_normalized == barcode))
+            db.query(
+                Variant.id.label("variant_id"),
+                Variant.sku.label("sku"),
+                Variant.store_id.label("store_id"),
+            )
+            .filter(
+                or_(
+                    Variant.barcode == barcode_or_group,
+                    Variant.barcode_normalized == barcode_or_group,
+                    Variant.sku == barcode_or_group,
+                )
+            )
             .all()
         )
         if not variants_q:
@@ -222,7 +243,7 @@ def get_product_details(barcode: str, db: Session = Depends(get_db)):
             or_(Order.fulfillment_status.is_(None), Order.fulfillment_status.in_(["partial", "unfulfilled"])),
         )
         .order_by(Order.created_at.desc())
-        .limit(100)
+        .limit(200)
         .all()
     )
     committed_orders = [
@@ -237,7 +258,7 @@ def get_product_details(barcode: str, db: Session = Depends(get_db)):
         for r in committed_q
     ]
 
-    all_orders_q = base_ol.order_by(Order.created_at.desc()).limit(100).all()
+    all_orders_q = base_ol.order_by(Order.created_at.desc()).limit(200).all()
     all_orders = [
         {
             "id": int(r.order_id),
@@ -250,9 +271,8 @@ def get_product_details(barcode: str, db: Session = Depends(get_db)):
         for r in all_orders_q
     ]
 
-    # Stock movements (optional model)
+    # Stock movements (if table exists)
     stock_movements: List[Dict[str, Any]] = []
-    StockMovement = getattr(models, "StockMovement", None)
     if StockMovement and skus:
         sm_q = (
             db.query(
@@ -265,7 +285,7 @@ def get_product_details(barcode: str, db: Session = Depends(get_db)):
             )
             .filter(StockMovement.product_sku.in_(skus))
             .order_by(StockMovement.created_at.desc())
-            .limit(100)
+            .limit(200)
             .all()
         )
         stock_movements = [
@@ -281,6 +301,319 @@ def get_product_details(barcode: str, db: Session = Depends(get_db)):
         ]
 
     return {"committed_orders": committed_orders, "all_orders": all_orders, "stock_movements": stock_movements}
+
+
+# ---------- Product Analytics (for the dedicated page) ----------
+@router.get("/product-analytics/{group_key}")
+def product_analytics(
+    group_key: str,
+    db: Session = Depends(get_db),
+    start: Optional[date] = Query(None),
+    end: Optional[date] = Query(None),
+    stores: Optional[str] = Query(None, description="Comma-separated store ids"),
+):
+    """
+    Compute analytics for a product group identified by the same group key used in the report:
+      GroupMembership.group_id -> Variant.barcode_normalized -> Variant.barcode
+
+    Returns:
+      - header: primary title/image, member variants (per store)
+      - inventory_snapshot: on_hand/available deduped across stores (min of per-store sums)
+      - sales_by_day: [{day, units, orders}]
+      - stock_movements_by_day: [{day, change}]
+      - metrics: velocities, averages, days of cover, life on shelf, etc.
+    """
+    if not group_key:
+        raise HTTPException(status_code=400, detail="group_key is required")
+
+    Variant = models.ProductVariant
+    GM = models.GroupMembership
+    Product = models.Product
+    Store = models.Store
+    InventoryLevel = models.InventoryLevel
+    Location = models.Location
+    Order = models.Order
+    LineItem = models.LineItem
+    StockMovement = getattr(models, "StockMovement", None)
+
+    # Resolve date range (default last 90 days)
+    today = datetime.utcnow().date()
+    end_d = end or today
+    start_d = start or (end_d - timedelta(days=89))  # inclusive 90 days window
+    if start_d > end_d:
+        start_d, end_d = end_d, start_d
+
+    store_ids = _parse_int_list_csv(stores)
+
+    # Group expression
+    group_expr = func.coalesce(GM.group_id, Variant.barcode_normalized, Variant.barcode)
+
+    # Member variants (+ primary/title/image/store)
+    members_q = (
+        db.query(
+            Variant.id.label("variant_id"),
+            Variant.sku.label("sku"),
+            Variant.is_primary_variant.label("is_primary"),
+            Store.id.label("store_id"),
+            Store.name.label("store_name"),
+            Product.title.label("product_title"),
+            Product.image_url.label("image_url"),
+            Product.created_at.label("product_created_at"),
+        )
+        .outerjoin(GM, GM.variant_id == Variant.id)
+        .join(Product, Product.id == Variant.product_id)
+        .join(Store, Store.id == Variant.store_id)
+        .filter(group_expr == group_key)
+    )
+    if store_ids:
+        members_q = members_q.filter(Store.id.in_(store_ids))
+    members = members_q.all()
+    if not members:
+        # Fallback: try direct barcode/sku
+        members = (
+            db.query(
+                Variant.id.label("variant_id"),
+                Variant.sku.label("sku"),
+                Variant.is_primary_variant.label("is_primary"),
+                Store.id.label("store_id"),
+                Store.name.label("store_name"),
+                Product.title.label("product_title"),
+                Product.image_url.label("image_url"),
+                Product.created_at.label("product_created_at"),
+            )
+            .join(Product, Product.id == Variant.product_id)
+            .join(Store, Store.id == Variant.store_id)
+            .filter(
+                or_(
+                    Variant.barcode == group_key,
+                    Variant.barcode_normalized == group_key,
+                    Variant.sku == group_key,
+                )
+            )
+            .all()
+        )
+
+    if not members:
+        # Nothing found at all
+        payload = {
+            "header": {"group_key": group_key, "members": []},
+            "inventory_snapshot": {"on_hand": 0, "available": 0, "committed": 0},
+            "sales_by_day": [],
+            "stock_movements_by_day": [],
+            "metrics": {},
+        }
+        return payload
+
+    # Choose primary
+    primary = None
+    for m in members:
+        if m.is_primary:
+            primary = m
+            break
+    if not primary:
+        primary = members[0]
+
+    variant_ids = [int(m.variant_id) for m in members]
+    skus = [m.sku for m in members if m.sku]
+
+    # Inventory (dedup across stores): sum per store then MIN across stores
+    inv_q = (
+        db.query(
+            Location.store_id.label("store_id"),
+            func.sum(func.coalesce(InventoryLevel.on_hand, 0)).label("on_hand"),
+            func.sum(func.coalesce(InventoryLevel.available, 0)).label("available"),
+        )
+        .join(Variant, Variant.inventory_item_id == InventoryLevel.inventory_item_id)
+        .join(Location, Location.id == InventoryLevel.location_id)
+        .filter(Variant.id.in_(variant_ids))
+    )
+    if store_ids:
+        inv_q = inv_q.filter(Location.store_id.in_(store_ids))
+    inv_per_store = inv_q.group_by(Location.store_id).all()
+
+    if inv_per_store:
+        on_hand_min = min(int(r.on_hand or 0) for r in inv_per_store)
+        available_min = min(int(r.available or 0) for r in inv_per_store)
+    else:
+        on_hand_min = 0
+        available_min = 0
+    committed_min = on_hand_min - available_min
+
+    # Sales by day (exclude cancelled)
+    od = cast(func.date_trunc("day", Order.created_at), Date)
+    sales_q = (
+        db.query(
+            od.label("day"),
+            func.sum(LineItem.quantity).label("units"),
+            func.count(func.distinct(Order.id)).label("orders"),
+        )
+        .join(LineItem, LineItem.order_id == Order.id)
+        .filter(
+            LineItem.variant_id.in_(variant_ids),
+            Order.cancelled_at.is_(None),
+            Order.created_at >= datetime.combine(start_d, datetime.min.time()),
+            Order.created_at < datetime.combine(end_d + timedelta(days=1), datetime.min.time()),
+        )
+    )
+    if store_ids:
+        sales_q = sales_q.filter(Order.store_id.in_(store_ids))
+    sales_q = sales_q.group_by(od).order_by(od.asc()).all()
+    sales_by_day = [
+        {"day": r.day.isoformat(), "units": int(r.units or 0), "orders": int(r.orders or 0)}
+        for r in sales_q
+    ]
+    total_units_period = sum(x["units"] for x in sales_by_day)
+    period_days = (end_d - start_d).days + 1
+    avg_daily_sales = (total_units_period / period_days) if period_days > 0 else 0.0
+    avg_monthly_sales = avg_daily_sales * 30.0
+
+    # Quick-window velocities (7/30/90 relative to end date)
+    def _window_units(days: int) -> float:
+        w_start = end_d - timedelta(days=days - 1)
+        units = sum(
+            x["units"]
+            for x in sales_by_day
+            if w_start <= datetime.fromisoformat(x["day"]).date() <= end_d
+        )
+        return units / float(days) if days > 0 else 0.0
+
+    velocity_7 = _window_units(7)
+    velocity_30 = _window_units(30)
+    velocity_90 = _window_units(90)
+    days_of_cover_30 = (available_min / velocity_30) if velocity_30 > 0 else None
+
+    # Month totals (group by month)
+    om = cast(func.date_trunc("month", Order.created_at), Date)
+    month_q = (
+        db.query(
+            om.label("month"),
+            func.sum(LineItem.quantity).label("units"),
+        )
+        .join(LineItem, LineItem.order_id == Order.id)
+        .filter(
+            LineItem.variant_id.in_(variant_ids),
+            Order.cancelled_at.is_(None),
+            Order.created_at >= datetime.combine(start_d, datetime.min.time()),
+            Order.created_at < datetime.combine(end_d + timedelta(days=1), datetime.min.time()),
+        )
+    )
+    if store_ids:
+        month_q = month_q.filter(Order.store_id.in_(store_ids))
+    month_q = month_q.group_by(om).order_by(om.asc()).all()
+    sales_by_month = [{"month": r.month.isoformat(), "units": int(r.units or 0)} for r in month_q]
+
+    # Weekday averages (0=Mon..6=Sun)
+    ow = func.extract("dow", Order.created_at)
+    wday_q = (
+        db.query(
+            ow.label("dow"),
+            func.sum(LineItem.quantity).label("units"),
+        )
+        .join(LineItem, LineItem.order_id == Order.id)
+        .filter(
+            LineItem.variant_id.in_(variant_ids),
+            Order.cancelled_at.is_(None),
+            Order.created_at >= datetime.combine(start_d, datetime.min.time()),
+            Order.created_at < datetime.combine(end_d + timedelta(days=1), datetime.min.time()),
+        )
+        .group_by(ow)
+        .order_by(ow.asc())
+        .all()
+    )
+    total_weeks = max(1, period_days // 7)
+    avg_by_weekday = [
+        {"dow": int(r.dow), "avg_units": float(r.units or 0) / float(total_weeks)} for r in wday_q
+    ]
+
+    # Life on shelf (first seen)
+    # Prefer earliest product.created_at; fallback to earliest order; fallback to earliest inventory update.
+    first_product_date = (
+        db.query(func.min(Product.created_at))
+        .join(Variant, Variant.product_id == Product.id)
+        .outerjoin(GM, GM.variant_id == Variant.id)
+        .filter(group_expr == group_key)
+        .scalar()
+    )
+    first_order_date = (
+        db.query(func.min(Order.created_at))
+        .join(LineItem, LineItem.order_id == Order.id)
+        .filter(LineItem.variant_id.in_(variant_ids))
+        .scalar()
+    )
+    first_inv_date = (
+        db.query(func.min(InventoryLevel.updated_at))
+        .join(Variant, Variant.inventory_item_id == InventoryLevel.inventory_item_id)
+        .filter(Variant.id.in_(variant_ids))
+        .scalar()
+    )
+    first_seen = first_product_date or first_order_date or first_inv_date
+    life_on_shelf_days = None
+    if first_seen:
+        first_seen_d = first_seen.date() if hasattr(first_seen, "date") else first_seen
+        life_on_shelf_days = (today - first_seen_d).days
+
+    # Stock movements by day (optional)
+    stock_movements_by_day: List[Dict[str, Any]] = []
+    if StockMovement and skus:
+        smd = cast(func.date_trunc("day", StockMovement.created_at), Date)
+        sm_q = (
+            db.query(
+                smd.label("day"),
+                func.sum(StockMovement.change_quantity).label("change"),
+            )
+            .filter(
+                StockMovement.product_sku.in_(skus),
+                StockMovement.created_at >= datetime.combine(start_d, datetime.min.time()),
+                StockMovement.created_at < datetime.combine(end_d + timedelta(days=1), datetime.min.time()),
+            )
+            .group_by(smd)
+            .order_by(smd.asc())
+            .all()
+        )
+        stock_movements_by_day = [
+            {"day": r.day.isoformat(), "change": int(r.change or 0)} for r in sm_q
+        ]
+
+    payload = {
+        "header": {
+            "group_key": group_key,
+            "title": primary.product_title,
+            "image_url": primary.image_url,
+            "members": [
+                {
+                    "variant_id": int(m.variant_id),
+                    "sku": m.sku,
+                    "store_id": int(m.store_id),
+                    "store_name": m.store_name,
+                    "is_primary": bool(m.is_primary),
+                }
+                for m in members
+            ],
+        },
+        "inventory_snapshot": {
+            "on_hand": on_hand_min,
+            "available": available_min,
+            "committed": committed_min,
+        },
+        "sales_by_day": sales_by_day,
+        "sales_by_month": sales_by_month,
+        "stock_movements_by_day": stock_movements_by_day,
+        "metrics": {
+            "period_days": period_days,
+            "total_units_period": int(total_units_period),
+            "avg_daily_sales": float(round(avg_daily_sales, 4)),
+            "avg_monthly_sales": float(round(avg_monthly_sales, 4)),
+            "velocity_7": float(round(velocity_7, 4)),
+            "velocity_30": float(round(velocity_30, 4)),
+            "velocity_90": float(round(velocity_90, 4)),
+            "days_of_cover_30": float(days_of_cover_30) if days_of_cover_30 is not None else None,
+            "life_on_shelf_days": int(life_on_shelf_days) if life_on_shelf_days is not None else None,
+            "first_seen": first_seen.isoformat() if first_seen else None,
+            "start": start_d.isoformat(),
+            "end": end_d.isoformat(),
+        },
+    }
+    return payload
 
 
 # ---------- Make Primary ----------
@@ -305,13 +638,12 @@ def make_primary_variant(payload: MakePrimaryPayload, db: Session = Depends(get_
         raise HTTPException(status_code=404, detail="Variant not found")
 
     # Determine group key from payload.barcode OR existing membership
-    group_key = db.query(
-        func.coalesce(GM.group_id, Variant.barcode_normalized, Variant.barcode)
-    ).outerjoin(GM, GM.variant_id == Variant.id).filter(Variant.id == variant.id).scalar()
-
-    if not group_key:
-        # fallback to provided barcode
-        group_key = payload.barcode
+    group_key = (
+        db.query(func.coalesce(GM.group_id, Variant.barcode_normalized, Variant.barcode))
+        .outerjoin(GM, GM.variant_id == Variant.id)
+        .filter(Variant.id == variant.id)
+        .scalar()
+    ) or payload.barcode
 
     # All variants in this group
     group_variants = (
@@ -333,10 +665,13 @@ def make_primary_variant(payload: MakePrimaryPayload, db: Session = Depends(get_
 
 # ---------- Details (legacy compatibility) ----------
 @router.get("/details/")
-def get_details(barcode: str = Query(..., description="Exact barcode or normalized barcode"), db: Session = Depends(get_db)):
+def get_details(
+    barcode: str = Query(..., description="Exact barcode or normalized barcode"),
+    db: Session = Depends(get_db),
+):
     """
     Backward-compatible endpoint. Delegates to /product-details/{barcode}.
     """
     if not barcode:
         raise HTTPException(status_code=400, detail="barcode is required")
-    return get_product_details(barcode=barcode, db=db)
+    return get_product_details(barcode_or_group=barcode, db=db)
