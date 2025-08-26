@@ -555,3 +555,99 @@ section.controls-grid:has(#financial-status-filter) .dropdown[open] > summary {
   line-height: 1.1 !important;
 }
 #export-button .icon { width: 16px; height: 16px; }
+
+/* ========================= BULK UPDATE ========================= */
+/* Red circle: make table content +10% */
+#bulk-update-container .bulk-update-table td { font-size: 1.1em; }
+#bulk-update-container .bulk-update-table th { font-size: calc(0.72em * 1.1); }
+
+/* Also enlarge the editable "Apply…" fields */
+#bulk-update-container .bulk-update-table input[type="text"],
+#bulk-update-container .bulk-update-table input[type="number"],
+#bulk-update-container .bulk-update-table select {
+  font-size: 0.9rem !important; /* ~+10% vs before and readable inside 26px rows */
+}
+
+/* Yellow circle: center text vertically in all chips and remove search icon */
+.bulk-update-controls .control .icon { display: none !important; }
+.bulk-update-controls .control input[type="search"] {
+  padding-left: var(--filter-pad-x) !important;
+}
+.bulk-update-controls .controls-grid input[type="search"],
+.bulk-update-controls .controls-grid input[type="text"],
+.bulk-update-controls .controls-grid input[type="number"],
+.bulk-update-controls .controls-grid input[type="date"],
+.bulk-update-controls .controls-grid select,
+.bulk-update-controls .controls-grid .dropdown > summary {
+  height: var(--filter-h) !important;
+  min-height: var(--filter-h) !important;
+  padding: 0 var(--filter-pad-x) !important;
+  font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius) !important;
+  background: var(--filter-bg) !important;
+  border: 1px solid var(--filter-bd) !important;
+  line-height: 1.1 !important;
+  display: inline-flex;          /* for summary */
+  align-items: center;           /* vertical center */
+  -webkit-appearance: none; appearance: none;
+}
+
+/* ========================= INVENTORY REPORT ========================= */
+/* Remove the search icon and fix padding like you want */
+section.controls-grid:has(#store-filter) .control .icon { display: none !important; }
+section.controls-grid:has(#store-filter) .control input[type="search"] {
+  padding-left: var(--filter-pad-x) !important;
+}
+
+/* ========================= PAGINATION ========================= */
+.pagination-controls button {
+  height: var(--pg-h) !important;
+  min-height: var(--pg-h) !important;
+  padding: 0 var(--pg-pad-x) !important;
+  font-size: var(--pg-font) !important;
+  border-radius: 10px !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: none !important;
+}
+.pagination-controls button::before,
+.pagination-controls button::after { content: none !important; }
+.pagination-controls .icon { width: 14px; height: 14px; }
+
+/* ========================= ORDERS DASHBOARD (v2) ========================= */
+/* Force exact Inventory chip look + alignment; hide search icon */
+section.controls-grid:has(#financial-status-filter) input[type="search"],
+section.controls-grid:has(#financial-status-filter) input[type="text"],
+section.controls-grid:has(#financial-status-filter) input[type="number"],
+section.controls-grid:has(#financial-status-filter) input[type="date"],
+section.controls-grid:has(#financial-status-filter) select,
+section.controls-grid:has(#financial-status-filter) .dropdown > summary {
+  height: var(--filter-h) !important;
+  min-height: var(--filter-h) !important;
+  padding: 0 var(--filter-pad-x) !important;
+  font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius) !important;
+  background: var(--filter-bg) !important;
+  border: 1px solid var(--filter-bd) !important;
+  line-height: 1.1 !important;
+  display: inline-flex; align-items: center;
+  -webkit-appearance: none; appearance: none;
+}
+section.controls-grid:has(#financial-status-filter) .control .icon { display: none !important; }
+section.controls-grid:has(#financial-status-filter) .control input[type="search"] {
+  padding-left: var(--filter-pad-x) !important;
+}
+section.controls-grid:has(#financial-status-filter) .dropdown[open] > summary {
+  border-color: color-mix(in oklab, var(--accent), var(--filter-bd) 60%) !important;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 80%) !important;
+}
+
+/* ========================= GENERAL FORM NORMALIZATION ========================= */
+.controls-grid input[type="search"],
+.controls-grid input[type="text"],
+.controls-grid input[type="number"],
+.controls-grid input[type="date"],
+.controls-grid select {
+  line-height: 1.1 !important;
+  -webkit-appearance: none; appearance: none;
+}
