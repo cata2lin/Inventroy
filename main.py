@@ -67,7 +67,7 @@ app.include_router(dashboard_v2.router)
 app.include_router(orders.router)
 app.include_router(products.router)
 app.include_router(inventory.router)
-app.include_router(inventory_v2.router)  # v2 inventory + analytics
+app.include_router(inventory_v2.router)
 app.include_router(bulk_update.router)
 app.include_router(sync_control.router)
 app.include_router(config.router)
@@ -87,6 +87,10 @@ async def get_dashboard_v2_page(request: Request):
 async def get_inventory_page(request: Request):
     return templates.TemplateResponse("inventory.html", {"request": request, "title": "Inventory Report"})
 
+@app.get("/forecasting", response_class=HTMLResponse, include_in_schema=False)
+async def get_forecasting_page(request: Request):
+    return templates.TemplateResponse("forecasting.html", {"request": request, "title": "Forecasting"})
+
 @app.get("/bulk-update", response_class=HTMLResponse, include_in_schema=False)
 async def get_bulk_update_page(request: Request):
     return templates.TemplateResponse("bulk_update.html", {"request": request, "title": "Bulk Update"})
@@ -99,10 +103,6 @@ async def get_mutations_page(request: Request):
 async def get_sync_control_page(request: Request):
     return templates.TemplateResponse("sync_control.html", {"request": request, "title": "Sync Control"})
 
-@app.get("/forecasting", response_class=HTMLResponse, include_in_schema=False)
-async def get_forecasting_page(request: Request):
-    return templates.TemplateResponse("forecasting.html", {"request": request, "title": "Forecasting"})
-
 @app.get("/config", response_class=HTMLResponse, include_in_schema=False)
 async def get_config_page(request: Request):
     return templates.TemplateResponse("config.html", {"request": request, "title": "Configuration"})
@@ -110,7 +110,6 @@ async def get_config_page(request: Request):
 # NEW: Dedicated Product Details page
 @app.get("/inventory/product/{group_key}", response_class=HTMLResponse, include_in_schema=False)
 async def get_product_details_page(request: Request, group_key: str):
-    # Just pass group_key; JS will fetch analytics data
     return templates.TemplateResponse(
         "product_details.html",
         {"request": request, "title": f"Product {group_key}", "group_key": group_key},

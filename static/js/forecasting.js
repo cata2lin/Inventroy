@@ -3,6 +3,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const elements = {
         container: document.getElementById('forecasting-table-container'),
+        searchInput: document.getElementById('search-input'),
         leadTime: document.getElementById('lead-time'),
         coveragePeriod: document.getElementById('coverage-period'),
         storeFilter: document.getElementById('store-filter-list'),
@@ -31,9 +32,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const updateUrl = () => {
         const params = new URLSearchParams();
         Object.entries(state).forEach(([key, value]) => {
-            if (Array.isArray(value)) {
+            if (Array.isArray(value) && value.length > 0) {
                 value.forEach(v => params.append(key, v));
-            } else if (value) {
+            } else if (value && !Array.isArray(value)) {
                 params.set(key, value);
             }
         });
@@ -43,6 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const loadStateFromUrl = () => {
         const params = new URLSearchParams(window.location.search);
         state = {
+            search: params.get('search') || '',
             lead_time: params.get('lead_time') || '30',
             coverage_period: params.get('coverage_period') || '60',
             store_ids: params.getAll('store_ids'),
@@ -58,6 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         // Update UI from state
+        elements.searchInput.value = state.search;
         elements.leadTime.value = state.lead_time;
         elements.coveragePeriod.value = state.coverage_period;
         elements.reorderDateStart.value = state.reorder_start_date;
@@ -66,12 +69,6 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.velocityStartDate.value = state.velocity_start_date;
         elements.velocityEndDate.value = state.velocity_end_date;
         elements.customVelocityDates.style.display = state.use_custom_velocity ? 'grid' : 'none';
-
-        document.querySelectorAll('#store-filter-list input, #type-filter-list input, #status-filter-list input').forEach(cb => {
-            const listKey = cb.name === 'status' ? 'stock_statuses' : `${cb.name}_ids`;
-            const list = state[listKey] || [];
-            cb.checked = list.includes(cb.value);
-        });
     };
 
     const loadForecastingData = async () => {
@@ -195,6 +192,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const loadFilters = async () => {
         try {
             const response = await fetch('/api/forecasting/filters');
+            if (!response.ok) throw new Error('Filter options could not be loaded.');
             const data = await response.json();
 
             const populateList = (element, items, stateKey) => {
@@ -206,6 +204,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         } catch (error) {
             console.error('Failed to load filters:', error);
+            elements.storeFilter.innerHTML = `<li>Error loading filters.</li>`;
+            elements.typeFilter.innerHTML = `<li>Error loading filters.</li>`;
         }
     };
     
@@ -215,8 +215,8 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Event Listeners
-    [elements.leadTime, elements.coveragePeriod, elements.reorderDateStart, elements.reorderDateEnd, elements.velocityStartDate, elements.velocityEndDate].forEach(input => {
-        input.addEventListener('change', debounce(() => {
+    [elements.searchInput, elements.leadTime, elements.coveragePeriod, elements.reorderDateStart, elements.reorderDateEnd, elements.velocityStartDate, elements.velocityEndDate].forEach(input => {
+        input.addEventListener('input', debounce(() => {
             state[input.id.replace(/-/g, '_')] = input.value;
             loadForecastingData();
         }, 400));
@@ -239,8 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
     elements.exportBtn.addEventListener('click', handleExport);
 
     // Initial Load
-    loadFilters().then(() => {
-        loadStateFromUrl();
-        loadForecastingData();
-    });
+    loadStateFromUrl();
+    loadFilters();
+    loadForecastingData();
 });
