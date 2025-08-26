@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import pandas as pd
+import re # Import the regular expression module
 
 from database import get_db
 from crud import bulk_update as crud_bulk_update, store as crud_store
@@ -16,6 +17,30 @@ router = APIRouter(
     tags=["Bulk Update"],
     responses={404: {"description": "Not found"}},
 )
+
+# --- Helper Function to Robustly Parse Integers ---
+def _robust_int_parse(value: Any) -> Optional[int]:
+    """
+    Safely parses a value into an integer, handling None, floats,
+    and strings with leading numbers (e.g., "5 pieces").
+    """
+    if value is None or value == '':
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        # First, try a direct conversion
+        return int(value)
+    except (ValueError, TypeError):
+        # If direct conversion fails, try to extract leading numbers from a string
+        try:
+            match = re.match(r'^-?\d+', str(value).strip())
+            if match:
+                return int(match.group(0))
+        except (ValueError, TypeError):
+            pass
+    # Return None if all attempts fail
+    return None
 
 # --- Pydantic Models ---
 class VariantUpdatePayload(BaseModel):
@@ -146,7 +171,6 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
             try:
                 changes = {k: (v if v != "" else None) for k, v in update_data.changes.items()}
                 
-                # --- Shopify Update Logic ---
                 product_changes = {}
                 variant_changes = {"id": variant_db.shopify_gid}
                 inventory_changes = {}
@@ -175,29 +199,26 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 if len(variant_changes) > 1:
                     service.variants_bulk_update(variant_db.product.shopify_gid, [variant_changes])
 
-                # --- FIX: Handle inventory updates with added validation ---
                 if inventory_changes and variant_db.inventory_levels:
                     location_gid = f"gid://shopify/Location/{variant_db.inventory_levels[0].location_id}"
                     inventory_item_gid = f"gid://shopify/InventoryItem/{variant_db.inventory_item_id}"
                     
-                    try:
-                        if 'available' in inventory_changes and inventory_changes['available'] is not None:
-                            current_qty = variant_db.inventory_levels[0].available or 0
-                            delta = int(inventory_changes['available']) - current_qty
-                            if delta != 0:
-                                service.adjust_inventory_quantity(inventory_item_gid, location_gid, delta)
-                        
-                        elif 'onHand' in inventory_changes and inventory_changes['onHand'] is not None:
-                            # Only adjust based on onHand if available was not changed
-                            current_on_hand = variant_db.inventory_levels[0].on_hand or 0
-                            delta = int(inventory_changes['onHand']) - current_on_hand
-                            if delta != 0:
-                                service.adjust_inventory_quantity(inventory_item_gid, location_gid, delta)
-                    except (ValueError, TypeError):
-                        # Catch errors if the value is not a valid integer
-                        raise ValueError("Invalid quantity provided. Please enter a valid number.")
+                    # Use the robust parser for inventory values
+                    available_val = _robust_int_parse(inventory_changes.get('available'))
+                    on_hand_val = _robust_int_parse(inventory_changes.get('onHand'))
+                    
+                    if available_val is not None:
+                        current_qty = variant_db.inventory_levels[0].available or 0
+                        delta = available_val - current_qty
+                        if delta != 0:
+                            service.inventory_adjust_quantities(inventory_item_gid, location_gid, delta)
+                    
+                    elif on_hand_val is not None:
+                        current_on_hand = variant_db.inventory_levels[0].on_hand or 0
+                        delta = on_hand_val - current_on_hand
+                        if delta != 0:
+                            service.inventory_adjust_quantities(inventory_item_gid, location_gid, delta)
 
-                # --- Local Database Update ---
                 crud_bulk_update.update_local_variant(db, update_data.variant_id, {**product_changes, **changes, **inventory_changes})
                 results["success"].append(f"Successfully updated variant ID {update_data.variant_id}")
 
