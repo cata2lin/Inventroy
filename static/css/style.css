@@ -445,3 +445,113 @@ button.close::after {
   font-size: 0.68rem; font-weight: 600; letter-spacing: .01em;
   background: color-mix(in oklab, currentColor, transparent 90%);
 }
+/* ====================================================================== */
+/* EXACT-MATCH FILTER LOOK: Inventory → Dashboard v2 + Bulk Update        */
+/* ====================================================================== */
+
+/* Dashboard v2: scope via presence of #financial-status-filter */
+section.controls-grid:has(#financial-status-filter) input[type="search"],
+section.controls-grid:has(#financial-status-filter) input[type="text"],
+section.controls-grid:has(#financial-status-filter) input[type="number"],
+section.controls-grid:has(#financial-status-filter) input[type="date"],
+section.controls-grid:has(#financial-status-filter) select,
+section.controls-grid:has(#financial-status-filter) .dropdown > summary {
+  height: var(--filter-h) !important;
+  min-height: var(--filter-h) !important;
+  border-radius: var(--filter-radius) !important;
+  padding: 0 var(--filter-pad-x) !important;
+  font-size: var(--filter-font) !important;
+  background: var(--filter-bg) !important;
+  border: 1px solid var(--filter-bd) !important;
+  line-height: 1.1 !important;
+}
+
+/* Show magnifier + correct padding like Inventory */
+section.controls-grid:has(#financial-status-filter) .control .icon {
+  display: block !important;
+  width: 16px; height: 16px;
+}
+section.controls-grid:has(#financial-status-filter) .control input[type="search"] {
+  padding-left: calc(var(--filter-pad-x) + 18px) !important;
+}
+
+/* Ensure Dashboard v2 dropdown panels match Inventory */
+section.controls-grid:has(#financial-status-filter) .dropdown[open] > summary {
+  border-color: color-mix(in oklab, var(--accent), var(--filter-bd) 60%) !important;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 80%) !important;
+}
+
+/* Bulk Update: make all filter chips 1:1 with Inventory */
+.bulk-update-controls .controls-grid input[type="search"],
+.bulk-update-controls .controls-grid input[type="text"],
+.bulk-update-controls .controls-grid input[type="number"],
+.bulk-update-controls .controls-grid input[type="date"],
+.bulk-update-controls .controls-grid select,
+.bulk-update-controls .controls-grid .dropdown > summary {
+  height: var(--filter-h) !important;
+  min-height: var(--filter-h) !important;
+  border-radius: var(--filter-radius) !important;
+  padding: 0 var(--filter-pad-x) !important;
+  font-size: var(--filter-font) !important;
+  background: var(--filter-bg) !important;
+  border: 1px solid var(--filter-bd) !important;
+  line-height: 1.1 !important;
+}
+
+/* Bulk Update: search icon visible + padding identical to Inventory */
+.bulk-update-controls .control .icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; pointer-events: none; display: block !important;
+}
+.bulk-update-controls .control input[type="search"] {
+  padding-left: calc(var(--filter-pad-x) + 18px) !important;
+}
+
+/* Bulk Update: primary actions same compact spec */
+#save-changes-btn,
+#import-excel-btn {
+  height: var(--filter-h) !important;
+  min-height: var(--filter-h) !important;
+  font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius) !important;
+  padding: 0 var(--filter-pad-x) !important;
+  line-height: 1.1 !important;
+}
+
+/* ====================================================================== */
+/* PRODUCT DETAILS: shrink quick-range (7d/30d/90d) + Apply                */
+/* ====================================================================== */
+
+#pd-apply, #pd-7, #pd-30, #pd-90 {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .45rem;
+  height: var(--filter-h) !important;
+  min-height: var(--filter-h) !important;
+  padding: 0 var(--filter-pad-x) !important;
+  font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius) !important;
+  line-height: 1.1 !important;
+}
+
+/* Optional: make the quick buttons slightly narrower on small screens */
+@media (max-width: 640px) {
+  #pd-7, #pd-30, #pd-90 { padding-inline: 10px !important; }
+}
+
+/* ====================================================================== */
+/* MISC ALIGNMENT: keep column button and export/reset visually identical  */
+/* ====================================================================== */
+
+#column-visibility-button,
+#export-button,
+#reset-filters {
+  height: var(--filter-h) !important;
+  min-height: var(--filter-h) !important;
+  font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius) !important;
+  padding: 0 var(--filter-pad-x) !important;
+  line-height: 1.1 !important;
+}
+#export-button .icon { width: 16px; height: 16px; }
