@@ -1130,3 +1130,100 @@ section.controls-grid:has(#financial-status-filter) #column-visibility-button{
   width: calc(var(--bu-thumb) * 0.7) !important;
   height: calc(var(--bu-thumb) * 0.7) !important;
 }
+
+/* ===================== DASHBOARD v2 — pack chips closer ===================== */
+/* Turn the filters bar into a dense, wrapping flex row */
+section.controls-grid:has(#financial-status-filter){
+  display:flex !important;
+  flex-wrap:wrap;
+  gap:6px 8px;                /* row gap / column gap — tighter */
+  align-items:center;
+}
+/* Let items size naturally (undo global width:100%) */
+section.controls-grid:has(#financial-status-filter) > *{
+  width:auto !important;
+  max-width:none !important;
+}
+
+/* Make the four chips + Columns compact, side-by-side */
+section.controls-grid:has(#financial-status-filter) details:has(#store-filter-list),
+section.controls-grid:has(#financial-status-filter) details:has(#financial-status-filter),
+section.controls-grid:has(#financial-status-filter) details:has(#fulfillment-status-filter),
+section.controls-grid:has(#financial-status-filter) details:has(#has-note-filter),
+section.controls-grid:has(#financial-status-filter) #column-visibility-button{
+  flex:0 0 auto;              /* hug content */
+}
+
+/* Give the big inputs some flex so they use leftover space nicely */
+section.controls-grid:has(#financial-status-filter) .control,              /* search */
+section.controls-grid:has(#financial-status-filter) #tags-input,           /* tags */
+section.controls-grid:has(#financial-status-filter) #start-date,
+section.controls-grid:has(#financial-status-filter) #end-date{
+  flex:1 1 280px;             /* grow to fill, still wrap when tight */
+}
+
+/* Keep all chips vertically centered */
+section.controls-grid:has(#financial-status-filter) input[type="search"],
+section.controls-grid:has(#financial-status-filter) input[type="date"],
+section.controls-grid:has(#financial-status-filter) select,
+section.controls-grid:has(#financial-status-filter) .dropdown > summary,
+section.controls-grid:has(#financial-status-filter) #column-visibility-button{
+  display:inline-flex; align-items:center;
+}
+
+/* ===================== BULK UPDATE — tighter filters + buttons ============== */
+.bulk-update-controls .controls-grid{
+  display:flex !important;
+  flex-wrap:wrap;
+  gap:6px 8px;                       /* closer spacing */
+  align-items:center !important;     /* same baseline */
+}
+.bulk-update-controls .controls-grid > *{
+  width:auto !important;
+  max-width:none !important;
+}
+
+/* Let main chips grow; keep small bits compact */
+.bulk-update-controls .control,                              /* search */
+.bulk-update-controls details:has(#store-filter-list),
+.bulk-update-controls details:has(#type-filter-list),
+.bulk-update-controls details:has(#status-filter-list),
+.bulk-update-controls details:has(a#generate-unique-barcode-btn){ /* Barcode Actions */
+  flex:1 1 260px;
+}
+.bulk-update-controls fieldset,
+.bulk-update-controls .import-controls,
+.bulk-update-controls #save-changes-btn{
+  flex:0 0 auto;
+}
+
+/* Vertically center every control/button in the row */
+.bulk-update-controls .controls-grid input[type="search"],
+.bulk-update-controls .controls-grid input[type="text"],
+.bulk-update-controls .controls-grid input[type="number"],
+.bulk-update-controls .controls-grid input[type="date"],
+.bulk-update-controls .controls-grid select,
+.bulk-update-controls .controls-grid .dropdown > summary,
+.bulk-update-controls fieldset label,
+.bulk-update-controls #save-changes-btn,
+.bulk-update-controls #import-excel-btn,
+.bulk-update-controls .import-controls input[type="file"]::file-selector-button{
+  display:inline-flex; align-items:center; height:var(--filter-h);
+}
+
+/* Keep Bulk Update editable fields +5% font (only the editables) */
+#bulk-update-container .bulk-update-table thead input,
+#bulk-update-container .bulk-update-table thead select,
+#bulk-update-container .bulk-update-table td input[type="text"],
+#bulk-update-container .bulk-update-table td input[type="number"],
+#bulk-update-container .bulk-update-table td select,
+#bulk-update-container .bulk-update-table [contenteditable="true"]{
+  font-size: calc(var(--bu-input-font) * 1.05) !important;
+}
+
+/* 30% smaller thumbnails when Group by Barcode is ON */
+:root:has(#group-toggle:checked) #bulk-update-container .bulk-update-table img,
+.bulk-update-controls:has(#group-toggle:checked) ~ #bulk-update-container .bulk-update-table img{
+  width: calc(var(--bu-thumb) * 0.7) !important;
+  height: calc(var(--bu-thumb) * 0.7) !important;
+}
