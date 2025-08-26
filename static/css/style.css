@@ -511,3 +511,119 @@ section.controls-grid:has(#financial-status-filter) input[type="search"] {
 #orders-table-container th, #orders-table-container td {
   padding: 6px 8px;
 }
+/* =========================
+   UNIFIED FILTER LOOK (all pages)
+   Matches the “Columns” button / Inventory selects
+   ========================= */
+:root{
+  --filter-h: 38px;             /* height like Columns */
+  --filter-radius: 12px;        /* rounded like Columns */
+  --filter-font: 0.7rem;        /* compact text */
+  --filter-pad-x: 14px;
+  --filter-bg: var(--surface);
+  --filter-bd: var(--border);
+  --filter-focus: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 75%);
+}
+
+/* Base filter surface */
+.controls-grid input[type="search"],
+.controls-grid input[type="text"],
+.controls-grid input[type="number"],
+.controls-grid input[type="date"],
+.controls-grid select,
+.controls-grid .dropdown > summary {
+  min-height: var(--filter-h);
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
+}
+.controls-grid .dropdown[open] > summary {
+  border-color: color-mix(in oklab, var(--accent), var(--filter-bd) 60%);
+  box-shadow: var(--filter-focus);
+}
+
+/* Date pickers: visually identical to other filters */
+.controls-grid input[type="date"] {
+  appearance: none; -webkit-appearance: none; line-height: 1.2;
+}
+.controls-grid input[type="date"]::-webkit-calendar-picker-indicator { opacity: .85; }
+
+/* Search with icon wrapper: prevent overlap */
+.controls-grid .control { position: relative; }
+.controls-grid .control .icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%); pointer-events: none;
+}
+.controls-grid .control input[type="search"] { padding-left: calc(var(--filter-pad-x) + 18px); }
+
+/* Keep action buttons (Save/Export/Reset) as action styles – not filter chips */
+.controls-grid button:not(.outline):not(.secondary):not(#column-visibility-button) { /* leave as-is */ }
+
+/* =========================
+   DASHBOARD v2 scope
+   - filters identical to Inventory
+   - hide magnifying icon on dashboard searches
+   ========================= */
+section.controls-grid:has(#financial-status-filter) input[type="search"],
+section.controls-grid:has(#financial-status-filter) input[type="date"],
+section.controls-grid:has(#financial-status-filter) select,
+section.controls-grid:has(#financial-status-filter) .dropdown > summary {
+  min-height: var(--filter-h);
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
+}
+section.controls-grid:has(#financial-status-filter) .control .icon { display: none !important; }
+section.controls-grid:has(#financial-status-filter) .control input[type="search"] { padding-left: var(--filter-pad-x) !important; }
+
+/* =========================
+   INVENTORY numeric filters (Min/Max Retail, Min/Max On Hand)
+   – same size as the rest
+   ========================= */
+#min-retail-input, #max-retail-input, #min-inv-input, #max-inv-input {
+  min-height: var(--filter-h);
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
+}
+
+/* =========================
+   BULK UPDATE toolbar polish
+   - search icon non-overlap (kept)
+   - align Save button baseline with filters
+   - Make file input and Import button same height & feel
+   ========================= */
+.bulk-update-controls .controls-grid { align-items: end; }
+
+#save-changes-btn {
+  min-height: var(--filter-h);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  border-radius: var(--filter-radius);
+}
+
+.import-controls {
+  display: grid; grid-auto-flow: column; gap: .5rem; align-items: center;
+}
+.import-controls input[type="file"] { font-size: var(--filter-font); }
+.import-controls input[type="file"]::file-selector-button {
+  min-height: var(--filter-h);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  border-radius: var(--filter-radius);
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
+}
+#import-excel-btn {
+  min-height: var(--filter-h);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  border-radius: var(--filter-radius);
+}
+.bulk-update-controls .control .icon { left: 10px; }
+.bulk-update-controls .control input[type="search"] { padding-left: calc(var(--filter-pad-x) + 18px); }
