@@ -450,3 +450,64 @@ input[type="number"] { -moz-appearance: textfield; }
 .bulk-update-table th,
 .bulk-update-table td { padding: 0.06rem 0.32rem; }
 .bulk-update-table img { width: var(--bu-thumb); height: var(--bu-thumb); }
+/* === DASHBOARD v2 ONLY (scope via presence of #financial-status-filter) === */
+/* Make all controls look like Inventory’s filters */
+section.controls-grid:has(#financial-status-filter) input[type="search"],
+section.controls-grid:has(#financial-status-filter) input[type="date"],
+section.controls-grid:has(#financial-status-filter) select,
+section.controls-grid:has(#financial-status-filter) textarea,
+section.controls-grid:has(#financial-status-filter) button,
+section.controls-grid:has(#financial-status-filter) .dropdown > summary {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: inherit;
+  border-radius: 10px;
+  min-height: var(--controls-min-h);
+  padding: var(--controls-pad-y) var(--controls-pad-x);
+  font-size: var(--controls-font);
+}
+
+/* Remove the magnifying icon only on Dashboard v2 searches */
+section.controls-grid:has(#financial-status-filter) .control .icon { display: none !important; }
+/* And remove the extra left padding reserved for the icon */
+section.controls-grid:has(#financial-status-filter) .control input[type="search"] {
+  padding-left: var(--controls-pad-x) !important;
+}
+
+/* Datepicker: make it visually identical to other filters */
+section.controls-grid:has(#financial-status-filter) input[type="date"] {
+  appearance: none;
+  -webkit-appearance: none;
+  line-height: 1.2;
+}
+section.controls-grid:has(#financial-status-filter) input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: .8;
+  margin-right: .25rem;
+}
+
+/* Dropdown summaries on Dashboard v2: consistent hover/focus */
+section.controls-grid:has(#financial-status-filter) .dropdown[open] > summary {
+  border-color: color-mix(in oklab, var(--accent), var(--border) 60%);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 80%);
+}
+
+/* Dashboard v2 dropdown panel style (same as inventory) */
+section.controls-grid:has(#financial-status-filter) .dropdown[open] > ul {
+  background: var(--surface) !important;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  font-size: var(--controls-font);
+}
+
+/* Ensure search inputs on Dashboard v2 match the filter look everywhere */
+section.controls-grid:has(#financial-status-filter) input[type="search"] {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 10px;
+}
+
+/* Optional: keep cell heights tight in dashboard table to match compact filters */
+#orders-table-container th, #orders-table-container td {
+  padding: 6px 8px;
+}
