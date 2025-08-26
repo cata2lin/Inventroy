@@ -962,3 +962,106 @@ section.controls-grid:has(#financial-status-filter) #column-visibility-button {
 #bulk-update-container .bulk-update-table select {
   font-size: calc(var(--bu-input-font) * 1.05) !important;
 }
+
+/* ========================= BULK UPDATE — columns & readability ========================= */
+/* Keep fixed layout so widths are respected */
+#bulk-update-container .bulk-update-table { table-layout: fixed; }
+
+/* (1) Checkbox */
+#bulk-update-container .bulk-update-table th:nth-child(1),
+#bulk-update-container .bulk-update-table td:nth-child(1) {
+  width: 42px !important; max-width: 42px !important;
+}
+
+/* (2) Image — just a hair bigger than the thumb */
+#bulk-update-container .bulk-update-table th:nth-child(2),
+#bulk-update-container .bulk-update-table td:nth-child(2) {
+  width: calc(var(--bu-thumb) + 12px) !important;
+  max-width: calc(var(--bu-thumb) + 12px) !important;
+  padding-inline: 4px;
+}
+
+/* (3) Store — fixed width so names don’t bounce */
+#bulk-update-container .bulk-update-table th:nth-child(3),
+#bulk-update-container .bulk-update-table td:nth-child(3) {
+  width: 150px !important;
+  max-width: 150px !important;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* (4) SKU — WIDER + slightly larger font for readability */
+#bulk-update-container .bulk-update-table th:nth-child(4),
+#bulk-update-container .bulk-update-table td:nth-child(4) {
+  width: 230px !important;        /* was ~150px before */
+  max-width: 230px !important;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#bulk-update-container .bulk-update-table td:nth-child(4) {
+  font-size: 1.10em !important;   /* bump just SKU text (+~10%) */
+}
+
+/* (5) Product — let it breathe; takes remaining flexible space */
+#bulk-update-container .bulk-update-table th:nth-child(5),
+#bulk-update-container .bulk-update-table td:nth-child(5) {
+  min-width: 380px !important;    /* gives Product more room if available */
+}
+
+/* (6) Barcode — tighten; free space for SKU/Product */
+#bulk-update-container .bulk-update-table th:nth-child(6),
+#bulk-update-container .bulk-update-table td:nth-child(6) {
+  width: 160px !important;        /* down from ~200px */
+  max-width: 160px !important;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+/* (7) Type & (8) Status — compact but steady */
+#bulk-update-container .bulk-update-table th:nth-child(7),
+#bulk-update-container .bulk-update-table td:nth-child(7),
+#bulk-update-container .bulk-update-table th:nth-child(8),
+#bulk-update-container .bulk-update-table td:nth-child(8) {
+  width: 120px !important; max-width: 120px !important;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* (9) Price & (10) Cost — small numeric cells */
+#bulk-update-container .bulk-update-table th:nth-child(9),
+#bulk-update-container .bulk-update-table td:nth-child(9),
+#bulk-update-container .bulk-update-table th:nth-child(10),
+#bulk-update-container .bulk-update-table td:nth-child(10) {
+  width: 90px !important; max-width: 90px !important;
+}
+
+/* (11) On Hand & (12) Available — tighter */
+#bulk-update-container .bulk-update-table th:nth-child(11),
+#bulk-update-container .bulk-update-table td:nth-child(11),
+#bulk-update-container .bulk-update-table th:nth-child(12),
+#bulk-update-container .bulk-update-table td:nth-child(12) {
+  width: 82px !important; max-width: 82px !important;
+}
+
+/* Keep the general +5% table bump we added earlier (no change needed) */
+
+/* ========================= BULK UPDATE — filter alignment (baseline & spacing) ========================= */
+.bulk-update-controls .controls-grid {
+  align-items: center !important;                             /* vertical alignment */
+  grid-auto-flow: row dense;                                  /* fill gaps tightly */
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)) !important;
+  column-gap: var(--s-2) !important;                          /* closer spacing */
+  row-gap: .5rem !important;
+}
+
+/* ========================= DASHBOARD v2 — tighter packing & datepickers same row ========================= */
+section.controls-grid:has(#financial-status-filter) {
+  grid-auto-flow: row dense;                                  /* fills holes so items settle on same row */
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)) !important; /* slightly smaller min to fit more per row */
+  column-gap: var(--s-1) !important;                          /* bring filters closer together */
+  row-gap: .5rem !important;
+}
+/* Keep Columns button visually aligned with the same chip spec */
+section.controls-grid:has(#financial-status-filter) #column-visibility-button {
+  height: var(--filter-h) !important; min-height: var(--filter-h) !important;
+  padding: 0 var(--filter-pad-x) !important; font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius) !important; margin: 0 !important;
+  display: inline-flex !important; align-items: center !important;
+}
