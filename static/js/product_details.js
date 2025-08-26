@@ -14,7 +14,6 @@ document.addEventListener('DOMContentLoaded', () => {
     quick90: document.getElementById('pd-90'),
     snapshot: document.getElementById('pd-snapshot'),
     velocity: document.getElementById('pd-velocity'),
-    salesCanvas: document.getElementById('pd-sales-canvas'),
     stockCanvas: document.getElementById('pd-stock-canvas'),
     smTableBody: document.querySelector('#pd-sm-table tbody'),
     committedBody: document.querySelector('#pd-committed tbody'),
@@ -55,63 +54,6 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) { console.error(e); }
   };
 
-  // Sales chart (vanilla canvas)
-  const drawSalesChart = (series) => {
-    const ctx = els.salesCanvas.getContext('2d');
-    const W = els.salesCanvas.width = els.salesCanvas.clientWidth;
-    const H = els.salesCanvas.height = 220;
-
-    ctx.clearRect(0,0,W,H);
-    if (!series || !series.length) {
-      ctx.fillText('No sales in selected period.', 10, 20);
-      return;
-    }
-    // Padding
-    const padL = 40, padR = 10, padT = 10, padB = 24;
-    const xmin = 0, xmax = series.length - 1;
-    const ymax = Math.max(...series.map(p => p.units));
-    const scaleX = (x) => padL + (x - xmin) * ((W - padL - padR) / (xmax - xmin || 1));
-    const scaleY = (y) => H - padB - (y) * ((H - padT - padB) / (ymax || 1));
-
-    // Axes
-    ctx.strokeStyle = '#ccc';
-    ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, H - padB); ctx.lineTo(W - padR, H - padB); ctx.stroke();
-
-    // Line
-    ctx.beginPath();
-    series.forEach((p, i) => {
-      const x = scaleX(i), y = scaleY(p.units);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    });
-    ctx.strokeStyle = '#1f77b4';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Dots
-    ctx.fillStyle = '#1f77b4';
-    series.forEach((p, i) => {
-      const x = scaleX(i), y = scaleY(p.units);
-      ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI*2); ctx.fill();
-    });
-
-    // X labels (sparse)
-    ctx.fillStyle = '#666';
-    ctx.font = '10px sans-serif';
-    const stride = Math.ceil(series.length / 10);
-    series.forEach((p, i) => {
-      if (i % stride === 0 || i === series.length - 1) {
-        ctx.fillText(p.day.slice(5), scaleX(i) - 10, H - 6);
-      }
-    });
-
-    // Y labels
-    const yTicks = 4;
-    for (let i=0;i<=yTicks;i++){
-      const v = Math.round((ymax / yTicks)*i);
-      ctx.fillText(String(v), 6, scaleY(v)+3);
-    }
-  };
-
     const drawStockChart = (series) => {
         const ctx = els.stockCanvas.getContext('2d');
         const W = els.stockCanvas.width = els.stockCanvas.clientWidth;
@@ -119,15 +61,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         ctx.clearRect(0, 0, W, H);
         if (!series || !series.length) {
-            ctx.fillText('No stock movements in selected period.', 10, 20);
+            ctx.fillText('No stock snapshot data available for this period.', 10, 20);
             return;
         }
 
         // Padding
         const padL = 40, padR = 10, padT = 10, padB = 24;
         const xmin = 0, xmax = series.length - 1;
-        const ymax = Math.max(...series.map(p => p.new_quantity));
-        const ymin = Math.min(...series.map(p => p.new_quantity));
+        const ymax = Math.max(...series.map(p => p.on_hand));
+        const ymin = Math.min(...series.map(p => p.on_hand));
         const scaleX = (x) => padL + (x - xmin) * ((W - padL - padR) / (xmax - xmin || 1));
         const scaleY = (y) => H - padB - (y - ymin) * ((H - padT - padB) / (ymax - ymin || 1));
 
@@ -143,7 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ctx.beginPath();
         series.forEach((p, i) => {
             const x = scaleX(i),
-                y = scaleY(p.new_quantity);
+                y = scaleY(p.on_hand);
             if (i === 0) ctx.moveTo(x, y);
             else ctx.lineTo(x, y);
         });
@@ -155,7 +97,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ctx.fillStyle = '#2ca02c';
         series.forEach((p, i) => {
             const x = scaleX(i),
-                y = scaleY(p.new_quantity);
+                y = scaleY(p.on_hand);
             ctx.beginPath();
             ctx.arc(x, y, 2.5, 0, Math.PI * 2);
             ctx.fill();
@@ -167,7 +109,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const stride = Math.ceil(series.length / 10);
         series.forEach((p, i) => {
             if (i % stride === 0 || i === series.length - 1) {
-                ctx.fillText(new Date(p.created_at).toLocaleDateString(), scaleX(i) - 10, H - 6);
+                ctx.fillText(new Date(p.date).toLocaleDateString(), scaleX(i) - 10, H - 6);
             }
         });
 
@@ -201,8 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
 
     // Chart
-    drawSalesChart(analytics.sales_by_day);
-    drawStockChart(details.stock_movements);
+    drawStockChart(analytics.stock_evolution);
     // Stock movements
     els.smTableBody.innerHTML = (analytics.stock_movements_by_day || []).map(r =>
       `<tr><td>${r.day}</td><td>${r.change}</td></tr>`

@@ -288,3 +288,18 @@ class DeliveredEvent(Base):
     shop_domain = Column(Text, primary_key=True)
     event_id = Column(Text, primary_key=True)
     received_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class InventorySnapshot(Base):
+    __tablename__ = "inventory_snapshots"
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(DateTime(timezone=True), nullable=False, index=True)
+    product_variant_id = Column(BIGINT, ForeignKey("product_variants.id", ondelete="CASCADE"), nullable=False, index=True)
+    store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    on_hand = Column(Integer, nullable=False)
+
+    variant = relationship("ProductVariant")
+    store = relationship("Store")
+
+    __table_args__ = (
+        UniqueConstraint('date', 'product_variant_id', 'store_id', name='uq_snapshot_date_variant_store'),
+    )

@@ -9,6 +9,12 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse
 from dotenv import load_dotenv
 
+# ADD THESE IMPORTS
+from apscheduler.schedulers.background import BackgroundScheduler
+from database import SessionLocal
+from jobs.daily_snapshot import run_daily_inventory_snapshot
+# END OF ADDED IMPORTS
+
 ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
@@ -35,6 +41,21 @@ templates = Jinja2Templates(directory=str(ROOT_DIR / "templates"))
 
 # Create tables if needed
 Base.metadata.create_all(bind=engine)
+
+# --- ADD THIS BLOCK TO SCHEDULE THE JOB ---
+def scheduled_snapshot_job():
+    """Wrapper function to handle the database session for the scheduler."""
+    db = SessionLocal()
+    try:
+        run_daily_inventory_snapshot(db)
+    finally:
+        db.close()
+
+scheduler = BackgroundScheduler(timezone="utc")
+scheduler.add_job(scheduled_snapshot_job, 'cron', hour=1) # Runs every day at 1:00 AM UTC
+scheduler.start()
+# --- END OF SCHEDULER BLOCK ---
+
 
 # Routers
 app.include_router(dashboard.router)

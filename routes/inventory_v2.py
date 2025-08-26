@@ -345,6 +345,7 @@ def product_analytics(
     Order = models.Order
     LineItem = models.LineItem
     StockMovement = getattr(models, "StockMovement", None)
+    InventorySnapshot = getattr(models, "InventorySnapshot", None)
 
     # Resolve date range (default last 90 days)
     today = datetime.utcnow().date()
@@ -411,6 +412,7 @@ def product_analytics(
             "sales_by_day": [],
             "sales_by_month": [],
             "stock_movements_by_day": [],
+            "stock_evolution": [],
             "metrics": {},
         }
         return payload
@@ -577,6 +579,28 @@ def product_analytics(
         stock_movements_by_day = [
             {"day": r.day.isoformat(), "change": int(r.change or 0)} for r in sm_q
         ]
+    
+    # Stock Evolution from Snapshots
+    stock_evolution_data = []
+    if InventorySnapshot:
+        snapshot_query = db.query(
+            InventorySnapshot.date,
+            func.sum(InventorySnapshot.on_hand).label("total_on_hand")
+        ).filter(
+            InventorySnapshot.product_variant_id.in_(variant_ids),
+            InventorySnapshot.date >= start_d,
+            InventorySnapshot.date <= end_d
+        )
+        if store_ids:
+            snapshot_query = snapshot_query.filter(InventorySnapshot.store_id.in_(store_ids))
+
+        daily_snapshots = snapshot_query.group_by(InventorySnapshot.date).order_by(InventorySnapshot.date.asc()).all()
+
+        stock_evolution_data = [
+            {"date": row.date.isoformat(), "on_hand": int(row.total_on_hand)}
+            for row in daily_snapshots
+        ]
+
 
     payload = {
         "header": {
@@ -602,6 +626,7 @@ def product_analytics(
         "sales_by_day": sales_by_day,
         "sales_by_month": sales_by_month,
         "stock_movements_by_day": stock_movements_by_day,
+        "stock_evolution": stock_evolution_data,
         "metrics": {
             "period_days": period_days,
             "total_units_period": int(total_units_period),
