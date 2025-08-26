@@ -10,11 +10,15 @@ document.addEventListener('DOMContentLoaded', () => {
         statusFilter: document.getElementById('status-filter-list'),
         reorderDateStart: document.getElementById('reorder-date-start'),
         reorderDateEnd: document.getElementById('reorder-date-end'),
+        useCustomVelocity: document.getElementById('use-custom-velocity'),
+        customVelocityDates: document.getElementById('custom-velocity-dates'),
+        velocityStartDate: document.getElementById('velocity-start-date'),
+        velocityEndDate: document.getElementById('velocity-end-date'),
         exportBtn: document.getElementById('export-button'),
     };
 
     let forecastingData = [];
-    let sortState = { key: 'days_of_stock', order: 'asc' };
+    let state = {};
 
     const debounce = (func, delay) => {
         let timeout;
@@ -24,35 +28,57 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     };
 
-    const getSelectedFilters = () => {
-        const selectedStores = Array.from(elements.storeFilter.querySelectorAll('input:checked')).map(cb => cb.value);
-        const selectedTypes = Array.from(elements.typeFilter.querySelectorAll('input:checked')).map(cb => cb.value);
-        const selectedStatuses = Array.from(elements.statusFilter.querySelectorAll('input:checked')).map(cb => cb.value);
-        return {
-            store_ids: selectedStores,
-            product_types: selectedTypes,
-            stock_statuses: selectedStatuses,
-            reorder_start_date: elements.reorderDateStart.value,
-            reorder_end_date: elements.reorderDateEnd.value,
+    const updateUrl = () => {
+        const params = new URLSearchParams();
+        Object.entries(state).forEach(([key, value]) => {
+            if (Array.isArray(value)) {
+                value.forEach(v => params.append(key, v));
+            } else if (value) {
+                params.set(key, value);
+            }
+        });
+        window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+    };
+    
+    const loadStateFromUrl = () => {
+        const params = new URLSearchParams(window.location.search);
+        state = {
+            lead_time: params.get('lead_time') || '30',
+            coverage_period: params.get('coverage_period') || '60',
+            store_ids: params.getAll('store_ids'),
+            product_types: params.getAll('product_types'),
+            stock_statuses: params.getAll('stock_statuses'),
+            reorder_start_date: params.get('reorder_start_date') || '',
+            reorder_end_date: params.get('reorder_end_date') || '',
+            use_custom_velocity: params.get('use_custom_velocity') === 'true',
+            velocity_start_date: params.get('velocity_start_date') || '',
+            velocity_end_date: params.get('velocity_end_date') || '',
+            sort_by: params.get('sort_by') || 'days_of_stock',
+            sort_order: params.get('sort_order') || 'asc',
         };
+
+        // Update UI from state
+        elements.leadTime.value = state.lead_time;
+        elements.coveragePeriod.value = state.coverage_period;
+        elements.reorderDateStart.value = state.reorder_start_date;
+        elements.reorderDateEnd.value = state.reorder_end_date;
+        elements.useCustomVelocity.checked = state.use_custom_velocity;
+        elements.velocityStartDate.value = state.velocity_start_date;
+        elements.velocityEndDate.value = state.velocity_end_date;
+        elements.customVelocityDates.style.display = state.use_custom_velocity ? 'grid' : 'none';
+
+        document.querySelectorAll('#store-filter-list input, #type-filter-list input, #status-filter-list input').forEach(cb => {
+            const list = state[`${cb.name}_ids`] || state[`${cb.name}_statuses`] || [];
+            cb.checked = list.includes(cb.value);
+        });
     };
 
     const loadForecastingData = async () => {
         elements.container.setAttribute('aria-busy', 'true');
-        const params = new URLSearchParams();
-        const filters = getSelectedFilters();
-
-        params.set('lead_time', elements.leadTime.value);
-        params.set('coverage_period', elements.coveragePeriod.value);
-
-        Object.entries(filters).forEach(([key, values]) => {
-            if (Array.isArray(values)) {
-                values.forEach(value => params.append(key, value));
-            } else if (values) {
-                params.set(key, values);
-            }
-        });
-
+        updateUrl(); // Update URL every time we fetch
+        
+        const params = new URLSearchParams(state);
+        
         try {
             const response = await fetch(`/api/forecasting/report?${params.toString()}`);
             if (!response.ok) throw new Error('Failed to fetch forecasting data.');
@@ -68,20 +94,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const renderTable = () => {
         // Sort data
         forecastingData.sort((a, b) => {
-            const valA = a[sortState.key];
-            const valB = b[sortState.key];
+            const valA = a[state.sort_by];
+            const valB = b[state.sort_by];
             if (valA === null || valA === undefined) return 1;
             if (valB === null || valB === undefined) return -1;
             
-            if (typeof valA === 'string' && valA.includes('-')) { // Basic date string check
-                return sortState.order === 'asc' 
+            if (typeof valA === 'string' && valA.includes('-')) { // Date sort
+                return state.sort_order === 'asc' 
                     ? new Date(valA) - new Date(valB) 
                     : new Date(valB) - new Date(valA);
             }
             if (typeof valA === 'string') {
-                return sortState.order === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                return state.sort_order === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
             } else {
-                return sortState.order === 'asc' ? valA - valB : valB - valA;
+                return state.sort_order === 'asc' ? valA - valB : valB - valA;
             }
         });
 
@@ -90,21 +116,29 @@ document.addEventListener('DOMContentLoaded', () => {
             { key: 'total_stock', label: 'Total Stock' },
             { key: 'velocity_7d', label: 'Velocity (7d)' },
             { key: 'velocity_30d', label: 'Velocity (30d)' },
+        ];
+        if(state.use_custom_velocity){
+            headers.push({ key: 'velocity_period', label: 'Velocity (Period)' });
+        }
+        headers.push(
             { key: 'days_of_stock', label: 'Days of Stock' },
             { key: 'stock_status', label: 'Stock Status' },
             { key: 'reorder_date', label: 'Reorder Date' },
-            { key: 'reorder_qty', label: 'Reorder Qty' },
-        ];
+            { key: 'reorder_qty', label: 'Reorder Qty' }
+        );
 
         let tableHtml = '<div class="overflow-auto"><table><thead><tr>';
         headers.forEach(h => {
-            const sortClass = sortState.key === h.key ? `class="${sortState.order}"` : '';
-            tableHtml += `<th data-sort-key="${h.key}" ${sortClass}>${h.label}</th>`;
+            let sortIndicator = '';
+            if (state.sort_by === h.key) {
+                sortIndicator = state.sort_order === 'asc' ? ' ▲' : ' ▼';
+            }
+            tableHtml += `<th data-sort-key="${h.key}">${h.label}${sortIndicator}</th>`;
         });
         tableHtml += '</tr></thead><tbody>';
 
         if (forecastingData.length === 0) {
-            tableHtml += '<tr><td colspan="8">No products match the current filters.</td></tr>';
+            tableHtml += `<tr><td colspan="${headers.length}">No products match the current filters.</td></tr>`;
         } else {
             forecastingData.forEach(item => {
                 tableHtml += `
@@ -121,8 +155,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td>${item.total_stock}</td>
                         <td>${item.velocity_7d.toFixed(2)}</td>
                         <td>${item.velocity_30d.toFixed(2)}</td>
+                        ${state.use_custom_velocity ? `<td>${item.velocity_period.toFixed(2)}</td>` : ''}
                         <td>${item.days_of_stock === null ? '∞' : item.days_of_stock}</td>
-                        <td><span class="status-badge ${item.stock_status}">${item.stock_status.replace('_', ' ')}</span></td>
+                        <td><span class="status-badge status-${item.stock_status}">${item.stock_status.replace('_', ' ')}</span></td>
                         <td>${item.reorder_date || 'N/A'}</td>
                         <td>${item.reorder_qty}</td>
                     </tr>
@@ -138,13 +173,13 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.container.querySelectorAll('th[data-sort-key]').forEach(th => {
             th.addEventListener('click', () => {
                 const key = th.dataset.sortKey;
-                if (sortState.key === key) {
-                    sortState.order = sortState.order === 'asc' ? 'desc' : 'asc';
+                if (state.sort_by === key) {
+                    state.sort_order = state.sort_order === 'asc' ? 'desc' : 'asc';
                 } else {
-                    sortState.key = key;
-                    sortState.order = 'asc';
+                    state.sort_by = key;
+                    state.sort_order = 'asc';
                 }
-                renderTable();
+                loadForecastingData();
             });
         });
     };
@@ -154,12 +189,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch('/api/forecasting/filters');
             const data = await response.json();
 
-            const populateList = (element, items) => {
-                element.innerHTML = items.map(item => `<li><label><input type="checkbox" name="${element.id}" value="${item}"> ${item}</label></li>`).join('');
+            const populateList = (element, items, stateKey) => {
+                element.innerHTML = items.map(item => `<li><label><input type="checkbox" name="${stateKey}" value="${item}" ${state[stateKey].includes(item) ? 'checked' : ''}> ${item}</label></li>`).join('');
             };
             
-            populateList(elements.storeFilter, data.stores);
-            populateList(elements.typeFilter, data.product_types);
+            populateList(elements.storeFilter, data.stores, 'store_ids');
+            populateList(elements.typeFilter, data.product_types, 'product_types');
 
         } catch (error) {
             console.error('Failed to load filters:', error);
@@ -167,34 +202,36 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     
     const handleExport = () => {
-        const params = new URLSearchParams();
-        const filters = getSelectedFilters();
-
-        params.set('lead_time', elements.leadTime.value);
-        params.set('coverage_period', elements.coveragePeriod.value);
-        Object.entries(filters).forEach(([key, values]) => {
-            if (Array.isArray(values)) {
-                values.forEach(value => params.append(key, value));
-            } else if (values) {
-                params.set(key, values);
-            }
-        });
-
+        const params = new URLSearchParams(state);
         window.location.href = `/api/forecasting/export?${params.toString()}`;
     };
 
     // Event Listeners
-    [elements.leadTime, elements.coveragePeriod, elements.reorderDateStart, elements.reorderDateEnd].forEach(input => {
-        input.addEventListener('change', debounce(loadForecastingData, 400));
+    [elements.leadTime, elements.coveragePeriod, elements.reorderDateStart, elements.reorderDateEnd, elements.velocityStartDate, elements.velocityEndDate].forEach(input => {
+        input.addEventListener('change', debounce(() => {
+            state[input.id.replace(/-/g, '_')] = input.value;
+            loadForecastingData();
+        }, 400));
+    });
+
+    elements.useCustomVelocity.addEventListener('change', () => {
+        state.use_custom_velocity = elements.useCustomVelocity.checked;
+        elements.customVelocityDates.style.display = state.use_custom_velocity ? 'grid' : 'none';
+        loadForecastingData();
     });
 
     [elements.storeFilter, elements.typeFilter, elements.statusFilter].forEach(filter => {
-        filter.addEventListener('change', loadForecastingData);
+        filter.addEventListener('change', () => {
+            const key = filter.id.replace('-list', '').replace(/-/g, '_');
+            state[key] = Array.from(filter.querySelectorAll('input:checked')).map(cb => cb.value);
+            loadForecastingData();
+        });
     });
     
     elements.exportBtn.addEventListener('click', handleExport);
 
     // Initial Load
+    loadStateFromUrl();
     loadFilters();
     loadForecastingData();
 });

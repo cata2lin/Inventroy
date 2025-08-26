@@ -13,16 +13,15 @@ def get_forecasting_data(
     product_types: list[str] = None,
     reorder_start_date: str = None,
     reorder_end_date: str = None,
+    use_custom_velocity: bool = False,
+    velocity_start_date: str = None,
+    velocity_end_date: str = None,
 ):
     """
-    Generates a forecasting report by calculating stock levels, sales velocities,
-    and reorder points for each product group.
-    Groups by barcode, falling back to SKU for products without a barcode.
+    Generates a forecasting report with custom velocity period support.
     """
     today = datetime.utcnow().date()
-    start_date_7d = today - timedelta(days=7)
-    start_date_30d = today - timedelta(days=30)
-
+    
     # Define a robust grouping key: barcode, or SKU if barcode is null/empty
     group_key = func.coalesce(
         func.nullif(models.ProductVariant.barcode, ''),
@@ -43,7 +42,7 @@ def get_forecasting_data(
     PrimaryVariant = aliased(models.ProductVariant)
     PrimaryProduct = aliased(models.Product)
 
-    # Base query to get stock and primary product info for each group
+    # Base query to get stock and primary product info
     base_query = db.query(
         group_key,
         func.min(models.ProductVariant.inventory_quantity).label('total_stock'),
@@ -76,27 +75,19 @@ def get_forecasting_data(
         PrimaryProduct.image_url
     ).all()
 
-    # Get all variant IDs for sales velocity calculation
     group_keys_for_sales = [p.group_key for p in product_groups]
     
     sales_variants_map = {}
     if group_keys_for_sales:
-        sales_variants_query = db.query(
-            models.ProductVariant.id,
-            group_key
-        ).filter(group_key.in_(group_keys_for_sales))
-
+        sales_variants_query = db.query(models.ProductVariant.id, group_key).filter(group_key.in_(group_keys_for_sales))
         for vid, gkey in sales_variants_query.all():
-            if gkey not in sales_variants_map:
-                sales_variants_map[gkey] = []
+            if gkey not in sales_variants_map: sales_variants_map[gkey] = []
             sales_variants_map[gkey].append(vid)
 
-    # Calculate sales velocity
-    def get_sales(start_date):
+    def get_sales(start_date, end_date):
         all_variant_ids = [v for sublist in sales_variants_map.values() for v in sublist]
-        if not all_variant_ids:
-            return {}
-
+        if not all_variant_ids: return {}
+        
         sales_data = db.query(
             func.sum(models.LineItem.quantity).label('total_sales'),
             group_key.label("group_key")
@@ -106,29 +97,38 @@ def get_forecasting_data(
             models.Order, models.Order.id == models.LineItem.order_id
         ).filter(
             models.LineItem.variant_id.in_(all_variant_ids),
-            models.Order.created_at >= start_date
-        ).group_by(
-            group_key
-        ).all()
+            models.Order.created_at.between(start_date, end_date)
+        ).group_by(group_key).all()
         return {s.group_key: s.total_sales for s in sales_data}
 
-    sales_map_7d = get_sales(start_date_7d)
-    sales_map_30d = get_sales(start_date_30d)
+    sales_map_7d = get_sales(today - timedelta(days=7), today)
+    sales_map_30d = get_sales(today - timedelta(days=30), today)
+    
+    sales_map_period = {}
+    period_days = 0
+    if use_custom_velocity and velocity_start_date and velocity_end_date:
+        start = datetime.fromisoformat(velocity_start_date)
+        end = datetime.fromisoformat(velocity_end_date)
+        period_days = (end - start).days + 1
+        sales_map_period = get_sales(start, end)
 
     report = []
     for product in product_groups:
-        total_sales_7d = sales_map_7d.get(product.group_key, 0) or 0
-        total_sales_30d = sales_map_30d.get(product.group_key, 0) or 0
+        velocity_7d = (sales_map_7d.get(product.group_key, 0) or 0) / 7
+        velocity_30d = (sales_map_30d.get(product.group_key, 0) or 0) / 30
         
-        velocity_7d = total_sales_7d / 7
-        velocity_30d = total_sales_30d / 30
+        velocity_period = 0
+        if use_custom_velocity and period_days > 0:
+            velocity_period = (sales_map_period.get(product.group_key, 0) or 0) / period_days
 
+        active_velocity = velocity_period if use_custom_velocity else velocity_30d
+        
         days_of_stock = None
-        if velocity_30d > 0 and product.total_stock is not None:
-            days_of_stock = int(product.total_stock / velocity_30d) if product.total_stock > 0 else 0
+        if active_velocity > 0 and product.total_stock is not None:
+            days_of_stock = int(product.total_stock / active_velocity) if product.total_stock > 0 else 0
 
         stock_status = "slow_mover"
-        if velocity_30d > 0 and days_of_stock is not None:
+        if active_velocity > 0 and days_of_stock is not None:
             if days_of_stock < 7: stock_status = "urgent"
             elif days_of_stock < 14: stock_status = "warning"
             elif days_of_stock < 30: stock_status = "watch"
@@ -139,22 +139,15 @@ def get_forecasting_data(
         if days_of_stock is not None:
             reorder_date = (today + timedelta(days=days_of_stock - lead_time)).strftime('%Y-%m-%d')
         
-        reorder_qty = int(velocity_30d * coverage_period)
+        reorder_qty = int(active_velocity * coverage_period)
 
         report.append({
-            "product_title": product.product_title,
-            "sku": product.sku,
-            "image_url": product.image_url,
-            "total_stock": product.total_stock,
-            "velocity_7d": velocity_7d,
-            "velocity_30d": velocity_30d,
-            "days_of_stock": days_of_stock,
-            "stock_status": stock_status,
-            "reorder_date": reorder_date,
-            "reorder_qty": reorder_qty
+            "product_title": product.product_title, "sku": product.sku, "image_url": product.image_url,
+            "total_stock": product.total_stock, "velocity_7d": velocity_7d, "velocity_30d": velocity_30d,
+            "velocity_period": velocity_period, "days_of_stock": days_of_stock,
+            "stock_status": stock_status, "reorder_date": reorder_date, "reorder_qty": reorder_qty
         })
     
-    # Filter by reorder date range if provided
     if reorder_start_date and reorder_end_date:
         report = [
             item for item in report 
@@ -166,7 +159,6 @@ def get_forecasting_data(
 def get_forecasting_filters(db: Session):
     stores = db.query(models.Store.name).distinct().all()
     product_types = db.query(models.Product.product_type).distinct().all()
-    
     return {
         "stores": [s[0] for s in stores if s[0]],
         "product_types": [pt[0] for pt in product_types if pt[0]],
