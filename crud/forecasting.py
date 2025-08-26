@@ -30,7 +30,6 @@ def get_forecasting_data(
     ).label("group_key")
 
     # Subquery to find the primary variant for each group
-    # The primary is the one marked as such, or the one with the lowest ID
     RowNumber = func.row_number().over(
         partition_by=group_key,
         order_by=[models.ProductVariant.is_primary_variant.desc(), models.ProductVariant.id.asc()]
@@ -80,7 +79,6 @@ def get_forecasting_data(
     # Get all variant IDs for sales velocity calculation
     group_keys_for_sales = [p.group_key for p in product_groups]
     
-    # Map group keys to their constituent variant IDs
     sales_variants_map = {}
     if group_keys_for_sales:
         sales_variants_query = db.query(
@@ -93,21 +91,15 @@ def get_forecasting_data(
                 sales_variants_map[gkey] = []
             sales_variants_map[gkey].append(vid)
 
-    # Calculate sales velocity using the map
+    # Calculate sales velocity
     def get_sales(start_date):
         all_variant_ids = [v for sublist in sales_variants_map.values() for v in sublist]
         if not all_variant_ids:
             return {}
 
-        # Define the grouping expression consistently
-        group_key_expr = case(
-            (models.ProductVariant.barcode != None, models.ProductVariant.barcode),
-            else_=models.ProductVariant.sku
-        )
-
         sales_data = db.query(
             func.sum(models.LineItem.quantity).label('total_sales'),
-            group_key_expr.label("group_key")
+            group_key.label("group_key")
         ).join(
             models.ProductVariant, models.ProductVariant.id == models.LineItem.variant_id
         ).join(
@@ -116,7 +108,7 @@ def get_forecasting_data(
             models.LineItem.variant_id.in_(all_variant_ids),
             models.Order.created_at >= start_date
         ).group_by(
-            group_key_expr
+            group_key
         ).all()
         return {s.group_key: s.total_sales for s in sales_data}
 
@@ -125,19 +117,18 @@ def get_forecasting_data(
 
     report = []
     for product in product_groups:
-        total_sales_7d = sales_map_7d.get(product.group_key, 0)
-        total_sales_30d = sales_map_30d.get(product.group_key, 0)
+        total_sales_7d = sales_map_7d.get(product.group_key, 0) or 0
+        total_sales_30d = sales_map_30d.get(product.group_key, 0) or 0
         
         velocity_7d = total_sales_7d / 7
         velocity_30d = total_sales_30d / 30
 
         days_of_stock = None
         if velocity_30d > 0 and product.total_stock is not None:
-            # Prevent division by zero if total_stock is 0
             days_of_stock = int(product.total_stock / velocity_30d) if product.total_stock > 0 else 0
 
         stock_status = "slow_mover"
-        if days_of_stock is not None:
+        if velocity_30d > 0 and days_of_stock is not None:
             if days_of_stock < 7: stock_status = "urgent"
             elif days_of_stock < 14: stock_status = "warning"
             elif days_of_stock < 30: stock_status = "watch"
