@@ -8,7 +8,8 @@ document.addEventListener('DOMContentLoaded', () => {
         storeFilter: document.getElementById('store-filter-list'),
         typeFilter: document.getElementById('type-filter-list'),
         statusFilter: document.getElementById('status-filter-list'),
-        reorderDateFilter: document.getElementById('reorder-date-filter'),
+        reorderDateStart: document.getElementById('reorder-date-start'),
+        reorderDateEnd: document.getElementById('reorder-date-end'),
         exportBtn: document.getElementById('export-button'),
     };
 
@@ -31,7 +32,8 @@ document.addEventListener('DOMContentLoaded', () => {
             store_ids: selectedStores,
             product_types: selectedTypes,
             stock_statuses: selectedStatuses,
-            reorder_before: elements.reorderDateFilter.value,
+            reorder_start_date: elements.reorderDateStart.value,
+            reorder_end_date: elements.reorderDateEnd.value,
         };
     };
 
@@ -71,6 +73,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (valA === null || valA === undefined) return 1;
             if (valB === null || valB === undefined) return -1;
             
+            if (typeof valA === 'string' && valA.includes('-')) { // Basic date string check
+                return sortState.order === 'asc' 
+                    ? new Date(valA) - new Date(valB) 
+                    : new Date(valB) - new Date(valA);
+            }
             if (typeof valA === 'string') {
                 return sortState.order === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
             } else {
@@ -79,7 +86,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         const headers = [
-            { key: 'product', label: 'Product' },
+            { key: 'product_title', label: 'Product' },
             { key: 'total_stock', label: 'Total Stock' },
             { key: 'velocity_7d', label: 'Velocity (7d)' },
             { key: 'velocity_30d', label: 'Velocity (30d)' },
@@ -177,7 +184,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Event Listeners
-    [elements.leadTime, elements.coveragePeriod, elements.reorderDateFilter].forEach(input => {
+    [elements.leadTime, elements.coveragePeriod, elements.reorderDateStart, elements.reorderDateEnd].forEach(input => {
         input.addEventListener('change', debounce(loadForecastingData, 400));
     });
 

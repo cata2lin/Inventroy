@@ -1,7 +1,7 @@
 # crud/forecasting.py
 
-from sqlalchemy.orm import Session
-from sqlalchemy import func, case, and_
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy import func, case, and_, text
 from datetime import datetime, timedelta
 import models
 
@@ -11,25 +11,58 @@ def get_forecasting_data(
     coverage_period: int,
     store_ids: list[int] = None,
     product_types: list[str] = None,
-    reorder_before: str = None
+    reorder_start_date: str = None,
+    reorder_end_date: str = None,
 ):
     """
     Generates a forecasting report by calculating stock levels, sales velocities,
-    and reorder points for each product group (grouped by barcode).
+    and reorder points for each product group.
+    Groups by barcode, falling back to SKU for products without a barcode.
     """
     today = datetime.utcnow().date()
     start_date_7d = today - timedelta(days=7)
     start_date_30d = today - timedelta(days=30)
 
-    # Base query for product variants
+    # Define a robust grouping key: barcode, or SKU if barcode is null/empty
+    group_key = func.coalesce(
+        func.nullif(models.ProductVariant.barcode, ''),
+        models.ProductVariant.sku
+    ).label("group_key")
+
+    # Subquery to find the primary variant for each group
+    # The primary is the one marked as such, or the one with the lowest ID
+    RowNumber = func.row_number().over(
+        partition_by=group_key,
+        order_by=[models.ProductVariant.is_primary_variant.desc(), models.ProductVariant.id.asc()]
+    ).label("rn")
+    
+    PrimaryVariantSelector = db.query(
+        models.ProductVariant.id.label("primary_variant_id"),
+        group_key
+    ).add_column(RowNumber).subquery()
+    
+    PrimaryVariant = aliased(models.ProductVariant)
+    PrimaryProduct = aliased(models.Product)
+
+    # Base query to get stock and primary product info for each group
     base_query = db.query(
-        models.ProductVariant.barcode,
+        group_key,
         func.min(models.ProductVariant.inventory_quantity).label('total_stock'),
-        models.Product.title,
-        models.ProductVariant.sku,
-        models.Product.image_url
-    ).join(models.Product).filter(
-        models.ProductVariant.barcode.isnot(None)
+        PrimaryProduct.title.label("product_title"),
+        PrimaryVariant.sku.label("sku"),
+        PrimaryProduct.image_url.label("image_url")
+    ).join(models.Product, models.ProductVariant.product_id == models.Product.id).join(
+        PrimaryVariantSelector,
+        and_(
+            group_key == PrimaryVariantSelector.c.group_key,
+            PrimaryVariantSelector.c.rn == 1
+        )
+    ).join(
+        PrimaryVariant, PrimaryVariant.id == PrimaryVariantSelector.c.primary_variant_id
+    ).join(
+        PrimaryProduct, PrimaryProduct.id == PrimaryVariant.product_id
+    ).filter(
+        group_key.isnot(None)
     )
 
     if store_ids:
@@ -38,59 +71,62 @@ def get_forecasting_data(
         base_query = base_query.filter(models.Product.product_type.in_(product_types))
 
     product_groups = base_query.group_by(
-        models.ProductVariant.barcode,
-        models.Product.title,
-        models.ProductVariant.sku,
-        models.Product.image_url
+        group_key,
+        PrimaryProduct.title,
+        PrimaryVariant.sku,
+        PrimaryProduct.image_url
     ).all()
 
     # Get all variant IDs for sales velocity calculation
-    variant_ids = db.query(models.ProductVariant.id).filter(
-        models.ProductVariant.barcode.in_([p.barcode for p in product_groups])
-    ).all()
-    variant_ids = [v[0] for v in variant_ids]
+    group_keys_for_sales = [p.group_key for p in product_groups]
+    sales_variants_query = db.query(
+        models.ProductVariant.id,
+        group_key
+    ).filter(group_key.in_(group_keys_for_sales))
+
+    sales_variants_map = {}
+    for vid, gkey in sales_variants_query.all():
+        if gkey not in sales_variants_map:
+            sales_variants_map[gkey] = []
+        sales_variants_map[gkey].append(vid)
 
     # Calculate sales velocity
-    sales_7d = db.query(
-        models.ProductVariant.barcode,
-        func.sum(models.LineItem.quantity).label('total_sales')
-    ).join(models.LineItem).join(models.Order).filter(
-        models.ProductVariant.id.in_(variant_ids),
-        models.Order.created_at >= start_date_7d
-    ).group_by(models.ProductVariant.barcode).all()
+    def get_sales(start_date):
+        sales_data = db.query(
+            func.sum(models.LineItem.quantity).label('total_sales'),
+            text("CASE WHEN line_items.variant_id IS NOT NULL THEN pv.barcode ELSE pv.sku END as group_key")
+        ).join(
+            models.ProductVariant, models.ProductVariant.id == models.LineItem.variant_id
+        ).alias("pv").join(
+            models.Order, models.Order.id == models.LineItem.order_id
+        ).filter(
+            models.LineItem.variant_id.in_([v for sublist in sales_variants_map.values() for v in sublist]),
+            models.Order.created_at >= start_date
+        ).group_by("group_key").all()
+        return {s.group_key: s.total_sales for s in sales_data}
 
-    sales_30d = db.query(
-        models.ProductVariant.barcode,
-        func.sum(models.LineItem.quantity).label('total_sales')
-    ).join(models.LineItem).join(models.Order).filter(
-        models.ProductVariant.id.in_(variant_ids),
-        models.Order.created_at >= start_date_30d
-    ).group_by(models.ProductVariant.barcode).all()
-
-    velocity_map_7d = {s.barcode: s.total_sales / 7 for s in sales_7d}
-    velocity_map_30d = {s.barcode: s.total_sales / 30 for s in sales_30d}
+    sales_map_7d = get_sales(start_date_7d)
+    sales_map_30d = get_sales(start_date_30d)
 
     report = []
     for product in product_groups:
-        velocity_7d = velocity_map_7d.get(product.barcode, 0)
-        velocity_30d = velocity_map_30d.get(product.barcode, 0)
+        total_sales_7d = sales_map_7d.get(product.group_key, 0)
+        total_sales_30d = sales_map_30d.get(product.group_key, 0)
+        
+        velocity_7d = total_sales_7d / 7
+        velocity_30d = total_sales_30d / 30
 
         days_of_stock = None
-        if velocity_30d > 0:
+        if velocity_30d > 0 and product.total_stock is not None:
             days_of_stock = int(product.total_stock / velocity_30d)
 
         stock_status = "slow_mover"
         if days_of_stock is not None:
-            if days_of_stock < 7:
-                stock_status = "urgent"
-            elif days_of_stock < 14:
-                stock_status = "warning"
-            elif days_of_stock < 30:
-                stock_status = "watch"
-            elif days_of_stock <= 90:
-                stock_status = "healthy"
-            else:
-                stock_status = "overstocked"
+            if days_of_stock < 7: stock_status = "urgent"
+            elif days_of_stock < 14: stock_status = "warning"
+            elif days_of_stock < 30: stock_status = "watch"
+            elif days_of_stock <= 90: stock_status = "healthy"
+            else: stock_status = "overstocked"
         
         reorder_date = None
         if days_of_stock is not None:
@@ -99,7 +135,7 @@ def get_forecasting_data(
         reorder_qty = int(velocity_30d * coverage_period)
 
         report.append({
-            "product_title": product.title,
+            "product_title": product.product_title,
             "sku": product.sku,
             "image_url": product.image_url,
             "total_stock": product.total_stock,
@@ -111,8 +147,12 @@ def get_forecasting_data(
             "reorder_qty": reorder_qty
         })
     
-    if reorder_before:
-        report = [item for item in report if item['reorder_date'] and item['reorder_date'] <= reorder_before]
+    # Filter by reorder date range if provided
+    if reorder_start_date and reorder_end_date:
+        report = [
+            item for item in report 
+            if item['reorder_date'] and reorder_start_date <= item['reorder_date'] <= reorder_end_date
+        ]
         
     return report
 
