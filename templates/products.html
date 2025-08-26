@@ -1,33 +1,37 @@
 {% extends "base.html" %}
+
 {% block content %}
-<h1>Bulk Variant Editor</h1>
-<h2>Update product variant details and push changes to Shopify.</h2>
+<div class="container">
+    <hgroup>
+        <h1>Bulk Variant Editor</h1>
+        <h2>Update product variant details and push changes to Shopify.</h2>
+    </hgroup>
 
-<section class="card">
-  <h3>Store & Actions</h3>
-  <div class="grid">
-    <div>
-      <label for="storeSelector">Select a Store</label>
-      <select id="storeSelector" required>
-        <option value="">Loading stores…</option>
-      </select>
-    </div>
-    <div>
-      <label id="sync-label">Inventory Sync</label>
-      <button id="syncProductsButton" disabled aria-labelledby="sync-label">Sync Inventory</button>
-    </div>
-  </div>
-</section>
+    <article>
+        <header>Store & Actions</header>
+        <div class="grid">
+            <div>
+                <label for="storeSelector">Select a Store</label>
+                <select id="storeSelector" required><option value="">Loading stores...</option></select>
+            </div>
+            <div>
+                <label for="syncProductsButton">Inventory Sync</label>
+                <button id="syncProductsButton" disabled>Sync Inventory</button>
+            </div>
+        </div>
+    </article>
 
-<section id="product-table-container" class="card hidden">
-  <h3>Product Variants</h3>
-  <div id="variants-content" class="overflow-auto" aria-live="polite">
-    <p>Select a store to view its product variants.</p>
-  </div>
-</section>
-
-<div id="toast" role="status" aria-live="polite" class="hidden"></div>
+    <article id="product-table-container" style="display: none;">
+        <header>Product Variants</header>
+        <div id="variants-content" class="overflow-auto">
+            <p>Select a store to view its product variants.</p>
+        </div>
+    </article>
+    
+    <div id="toast"></div>
+</div>
 {% endblock %}
+
 {% block scripts %}
 <script src="/static/js/config.js"></script>
 <script src="/static/js/products.js"></script>

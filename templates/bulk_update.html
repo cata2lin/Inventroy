@@ -1,27 +1,69 @@
 {% extends "base.html" %}
+
 {% block content %}
-<h1>Bulk Product Update</h1>
-<h2>Edit product variants across all stores and save changes in one go.</h2>
+<div class="container-fluid">
+    <hgroup>
+        <h1>Bulk Product Update</h1>
+        <h2>Edit product variants across all stores and save changes in one go.</h2>
+    </hgroup>
 
-<section class="card bulk-update-controls">
-  <div class="grid compact-filter">
-    <button id="save-changes-btn" class="secondary" aria-busy="false">Save Changes</button>
-    <label for="search-input" class="visually-hidden">Search products</label>
-    <input type="search" id="search-input" placeholder="Filter by SKU, Name… (use commas)" />
-    <!-- Stores, Types, Status filters -->
-  </div>
+    <article class="bulk-update-controls">
+        <div class="grid compact-controls">
+            <button id="save-changes-btn" class="bulk-update-action-btn" aria-busy="false">Save Changes</button>
+            <input type="search" id="search-input" placeholder="Filter by SKU, Name (use commas for multiple)...">
+            
+            <details role="list" class="dropdown">
+                <summary>Stores</summary>
+                <ul role="listbox" id="store-filter-list"><li>Loading...</li></ul>
+            </details>
+            
+            <details role="list" class="dropdown">
+                <summary>Types</summary>
+                <ul role="listbox" id="type-filter-list"><li>Loading...</li></ul>
+            </details>
 
-  <div class="grid compact-filter import-controls">
-    <label for="excel-file-input" class="visually-hidden">Upload Excel file</label>
-    <input type="file" id="excel-file-input" accept=".xlsx" />
-    <button id="import-excel-btn" class="secondary">Import from Excel</button>
-  </div>
-</section>
+            <details role="list" class="dropdown">
+                <summary>Status</summary>
+                <ul role="listbox" id="status-filter-list">
+                    <li><label><input type="checkbox" name="status" value="ACTIVE"> Active</label></li>
+                    <li><label><input type="checkbox" name="status" value="DRAFT"> Draft</label></li>
+                    <li><label><input type="checkbox" name="status" value="ARCHIVED"> Archived</label></li>
+                </ul>
+            </details>
 
-<section id="bulk-update-container" class="card" aria-busy="true" aria-live="polite">
-  <p>Loading products…</p>
-</section>
+            <details role="list" class="dropdown">
+                <summary>Barcode Actions</summary>
+                <ul role="listbox">
+                    <li><a href="#" id="generate-unique-barcode-btn">Generate Unique for Selected</a></li>
+                    <li><a href="#" id="generate-same-barcode-btn">Generate Same for Selected</a></li>
+                </ul>
+            </details>
+
+            <fieldset>
+                <label for="no-barcode-filter">
+                    <input type="checkbox" id="no-barcode-filter" name="no-barcode-filter">
+                    No Barcode
+                </label>
+            </fieldset>
+            <fieldset>
+                <label for="group-toggle">
+                    <input type="checkbox" id="group-toggle" name="group-toggle" role="switch">
+                    Group by Barcode
+                </label>
+            </fieldset>
+        </div>
+        <div class="import-controls">
+            <input type="file" id="excel-file-input" accept=".xlsx">
+            <button id="import-excel-btn" class="bulk-update-action-btn">Import from Excel</button>
+        </div>
+    </article>
+
+    <article id="bulk-update-container" class="overflow-auto" aria-busy="true">
+        <p>Loading products...</p>
+    </article>
+</div>
 {% endblock %}
+
 {% block scripts %}
 <script src="/static/js/config.js"></script>
 <script src="/static/js/bulk_update.js"></script>

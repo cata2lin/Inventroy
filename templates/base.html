@@ -1,48 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{{ title }} – Inventory Intelligence</title>
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
-  <link rel="stylesheet" href="/static/css/style.css" />
-
-  <!-- Theme Toggle -->
-  <button id="theme-toggle" aria-label="Toggle light/dark theme">🌓</button>
-  <script>
-    (function() {
-      const key = 'theme';
-      const local = localStorage.getItem(key);
-      const prefDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      const theme = local || (prefDark ? 'dark' : 'light');
-      document.documentElement.setAttribute('data-theme', theme);
-      document.getElementById('theme-toggle').addEventListener('click', () => {
-        const newTheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', newTheme);
-        localStorage.setItem(key, newTheme);
-      });
-    })();
-  </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - Inventory Intelligence</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+    <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
-  <a href="#main-content" class="visually-hidden focusable">Skip to main content</a>
-  <div class="app-layout">
-    <aside class="sidebar" role="complementary">
-      <nav role="navigation" aria-label="Main Navigation">
-        <ul>
-          <li><a href="/dashboard-v2" {% if title == "Dashboard" %}class="contrast"{% endif %}>Dashboard</a></li>
-          <li><a href="/inventory" {% if title == "Inventory Report" %}class="contrast"{% endif %}>Inventory Report</a></li>
-          <li><a href="/bulk-update" {% if title == "Bulk Update" %}class="contrast"{% endif %}>Bulk Update</a></li>
-          <li><a href="/sync-control" {% if title == "Sync Control" %}class="contrast"{% endif %}>Sync Control</a></li>
-          <li><a href="/config" {% if title == "Configuration" %}class="contrast"{% endif %}>Configuration</a></li>
-        </ul>
-      </nav>
-    </aside>
-    <main id="main-content" class="main-content" role="main">
-      {% block content %}{% endblock %}
-    </main>
-  </div>
-  {% block scripts %}{% endblock %}
+    <div class="app-layout">
+        <aside class="sidebar">
+            <nav>
+                <ul>
+                    <li><a href="/dashboard-v2" {% if title == "Dashboard" %}class="contrast"{% endif %}>Dashboard</a></li>
+                    <li><a href="/inventory" {% if title == "Inventory Report" %}class="contrast"{% endif %}>Inventory Report</a></li>
+                    <li><a href="/bulk-update" {% if title == "Bulk Update" %}class="contrast"{% endif %}>Bulk Update</a></li>
+                    <li><a href="/sync-control" {% if title == "Sync Control" %}class="contrast"{% endif %}>Sync Control</a></li>
+                    <li><a href="/config" {% if title == "Configuration" %}class="contrast"{% endif %}>Configuration</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <main class="main-content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+    
+    {% block scripts %}{% endblock %}
 </body>
 </html>
