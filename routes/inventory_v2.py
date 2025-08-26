@@ -409,7 +409,6 @@ def product_analytics(
         payload = {
             "header": {"group_key": group_key, "members": []},
             "inventory_snapshot": {"on_hand": 0, "available": 0, "committed": 0},
-            "sales_by_day": [],
             "sales_by_month": [],
             "stock_movements_by_day": [],
             "stock_evolution": [],
@@ -471,8 +470,6 @@ def product_analytics(
     ]
     total_units_period = sum(x["units"] for x in sales_by_day)
     period_days = (end_d - start_d).days + 1
-    avg_daily_sales = (total_units_period / period_days) if period_days > 0 else 0.0
-    avg_monthly_sales = avg_daily_sales * 30.0
 
     # Quick-window velocities (7/30/90 relative to end date)
     def _window_units(days: int) -> float:
@@ -623,15 +620,12 @@ def product_analytics(
             "available": available_min,
             "committed": committed_min,
         },
-        "sales_by_day": sales_by_day,
         "sales_by_month": sales_by_month,
         "stock_movements_by_day": stock_movements_by_day,
         "stock_evolution": stock_evolution_data,
         "metrics": {
             "period_days": period_days,
             "total_units_period": int(total_units_period),
-            "avg_daily_sales": float(round(avg_daily_sales, 4)),
-            "avg_monthly_sales": float(round(avg_monthly_sales, 4)),
             "velocity_7": float(round(velocity_7, 4)),
             "velocity_30": float(round(velocity_30, 4)),
             "velocity_90": float(round(velocity_90, 4)),

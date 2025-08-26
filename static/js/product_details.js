@@ -57,7 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const drawStockChart = (series) => {
         const ctx = els.stockCanvas.getContext('2d');
         const W = els.stockCanvas.width = els.stockCanvas.clientWidth;
-        const H = els.stockCanvas.height = 220;
+        const H = els.stockCanvas.height = 300; // Increased height
 
         ctx.clearRect(0, 0, W, H);
         if (!series || !series.length) {
@@ -137,7 +137,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const m = analytics.metrics;
     const dec = (x) => (x ?? 0).toFixed(2);
     els.velocity.innerHTML = `
-      <div class="metric"><h4>${dec(m.avg_daily_sales)}</h4><p>Avg Daily (period)</p></div>
       <div class="metric"><h4>${dec(m.velocity_7)}</h4><p>Velocity 7d</p></div>
       <div class="metric"><h4>${dec(m.velocity_30)}</h4><p>Velocity 30d</p></div>
     `;
