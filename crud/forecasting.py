@@ -1,7 +1,7 @@
 # crud/forecasting.py
 
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import func, case, and_, text
+from sqlalchemy import func, case, and_
 from datetime import datetime, timedelta
 import models
 
@@ -88,9 +88,11 @@ def get_forecasting_data(
         all_variant_ids = [v for sublist in sales_variants_map.values() for v in sublist]
         if not all_variant_ids: return {}
         
+        group_key_expr = func.coalesce(func.nullif(models.ProductVariant.barcode, ''), models.ProductVariant.sku)
+
         sales_data = db.query(
             func.sum(models.LineItem.quantity).label('total_sales'),
-            group_key.label("group_key")
+            group_key_expr.label("group_key")
         ).join(
             models.ProductVariant, models.ProductVariant.id == models.LineItem.variant_id
         ).join(
@@ -98,7 +100,7 @@ def get_forecasting_data(
         ).filter(
             models.LineItem.variant_id.in_(all_variant_ids),
             models.Order.created_at.between(start_date, end_date)
-        ).group_by(group_key).all()
+        ).group_by(group_key_expr).all()
         return {s.group_key: s.total_sales for s in sales_data}
 
     sales_map_7d = get_sales(today - timedelta(days=7), today)
@@ -121,7 +123,7 @@ def get_forecasting_data(
         if use_custom_velocity and period_days > 0:
             velocity_period = (sales_map_period.get(product.group_key, 0) or 0) / period_days
 
-        active_velocity = velocity_period if use_custom_velocity else velocity_30d
+        active_velocity = velocity_period if use_custom_velocity and period_days > 0 else velocity_30d
         
         days_of_stock = None
         if active_velocity > 0 and product.total_stock is not None:

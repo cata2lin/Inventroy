@@ -68,16 +68,24 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.customVelocityDates.style.display = state.use_custom_velocity ? 'grid' : 'none';
 
         document.querySelectorAll('#store-filter-list input, #type-filter-list input, #status-filter-list input').forEach(cb => {
-            const list = state[`${cb.name}_ids`] || state[`${cb.name}_statuses`] || [];
+            const listKey = cb.name === 'status' ? 'stock_statuses' : `${cb.name}_ids`;
+            const list = state[listKey] || [];
             cb.checked = list.includes(cb.value);
         });
     };
 
     const loadForecastingData = async () => {
         elements.container.setAttribute('aria-busy', 'true');
-        updateUrl(); // Update URL every time we fetch
+        updateUrl();
         
-        const params = new URLSearchParams(state);
+        const params = new URLSearchParams();
+        for (const [key, value] of Object.entries(state)) {
+            if (Array.isArray(value)) {
+                value.forEach(v => params.append(key, v));
+            } else if (value) {
+                params.set(key, value);
+            }
+        }
         
         try {
             const response = await fetch(`/api/forecasting/report?${params.toString()}`);
@@ -92,14 +100,13 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const renderTable = () => {
-        // Sort data
         forecastingData.sort((a, b) => {
             const valA = a[state.sort_by];
             const valB = b[state.sort_by];
             if (valA === null || valA === undefined) return 1;
             if (valB === null || valB === undefined) return -1;
             
-            if (typeof valA === 'string' && valA.includes('-')) { // Date sort
+            if (typeof valA === 'string' && valA.includes('-')) {
                 return state.sort_order === 'asc' 
                     ? new Date(valA) - new Date(valB) 
                     : new Date(valB) - new Date(valA);
@@ -141,6 +148,7 @@ document.addEventListener('DOMContentLoaded', () => {
             tableHtml += `<tr><td colspan="${headers.length}">No products match the current filters.</td></tr>`;
         } else {
             forecastingData.forEach(item => {
+                const statusClass = item.stock_status.replace('_', '-');
                 tableHtml += `
                     <tr>
                         <td>
@@ -157,7 +165,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td>${item.velocity_30d.toFixed(2)}</td>
                         ${state.use_custom_velocity ? `<td>${item.velocity_period.toFixed(2)}</td>` : ''}
                         <td>${item.days_of_stock === null ? '∞' : item.days_of_stock}</td>
-                        <td><span class="status-badge status-${item.stock_status}">${item.stock_status.replace('_', ' ')}</span></td>
+                        <td><span class="status-badge status-${statusClass}">${item.stock_status.replace('_', ' ')}</span></td>
                         <td>${item.reorder_date || 'N/A'}</td>
                         <td>${item.reorder_qty}</td>
                     </tr>
@@ -190,7 +198,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
 
             const populateList = (element, items, stateKey) => {
-                element.innerHTML = items.map(item => `<li><label><input type="checkbox" name="${stateKey}" value="${item}" ${state[stateKey].includes(item) ? 'checked' : ''}> ${item}</label></li>`).join('');
+                element.innerHTML = items.map(item => `<li><label><input type="checkbox" name="${stateKey.replace('_ids', '')}" value="${item}" ${state[stateKey].includes(item) ? 'checked' : ''}> ${item}</label></li>`).join('');
             };
             
             populateList(elements.storeFilter, data.stores, 'store_ids');
@@ -222,7 +230,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     [elements.storeFilter, elements.typeFilter, elements.statusFilter].forEach(filter => {
         filter.addEventListener('change', () => {
-            const key = filter.id.replace('-list', '').replace(/-/g, '_');
+            const key = filter.id.includes('status') ? 'stock_statuses' : filter.id.replace('-list', '').replace(/-/g, '_') + '_ids';
             state[key] = Array.from(filter.querySelectorAll('input:checked')).map(cb => cb.value);
             loadForecastingData();
         });
@@ -231,7 +239,8 @@ document.addEventListener('DOMContentLoaded', () => {
     elements.exportBtn.addEventListener('click', handleExport);
 
     // Initial Load
-    loadStateFromUrl();
-    loadFilters();
-    loadForecastingData();
+    loadFilters().then(() => {
+        loadStateFromUrl();
+        loadForecastingData();
+    });
 });

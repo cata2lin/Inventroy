@@ -17,15 +17,21 @@ router = APIRouter(
 @router.get("/report")
 def get_forecasting_report(
     db: Session = Depends(get_db),
-    lead_time: int = 14,
-    coverage_period: int = 30,
+    lead_time: int = 30,
+    coverage_period: int = 60,
     store_ids: Optional[List[int]] = Query(None),
     product_types: Optional[List[str]] = Query(None),
-    vendors: Optional[List[str]] = Query(None),
-    stock_statuses: Optional[List[str]] = Query(None)
+    stock_statuses: Optional[List[str]] = Query(None),
+    reorder_start_date: Optional[str] = Query(None),
+    reorder_end_date: Optional[str] = Query(None),
+    use_custom_velocity: bool = Query(False),
+    velocity_start_date: Optional[str] = Query(None),
+    velocity_end_date: Optional[str] = Query(None)
 ):
     data = crud_forecasting.get_forecasting_data(
-        db, lead_time, coverage_period, store_ids, product_types, vendors
+        db, lead_time, coverage_period, store_ids, product_types, 
+        reorder_start_date, reorder_end_date,
+        use_custom_velocity, velocity_start_date, velocity_end_date
     )
     if stock_statuses:
         data = [item for item in data if item['stock_status'] in stock_statuses]
@@ -38,15 +44,21 @@ def get_forecasting_filters(db: Session = Depends(get_db)):
 @router.get("/export")
 def export_forecasting_report(
     db: Session = Depends(get_db),
-    lead_time: int = 14,
-    coverage_period: int = 30,
+    lead_time: int = 30,
+    coverage_period: int = 60,
     store_ids: Optional[List[int]] = Query(None),
     product_types: Optional[List[str]] = Query(None),
-    vendors: Optional[List[str]] = Query(None),
-    stock_statuses: Optional[List[str]] = Query(None)
+    stock_statuses: Optional[List[str]] = Query(None),
+    reorder_start_date: Optional[str] = Query(None),
+    reorder_end_date: Optional[str] = Query(None),
+    use_custom_velocity: bool = Query(False),
+    velocity_start_date: Optional[str] = Query(None),
+    velocity_end_date: Optional[str] = Query(None)
 ):
     data = crud_forecasting.get_forecasting_data(
-        db, lead_time, coverage_period, store_ids, product_types, vendors
+        db, lead_time, coverage_period, store_ids, product_types, 
+        reorder_start_date, reorder_end_date,
+        use_custom_velocity, velocity_start_date, velocity_end_date
     )
     if stock_statuses:
         data = [item for item in data if item['stock_status'] in stock_statuses]
