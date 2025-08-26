@@ -72,6 +72,7 @@ app.include_router(bulk_update.router)
 app.include_router(sync_control.router)
 app.include_router(config.router)
 app.include_router(webhooks.router)
+app.include_router(forecasting.router) # Include the forecasting router
 
 # ---------- HTML Page Routes ----------
 @app.get("/", response_class=RedirectResponse, include_in_schema=False)
