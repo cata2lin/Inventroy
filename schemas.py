@@ -121,7 +121,6 @@ class LocationModel(APIBase):
 
 class InventoryLevelModel(APIBase):
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
-    # ShopifyService flattens into [{'name': 'available'|'on_hand', 'quantity': int}]
     quantities: Optional[List[Dict[str, Any]]] = None
     location: Optional[LocationModel] = None
 
@@ -130,7 +129,6 @@ class InventoryItemModel(APIBase):
     legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
     tracked: Optional[bool] = None
     unit_cost: Optional[Money] = Field(None, alias="unitCost")
-    # ShopifyService flattens inventoryLevels edges -> list
     inventory_levels: Optional[List[InventoryLevelModel]] = Field(None, alias="inventoryLevels")
 
 
@@ -144,7 +142,6 @@ class ProductModel(APIBase):
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
     published_at: Optional[datetime] = Field(None, alias="publishedAt")
     category: Optional[Dict[str, Any]] = None
-    # FIX: Added featured_image with its alias to handle the API response
     featured_image: Optional[Dict[str, Any]] = Field(None, alias="featuredImage")
 
 
@@ -157,6 +154,14 @@ class VariantModel(APIBase):
     barcode: Optional[str] = None
     inventory_item: Optional[InventoryItemModel] = Field(None, alias="inventoryItem")
     product: Optional[ProductModel] = None
+    # FIX: Added inventory_policy with its alias to handle the API response
+    inventory_policy: Optional[str] = Field(None, alias="inventoryPolicy")
+    inventory_quantity: Optional[int] = Field(None, alias="inventoryQuantity")
+    position: Optional[int] = None
+    compare_at_price: Optional[float] = Field(None, alias="compareAtPrice")
+    created_at: Optional[datetime] = Field(None, alias="createdAt")
+    updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+
 
 
 class LineItemModel(APIBase):
@@ -239,7 +244,6 @@ class FulfillmentOrderWebhook(APIBase):
 
 
 class ShopifyOrderWebhook(APIBase):
-    # Minimal fields we actually read in services/commited_projector.py etc.
     id: int
     admin_graphql_api_id: Optional[str] = None
     name: Optional[str] = None
@@ -277,8 +281,7 @@ class DeletePayload(APIBase):
 
 
 # ======================================================
-# **NEW**: Product webhook payloads (expected by crud/webhooks.py)
-# Permissive models that match Shopify REST product webhooks.
+# Product webhook payloads (expected by crud/webhooks.py)
 # ======================================================
 
 class ShopifyImageWebhook(APIBase):
@@ -333,12 +336,10 @@ class ShopifyProductWebhook(APIBase):
     status: Optional[str] = None
     handle: Optional[str] = None
     tags: Optional[str] = None  # Shopify sends comma-separated string
-    # Collections
     variants: Optional[List[ShopifyVariantWebhook]] = None
     options: Optional[List[ShopifyOptionWebhook]] = None
     images: Optional[List[ShopifyImageWebhook]] = None
     image: Optional[ShopifyImageWebhook] = None
-    # Timestamps
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     published_at: Optional[datetime] = None

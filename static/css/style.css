@@ -414,3 +414,150 @@ section.controls-grid:has(#financial-status-filter) .control input[type="search"
   .controls-grid { grid-template-columns: 1fr 1fr; }
   .cards-grid { grid-template-columns: 1fr; }
 }
+/* =========================
+   FINAL NORMALIZATION PATCH
+   Make every filter look/size the same across Dashboard v2,
+   Inventory, and Bulk Update. Shrink hero buttons.
+   ========================= */
+
+/* --- 1) One compact spec for ALL filter controls --- */
+:root{
+  --filter-h: 34px;           /* compact */
+  --filter-font: 0.68rem;     /* small, readable */
+  --filter-radius: 12px;
+  --filter-pad-x: 12px;
+}
+
+.controls-grid{
+  align-items: center;        /* consistent baseline */
+  row-gap: 0.5rem;
+}
+
+.controls-grid input[type="search"],
+.controls-grid input[type="text"],
+.controls-grid input[type="number"],
+.controls-grid input[type="date"],
+.controls-grid select,
+.controls-grid .dropdown > summary {
+  height: var(--filter-h);
+  min-height: var(--filter-h);
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  line-height: 1.1;
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
+}
+
+/* Show magnifying icon in ALL search boxes and prevent overlap */
+.controls-grid .control{ position: relative; }
+.controls-grid .control .icon{
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; pointer-events: none;
+}
+.controls-grid .control input[type="search"]{
+  padding-left: calc(var(--filter-pad-x) + 18px) !important;
+  height: var(--filter-h);
+}
+
+/* Date pickers / numeric inputs match filters exactly */
+.controls-grid input[type="date"]{ appearance:none; -webkit-appearance:none; }
+.controls-grid input[type="date"]::-webkit-calendar-picker-indicator{ opacity:.85; }
+#min-retail-input, #max-retail-input, #min-inv-input, #max-inv-input{
+  height: var(--filter-h); min-height: var(--filter-h);
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+}
+
+/* Dropdown open state visual */
+.controls-grid .dropdown[open] > summary{
+  border-color: color-mix(in oklab, var(--accent), var(--filter-bd) 60%);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 80%);
+}
+
+/* --- 2) Make the Dashboard v2 bar use the same filter spec (and keep the icon) --- */
+section.controls-grid:has(#financial-status-filter) .control .icon{
+  display:block !important;    /* ensure icon is on */
+}
+
+/* --- 3) Normalize “Columns” button so it visually matches chips --- */
+#column-visibility-button{
+  height: var(--filter-h);
+  font-size: var(--filter-font);
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x);
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
+  color: inherit;
+}
+#column-visibility-button .icon{ width:16px; height:16px; }
+
+/* --- 4) Fix action buttons that exploded into tiles --- */
+/* Dashboard v2 actions */
+#export-button, #reset-filters{
+  display: inline-flex !important;
+  align-items: center; gap: .5rem;
+  height: var(--filter-h) !important;
+  font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x) !important;
+  max-width: max-content;
+}
+#export-button .icon{ width:16px; height:16px; }
+
+/* Bulk Update primary action */
+#save-changes-btn{
+  height: var(--filter-h);
+  font-size: var(--filter-font);
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x);
+}
+
+/* File input + Import from Excel aligned and same height */
+.import-controls{
+  display: grid; grid-auto-flow: column; gap: .5rem; align-items: center;
+}
+.import-controls input[type="file"]{ font-size: var(--filter-font); }
+.import-controls input[type="file"]::file-selector-button{
+  height: var(--filter-h);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  border-radius: var(--filter-radius);
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
+}
+#import-excel-btn{
+  height: var(--filter-h);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  border-radius: var(--filter-radius);
+}
+
+/* --- 5) Shrink the big Sync Control tiles back to compact buttons --- */
+#sync-all-orders-btn,
+#sync-all-products-btn,
+#sync-single-store-btn,
+#sync-date-range-btn{
+  display: inline-flex !important;
+  align-items: center; gap: .5rem;
+  height: var(--filter-h) !important;
+  padding: 0 var(--filter-pad-x) !important;
+  font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius) !important;
+  max-width: max-content;
+}
+#sync-all-orders-btn .icon,
+#sync-all-products-btn .icon,
+#sync-single-store-btn .icon,
+#sync-date-range-btn .icon{ width:16px; height:16px; }
+
+/* --- 6) Keep tables compact and consistent (unchanged) --- */
+#orders-table-container th, #orders-table-container td,
+#inventory-table-container th, #inventory-table-container td{
+  padding: 6px 8px;
+}
+
+/* Optional: if any control still stretches full width, prevent it */
+.controls-grid > *{ width: 100%; max-width: 100%; }
+.controls-grid button{ width: max-content; }

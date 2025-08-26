@@ -96,7 +96,6 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     financial_status = _get(order_data, "financial_status") or 'pending'
     fulfillment_status = _get(order_data, "fulfillment_status") or 'unfulfilled'
 
-    # total_shipping_price_set.shop_money.amount OR sum(shipping_lines.price)
     total_shipping_price = None
     tsp_set = _get(order_data, "total_shipping_price_set")
     if tsp_set:
@@ -141,14 +140,12 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
         "total_discounts": _get(order_data, "total_discounts"),
         "total_shipping_price": total_shipping_price if total_shipping_price is not None else None,
     }
-    # Optional: hold reason if present on order payloads
     hold_reason = _get(order_data, "hold_reason")
     if hasattr(models.Order, "hold_reason") and hold_reason is not None:
         order_dict["hold_reason"] = hold_reason
 
     upsert_batch(db, models.Order, [order_dict], ['id'])
 
-    # Ensure products/variants exist for line items
     products_to_create: List[Dict[str, Any]] = []
     variants_to_create: List[Dict[str, Any]] = []
 
@@ -199,7 +196,6 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     if variants_to_create:
         upsert_batch(db, models.ProductVariant, variants_to_create, ['id'])
 
-    # Line items
     line_items_list: List[Dict[str, Any]] = []
     for it in line_items_src:
         li_id = _get(it, "id")
@@ -231,27 +227,17 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
 
 
 def upsert_order_from_webhook(db: Session, store_id: int, order_obj: Any):
-    """Backward-compatible alias."""
     return create_or_update_order_from_webhook(db, store_id, order_obj)
 
 
 def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfillment_data: Any):
-    """
-    Accepts dict or Pydantic. Minimal columns used.
-    """
     order_id = _get(fulfillment_data, "order_id")
     if not order_id:
         return
     order_id = int(order_id)
 
-    # Ensure placeholder order if not present
     if not db.query(models.Order.id).filter(models.Order.id == order_id).first():
-        upsert_batch(db, models.Order, [{
-            "id": order_id,
-            "store_id": store_id,
-            "name": f"#{order_id}",
-            "shopify_gid": f"gid://shopify/Order/{order_id}",
-        }], ['id'])
+        upsert_batch(db, models.Order, [{"id": order_id, "store_id": store_id, "name": f"#{order_id}", "shopify_gid": f"gid://shopify/Order/{order_id}"}], ['id'])
 
     fid = _get(fulfillment_data, "id")
     status = _get(fulfillment_data, "status")
@@ -273,7 +259,6 @@ def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfil
     if fulfillment_dict["id"] is not None:
         upsert_batch(db, models.Fulfillment, [fulfillment_dict], ['id'])
 
-    # Update order fulfillment_status when appropriate
     order_to_update = db.query(models.Order).filter(models.Order.id == order_id).first()
     if order_to_update:
         if status and str(status).lower() == 'success':
@@ -284,24 +269,14 @@ def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfil
 
 
 def create_refund_from_webhook(db: Session, store_id: int, refund_data: Any):
-    """
-    Accepts dict or Pydantic. Persists refund, ensures referenced order + line items exist.
-    """
     order_id = _get(refund_data, "order_id")
     if not order_id:
         return
     order_id = int(order_id)
 
-    # Ensure placeholder order
     if not db.query(models.Order.id).filter(models.Order.id == order_id).first():
-        upsert_batch(db, models.Order, [{
-            "id": order_id,
-            "store_id": store_id,
-            "name": f"#{order_id}",
-            "shopify_gid": f"gid://shopify/Order/{order_id}",
-        }], ['id'])
+        upsert_batch(db, models.Order, [{"id": order_id, "store_id": store_id, "name": f"#{order_id}", "shopify_gid": f"gid://shopify/Order/{order_id}"}], ['id'])
 
-    # Ensure referenced line items exist
     refund_line_items = _get(refund_data, "refund_line_items") or []
     required_line_item_ids = { _get(item, "line_item_id") for item in refund_line_items if _get(item, "line_item_id") }
     existing_line_item_ids = {
@@ -326,7 +301,6 @@ def create_refund_from_webhook(db: Session, store_id: int, refund_data: Any):
     if line_items_to_create:
         upsert_batch(db, models.LineItem, line_items_to_create, ['id'])
 
-    # Refund header
     rid = _get(refund_data, "id")
     transactions = _get(refund_data, "transactions") or []
     total_refunded = 0.0
@@ -354,7 +328,6 @@ def create_refund_from_webhook(db: Session, store_id: int, refund_data: Any):
         upsert_batch(db, models.Refund, [refund_dict], ['id'])
         db_refund = db.query(models.Refund).filter(models.Refund.id == refund_dict["id"]).one()
 
-        # Refund lines
         refund_line_items_list: List[Dict[str, Any]] = []
         for item in refund_line_items:
             refund_line_items_list.append({
@@ -369,7 +342,6 @@ def create_refund_from_webhook(db: Session, store_id: int, refund_data: Any):
         if refund_line_items_list:
             upsert_batch(db, models.RefundLineItem, refund_line_items_list, ['id'])
 
-    # Update order financial status according to total refunds
     order_to_update = db.query(models.Order).filter(models.Order.id == order_id).first()
     if order_to_update and order_to_update.total_price is not None:
         current_refunds = (
@@ -385,36 +357,22 @@ def create_refund_from_webhook(db: Session, store_id: int, refund_data: Any):
     db.commit()
 
 
-# ---------------- order HOLD / RELEASE (from webhooks) ----------------
-
 def apply_order_hold_from_webhook(db: Session, store_id: int, payload: Any, on_hold: bool):
-    """
-    Marks order as on hold (or releases hold). Accepts order payloads or
-    fulfillment_order payloads. Best effort to resolve order_id.
-    """
     order_id = _get(payload, "order_id")
 
-    # Some hold webhooks may wrap data under 'fulfillment_order'
     if not order_id:
         fo = _get(payload, "fulfillment_order")
         if isinstance(fo, dict):
             order_id = _get(fo, "order_id") or _get(_get(fo, "order"), "id")
 
     if not order_id:
-        # If we cannot resolve the order id, skip safely
         print("[holds] Could not resolve order_id from webhook payload.")
         return
 
     order_id = int(order_id)
 
-    # Ensure order exists
     if not db.query(models.Order.id).filter(models.Order.id == order_id).first():
-        upsert_batch(db, models.Order, [{
-            "id": order_id,
-            "store_id": store_id,
-            "name": f"#{order_id}",
-            "shopify_gid": f"gid://shopify/Order/{order_id}",
-        }], ['id'])
+        upsert_batch(db, models.Order, [{"id": order_id, "store_id": store_id, "name": f"#{order_id}", "shopify_gid": f"gid://shopify/Order/{order_id}"}], ['id'])
 
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
@@ -426,7 +384,6 @@ def apply_order_hold_from_webhook(db: Session, store_id: int, payload: Any, on_h
         if hasattr(order, "hold_reason") and reason:
             order.hold_reason = reason
     else:
-        # release back to unfulfilled if not fulfilled yet
         if order.fulfillment_status != "fulfilled":
             order.fulfillment_status = "unfulfilled"
         if hasattr(order, "hold_reason"):
@@ -435,21 +392,11 @@ def apply_order_hold_from_webhook(db: Session, store_id: int, payload: Any, on_h
     db.commit()
 
 
-# ---------------- bulk GraphQL import (unchanged except guards) ----------------
-
 def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder], store_id: int):
     if not orders_data:
         return
 
-    all_products: List[Dict[str, Any]] = []
-    all_variants: List[Dict[str, Any]] = []
-    all_inventory_levels: List[Dict[str, Any]] = []
-    all_locations: List[Dict[str, Any]] = []
-    all_orders: List[Dict[str, Any]] = []
-    all_line_items: List[Dict[str, Any]] = []
-    all_fulfillments: List[Dict[str, Any]] = []
-    all_fulfillment_events: List[Dict[str, Any]] = []
-
+    all_products, all_variants, all_inventory_levels, all_locations, all_orders, all_line_items, all_fulfillments, all_fulfillment_events = [], [], [], [], [], [], [], []
     processed_product_ids, processed_variant_ids, processed_location_ids, processed_line_item_ids = set(), set(), set(), set()
     order_ids_to_process: List[int] = []
 
@@ -458,24 +405,12 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
         payment_gateway_str = ", ".join(order.paymentGatewayNames) if order.paymentGatewayNames else None
 
         all_orders.append({
-            "id": order.legacy_resource_id,
-            "shopify_gid": order.id,
-            "store_id": store_id,
-            "name": order.name,
-            "email": order.email,
-            "phone": order.phone,
-            "created_at": order.created_at,
-            "updated_at": order.updated_at,
-            "cancelled_at": order.cancelled_at,
-            "cancel_reason": order.cancel_reason,
-            "closed_at": order.closed_at,
-            "processed_at": order.processed_at,
-            "financial_status": (order.financial_status or 'pending').lower(),
-            "fulfillment_status": (order.fulfillment_status or 'unfulfilled').lower(),
-            "currency": order.currency,
-            "payment_gateway_names": payment_gateway_str,
-            "note": order.note,
-            "tags": ", ".join(order.tags) if order.tags else None,
+            "id": order.legacy_resource_id, "shopify_gid": order.id, "store_id": store_id, "name": order.name,
+            "email": order.email, "phone": order.phone, "created_at": order.created_at, "updated_at": order.updated_at,
+            "cancelled_at": order.cancelled_at, "cancel_reason": order.cancel_reason, "closed_at": order.closed_at,
+            "processed_at": order.processed_at, "financial_status": (order.financial_status or 'pending').lower(),
+            "fulfillment_status": (order.fulfillment_status or 'unfulfilled').lower(), "currency": order.currency,
+            "payment_gateway_names": payment_gateway_str, "note": order.note, "tags": ", ".join(order.tags) if order.tags else None,
             "total_price": order.total_price.amount if order.total_price else None,
             "subtotal_price": order.subtotal_price.amount if order.subtotal_price else None,
             "total_tax": order.total_tax.amount if order.total_tax else None,
@@ -500,49 +435,29 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
                     if product.category and isinstance(product.category, dict):
                         category_name = product.category.get('name')
                     
-                    # FIX: Safely access the featured image URL
                     image_url = None
                     if product.featured_image and isinstance(product.featured_image, dict):
                         image_url = product.featured_image.get('url')
 
                     all_products.append({
-                        "id": product.legacy_resource_id,
-                        "shopify_gid": product.id,
-                        "store_id": store_id,
-                        "title": product.title,
-                        "body_html": product.body_html,
-                        "vendor": product.vendor,
-                        "product_type": product.product_type,
-                        "product_category": category_name,
-                        "created_at": product.created_at,
-                        "handle": product.handle,
-                        "updated_at": product.updated_at,
-                        "published_at": product.published_at,
-                        "status": product.status,
-                        "tags": ", ".join(product.tags) if product.tags else None,
-                        "image_url": image_url,
+                        "id": product.legacy_resource_id, "shopify_gid": product.id, "store_id": store_id, "title": product.title,
+                        "body_html": product.body_html, "vendor": product.vendor, "product_type": product.product_type,
+                        "product_category": category_name, "created_at": product.created_at, "handle": product.handle,
+                        "updated_at": product.updated_at, "published_at": product.published_at, "status": product.status,
+                        "tags": ", ".join(product.tags) if product.tags else None, "image_url": image_url,
                     })
 
                 if variant.legacy_resource_id not in processed_variant_ids:
                     processed_variant_ids.add(variant.legacy_resource_id)
                     inv_item = variant.inventory_item
                     all_variants.append({
-                        "id": variant.legacy_resource_id,
-                        "shopify_gid": variant.id,
-                        "product_id": product.legacy_resource_id if product else None,
-                        "store_id": store_id,
-                        "title": variant.title,
-                        "price": variant.price,
-                        "sku": variant.sku,
-                        "position": variant.position,
-                        "inventory_policy": variant.inventory_policy,
-                        "compare_at_price": variant.compare_at_price,
-                        "barcode": variant.barcode,
+                        "id": variant.legacy_resource_id, "shopify_gid": variant.id, "product_id": product.legacy_resource_id if product else None,
+                        "store_id": store_id, "title": variant.title, "price": variant.price, "sku": variant.sku,
+                        "position": variant.position, "inventory_policy": variant.inventory_policy,
+                        "compare_at_price": variant.compare_at_price, "barcode": variant.barcode,
                         "inventory_item_id": inv_item.legacy_resource_id if inv_item else None,
-                        "inventory_quantity": variant.inventory_quantity,
-                        "created_at": variant.created_at,
-                        "updated_at": variant.updated_at,
-                        "cost": (inv_item.unit_cost.amount if (inv_item and inv_item.unit_cost) else None),
+                        "inventory_quantity": variant.inventory_quantity, "created_at": variant.created_at,
+                        "updated_at": variant.updated_at, "cost": (inv_item.unit_cost.amount if (inv_item and inv_item.unit_cost) else None),
                         "inventory_management": "shopify" if (inv_item and getattr(inv_item, "tracked", False)) else "not_tracked",
                     })
 
@@ -556,50 +471,32 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
                             available_qty = next((q['quantity'] for q in level.quantities if q['name'] == 'available'), None)
                             on_hand_qty = next((q['quantity'] for q in level.quantities if q['name'] == 'on_hand'), None)
                             all_inventory_levels.append({
-                                "inventory_item_id": inv_item.legacy_resource_id,
-                                "location_id": loc.legacy_resource_id,
-                                "available": available_qty,
-                                "on_hand": on_hand_qty,
-                                "updated_at": level.updated_at,
+                                "inventory_item_id": inv_item.legacy_resource_id, "location_id": loc.legacy_resource_id,
+                                "available": available_qty, "on_hand": on_hand_qty, "updated_at": level.updated_at,
                             })
 
             all_line_items.append({
-                "id": line_item_id,
-                "shopify_gid": item.id,
-                "order_id": order.legacy_resource_id,
+                "id": line_item_id, "shopify_gid": item.id, "order_id": order.legacy_resource_id,
                 "variant_id": item.variant.legacy_resource_id if item.variant else None,
                 "product_id": item.variant.product.legacy_resource_id if (item.variant and item.variant.product) else None,
-                "title": item.title,
-                "quantity": item.quantity,
-                "sku": item.sku,
-                "vendor": item.vendor,
+                "title": item.title, "quantity": item.quantity, "sku": item.sku, "vendor": item.vendor,
                 "price": item.price.amount if item.price else None,
-                "total_discount": item.total_discount.amount if item.total_discount else None,
-                "taxable": item.taxable,
+                "total_discount": item.total_discount.amount if item.total_discount else None, "taxable": item.taxable,
             })
 
         for fulfillment in order.fulfillments:
             all_fulfillments.append({
-                "id": fulfillment.legacy_resource_id,
-                "shopify_gid": fulfillment.id,
-                "order_id": order.legacy_resource_id,
-                "status": fulfillment.status,
-                "created_at": fulfillment.created_at,
-                "updated_at": fulfillment.updated_at,
-                "tracking_company": fulfillment.tracking_company,
-                "tracking_number": fulfillment.tracking_number,
+                "id": fulfillment.legacy_resource_id, "shopify_gid": fulfillment.id, "order_id": order.legacy_resource_id,
+                "status": fulfillment.status, "created_at": fulfillment.created_at, "updated_at": fulfillment.updated_at,
+                "tracking_company": fulfillment.tracking_company, "tracking_number": fulfillment.tracking_number,
                 "tracking_url": str(fulfillment.tracking_url) if fulfillment.tracking_url else None,
             })
             for event in fulfillment.events:
                 event_id = gid_to_id(event.id)
                 if event_id:
                     all_fulfillment_events.append({
-                        "id": event_id,
-                        "shopify_gid": event.id,
-                        "fulfillment_id": fulfillment.legacy_resource_id,
-                        "status": event.status,
-                        "happened_at": event.happened_at,
-                        "description": event.description,
+                        "id": event_id, "shopify_gid": event.id, "fulfillment_id": fulfillment.legacy_resource_id,
+                        "status": event.status, "happened_at": event.happened_at, "description": event.description,
                     })
 
     upsert_batch(db, models.Location, all_locations, ['id'])
@@ -620,26 +517,15 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
     print("Database synchronization and committed stock update complete.")
 
 
-# ---------------- read helpers ----------------
-
 def get_orders_by_store(db: Session, store_id: int):
-    return (
-        db.query(models.Order)
-        .filter(models.Order.store_id == store_id)
-        .order_by(models.Order.created_at.desc())
-        .all()
-    )
+    return db.query(models.Order).filter(models.Order.store_id == store_id).order_by(models.Order.created_at.desc()).all()
 
 
 def get_fulfillments_by_store(db: Session, store_id: int):
     return (
         db.query(
-            models.Fulfillment.id,
-            models.Fulfillment.created_at,
-            models.Fulfillment.tracking_company,
-            models.Fulfillment.tracking_number,
-            models.Fulfillment.status,
-            models.Order.name.label("order_name"),
+            models.Fulfillment.id, models.Fulfillment.created_at, models.Fulfillment.tracking_company,
+            models.Fulfillment.tracking_number, models.Fulfillment.status, models.Order.name.label("order_name"),
         )
         .join(models.Order, models.Fulfillment.order_id == models.Order.id)
         .filter(models.Order.store_id == store_id)
