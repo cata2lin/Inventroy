@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     snapshot: document.getElementById('pd-snapshot'),
     velocity: document.getElementById('pd-velocity'),
     salesCanvas: document.getElementById('pd-sales-canvas'),
+    stockCanvas: document.getElementById('pd-stock-canvas'),
     smTableBody: document.querySelector('#pd-sm-table tbody'),
     committedBody: document.querySelector('#pd-committed tbody'),
     ordersBody: document.querySelector('#pd-orders tbody'),
@@ -111,6 +112,72 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+    const drawStockChart = (series) => {
+        const ctx = els.stockCanvas.getContext('2d');
+        const W = els.stockCanvas.width = els.stockCanvas.clientWidth;
+        const H = els.stockCanvas.height = 220;
+
+        ctx.clearRect(0, 0, W, H);
+        if (!series || !series.length) {
+            ctx.fillText('No stock movements in selected period.', 10, 20);
+            return;
+        }
+
+        // Padding
+        const padL = 40, padR = 10, padT = 10, padB = 24;
+        const xmin = 0, xmax = series.length - 1;
+        const ymax = Math.max(...series.map(p => p.new_quantity));
+        const ymin = Math.min(...series.map(p => p.new_quantity));
+        const scaleX = (x) => padL + (x - xmin) * ((W - padL - padR) / (xmax - xmin || 1));
+        const scaleY = (y) => H - padB - (y - ymin) * ((H - padT - padB) / (ymax - ymin || 1));
+
+        // Axes
+        ctx.strokeStyle = '#ccc';
+        ctx.beginPath();
+        ctx.moveTo(padL, padT);
+        ctx.lineTo(padL, H - padB);
+        ctx.lineTo(W - padR, H - padB);
+        ctx.stroke();
+
+        // Line
+        ctx.beginPath();
+        series.forEach((p, i) => {
+            const x = scaleX(i),
+                y = scaleY(p.new_quantity);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.strokeStyle = '#2ca02c';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Dots
+        ctx.fillStyle = '#2ca02c';
+        series.forEach((p, i) => {
+            const x = scaleX(i),
+                y = scaleY(p.new_quantity);
+            ctx.beginPath();
+            ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        // X labels (sparse)
+        ctx.fillStyle = '#666';
+        ctx.font = '10px sans-serif';
+        const stride = Math.ceil(series.length / 10);
+        series.forEach((p, i) => {
+            if (i % stride === 0 || i === series.length - 1) {
+                ctx.fillText(new Date(p.created_at).toLocaleDateString(), scaleX(i) - 10, H - 6);
+            }
+        });
+
+        // Y labels
+        const yTicks = 4;
+        for (let i = 0; i <= yTicks; i++) {
+            const v = Math.round(ymin + (ymax - ymin) / yTicks * i);
+            ctx.fillText(String(v), 6, scaleY(v) + 3);
+        }
+    };
   const render = (analytics, details) => {
     // Title
     els.title.textContent = analytics.header.title || 'Product Details';
@@ -129,16 +196,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const dec = (x) => (x ?? 0).toFixed(2);
     els.velocity.innerHTML = `
       <div class="metric"><h4>${dec(m.avg_daily_sales)}</h4><p>Avg Daily (period)</p></div>
-      <div class="metric"><h4>${dec(m.avg_monthly_sales)}</h4><p>Avg Monthly</p></div>
       <div class="metric"><h4>${dec(m.velocity_7)}</h4><p>Velocity 7d</p></div>
       <div class="metric"><h4>${dec(m.velocity_30)}</h4><p>Velocity 30d</p></div>
-      <div class="metric"><h4>${dec(m.velocity_90)}</h4><p>Velocity 90d</p></div>
-      <div class="metric"><h4>${m.days_of_cover_30 ? dec(m.days_of_cover_30) : '∞'}</h4><p>Days of Cover (30d)</p></div>
     `;
 
     // Chart
     drawSalesChart(analytics.sales_by_day);
-
+    drawStockChart(details.stock_movements);
     // Stock movements
     els.smTableBody.innerHTML = (analytics.stock_movements_by_day || []).map(r =>
       `<tr><td>${r.day}</td><td>${r.change}</td></tr>`

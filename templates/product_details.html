@@ -41,11 +41,19 @@
 </article>
 
 
-<article class="card">
-<header><strong>Sales by Day</strong></header>
-<div class="chart-wrap">
-<canvas id="pd-sales-canvas" height="220"></canvas>
-</div>
+<article class="grid cards-grid">
+    <div class="card">
+        <header><strong>Sales by Day</strong></header>
+        <div class="chart-wrap">
+            <canvas id="pd-sales-canvas" height="220"></canvas>
+        </div>
+    </div>
+    <div class="card">
+        <header><strong>Stock Evolution</strong></header>
+        <div class="chart-wrap">
+            <canvas id="pd-stock-canvas" height="220"></canvas>
+        </div>
+    </div>
 </article>
 
 
@@ -103,11 +111,8 @@ if (t && map[t]) p.innerHTML = `${t} <span title="${map[t]}" class="hint">i</spa
 
 const vmap = {
 'Avg Daily (period)': 'Total units sold in selected period divided by number of days.',
-'Avg Monthly': 'Avg Daily × 30.',
 'Velocity 7d': 'Average units/day sold over the last 7 days of the period.',
 'Velocity 30d': 'Average units/day sold over the last 30 days of the period.',
-'Velocity 90d': 'Average units/day sold over the last 90 days of the period.',
-'Days of Cover (30d)': 'Available ÷ Velocity 30d. Estimated days until stock-out.',
 };
 vel.querySelectorAll('.metric p').forEach(p => {
 const t = p.textContent?.trim();
