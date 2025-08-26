@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Optional, List, Any
 import traceback
+import json # Import the json library for pretty-printing
 
 from sqlalchemy.orm import Session
 
@@ -42,12 +43,11 @@ def _ensure_attrs_compat(order_obj: schemas.ShopifyOrder, store_currency: Option
     Normalize common GraphQL names to legacy names the CRUD layer uses and
     ensure attributes exist so we don't crash on AttributeError.
     """
-    # ---- name/ids/timestamps (map GraphQL camelCase to snake_case your CRUD might use)
     _set_if_missing(order_obj, "created_at", ["createdAt"])
     _set_if_missing(order_obj, "updated_at", ["updatedAt"])
     _set_if_missing(order_obj, "processed_at", ["processedAt"])
     _set_if_missing(order_obj, "closed_at", ["closedAt"])
-    # Shopify sometimes uses canceledAt (US) vs cancelledAt (UK)
+
     if hasattr(order_obj, "canceledAt") and not hasattr(order_obj, "cancelledAt"):
         try:
             setattr(order_obj, "cancelledAt", getattr(order_obj, "canceledAt"))
@@ -55,12 +55,9 @@ def _ensure_attrs_compat(order_obj: schemas.ShopifyOrder, store_currency: Option
             pass
     _set_if_missing(order_obj, "cancelled_at", ["cancelledAt", "canceledAt"])
 
-    # ---- statuses
     _set_if_missing(order_obj, "financial_status", ["financialStatus"])
     _set_if_missing(order_obj, "fulfillment_status", ["fulfillmentStatus"])
 
-    # ---- currency (critical for your CRUD)
-    # prefer explicit "currency", else GraphQL's currencyCode, then presentmentCurrencyCode, then store currency
     if not hasattr(order_obj, "currency"):
         fallback = None
         if hasattr(order_obj, "currencyCode"):
@@ -70,27 +67,22 @@ def _ensure_attrs_compat(order_obj: schemas.ShopifyOrder, store_currency: Option
         elif store_currency:
             fallback = store_currency
         try:
-            setattr(order_obj, "currency", fallback)
+            setattr(obj, target, fallback)
         except Exception:
             pass
 
-    # ---- payment gateways sometimes omitted
     if not hasattr(order_obj, "paymentGatewayNames"):
         try:
             setattr(order_obj, "paymentGatewayNames", [])
         except Exception:
             pass
 
-    # ---- legacy expectations
     if not hasattr(order_obj, "cancel_reason"):
         try:
             setattr(order_obj, "cancel_reason", None)
         except Exception:
             pass
 
-    # You can expand this list if CRUD expects more snake_case fields:
-    # subtotal_price, total_price, total_tax, total_discounts, etc.
-    # We only set defaults if absolutely missing to avoid masking real data.
     for name in ("subtotal_price", "total_price", "total_tax", "total_discounts"):
         if not hasattr(order_obj, name):
             try:
@@ -110,11 +102,10 @@ def _coerce_order(o: Any, store_currency: Optional[str]) -> Optional[schemas.Sho
 
     if isinstance(o, dict):
         try:
-            # Pydantic v2
             if hasattr(schemas.ShopifyOrder, "model_validate"):
-                obj = schemas.ShopifyOrder.model_validate(o)  # type: ignore[attr-defined]
+                obj = schemas.ShopifyOrder.model_validate(o)
             else:
-                obj = schemas.ShopifyOrder.parse_obj(o)  # v1 fallback
+                obj = schemas.ShopifyOrder.parse_obj(o)
             return _ensure_attrs_compat(obj, store_currency)
         except Exception:
             return None
@@ -133,8 +124,6 @@ def run_orders_sync_for_store(
 ):
     """
     Background task that syncs orders for ONE store.
-
-    created_at_min / created_at_max are optional ISO-8601 date strings (“YYYY-MM-DD”).
     """
     db: Session = db_factory()
     processed = 0
@@ -148,7 +137,6 @@ def run_orders_sync_for_store(
 
         svc = ShopifyService(store_url=store.shopify_url, token=store.api_token)
 
-        # Expect generator of order “pages”
         for page in svc.get_all_orders_and_related_data(created_at_min, created_at_max):
             safe_page: List[schemas.ShopifyOrder] = []
             for raw in page or []:
@@ -158,8 +146,22 @@ def run_orders_sync_for_store(
 
             if not safe_page:
                 continue
+            
+            # --- START: Diagnostic Logging Block ---
+            # This will attempt the operation and, if it fails, print the exact data.
+            try:
+                crud_order.create_or_update_orders(db, orders_data=safe_page, store_id=store_id)
+            except AttributeError as e:
+                print("\n--- RAW ORDER PAYLOAD CAUSING CRASH ---")
+                print(f"Error: {e}")
+                # Convert Pydantic models back to dictionaries for clean printing
+                payload_to_print = [order.model_dump(mode='json') for order in safe_page]
+                print(json.dumps(payload_to_print, indent=2))
+                print("--- END RAW PAYLOAD ---")
+                # Re-raise the exception to stop the process and show the original traceback
+                raise e
+            # --- END: Diagnostic Logging Block ---
 
-            crud_order.create_or_update_orders(db, orders_data=safe_page, store_id=store_id)
             db.commit()
             processed += len(safe_page)
 
