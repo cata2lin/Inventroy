@@ -561,3 +561,108 @@ section.controls-grid:has(#financial-status-filter) .control .icon{
 /* Optional: if any control still stretches full width, prevent it */
 .controls-grid > *{ width: 100%; max-width: 100%; }
 .controls-grid button{ width: max-content; }
+/* ================================
+   1) Inventory — smaller pagination
+   ================================ */
+:root{
+  --pg-h: 28px;
+  --pg-font: 0.62rem;
+  --pg-pad-x: 10px;
+}
+
+#inventory-table-container + .pagination-controls button {
+  height: var(--pg-h);
+  min-height: var(--pg-h);
+  padding: 0 var(--pg-pad-x);
+  font-size: var(--pg-font);
+  border-radius: 10px;
+}
+#inventory-table-container + .pagination-controls #page-indicator {
+  font-size: 0.65rem;
+}
+
+/* ==========================================================
+   2) Make Dashboard v2 & Bulk Update match Inventory filters
+   - same height, radius, font, padding
+   - search icon visible + no overlap
+   ========================================================== */
+
+/* Dashboard v2 filter chips (scope via financial-status filter presence) */
+section.controls-grid:has(#financial-status-filter) input[type="search"],
+section.controls-grid:has(#financial-status-filter) input[type="text"],
+section.controls-grid:has(#financial-status-filter) input[type="number"],
+section.controls-grid:has(#financial-status-filter) input[type="date"],
+section.controls-grid:has(#financial-status-filter) select,
+section.controls-grid:has(#financial-status-filter) .dropdown > summary {
+  height: var(--filter-h);
+  min-height: var(--filter-h);
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
+}
+
+/* Show the magnifying icon and prevent text overlap (Dashboard v2) */
+section.controls-grid:has(#financial-status-filter) .control { position: relative; }
+section.controls-grid:has(#financial-status-filter) .control .icon {
+  display: block !important;
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; pointer-events: none;
+}
+section.controls-grid:has(#financial-status-filter) .control input[type="search"] {
+  padding-left: calc(var(--filter-pad-x) + 18px) !important;
+}
+
+/* Bulk Update filter chips */
+.bulk-update-controls .controls-grid input[type="search"],
+.bulk-update-controls .controls-grid input[type="text"],
+.bulk-update-controls .controls-grid input[type="number"],
+.bulk-update-controls .controls-grid input[type="date"],
+.bulk-update-controls .controls-grid select,
+.bulk-update-controls .controls-grid .dropdown > summary {
+  height: var(--filter-h);
+  min-height: var(--filter-h);
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
+}
+
+/* Bulk Update search icon + spacing */
+.bulk-update-controls .control { position: relative; }
+.bulk-update-controls .control .icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; pointer-events: none;
+}
+.bulk-update-controls .control input[type="search"] {
+  padding-left: calc(var(--filter-pad-x) + 18px);
+}
+
+/* Numeric inputs on Bulk Update (if any) */
+.bulk-update-controls .controls-grid input[type="number"]{
+  -moz-appearance: textfield;
+}
+.bulk-update-controls .controls-grid input[type="number"]::-webkit-inner-spin-button,
+.bulk-update-controls .controls-grid input[type="number"]::-webkit-outer-spin-button{
+  -webkit-appearance: none; margin: 0;
+}
+
+/* Dashboard v2 dropdown open state (same as inventory) */
+section.controls-grid:has(#financial-status-filter) .dropdown[open] > summary {
+  border-color: color-mix(in oklab, var(--accent), var(--filter-bd) 60%);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 80%);
+}
+
+/* Keep Dashboard actions compact (no giant tiles) */
+#export-button, #reset-filters {
+  display: inline-flex !important;
+  align-items: center; gap: .5rem;
+  height: var(--filter-h) !important;
+  padding: 0 var(--filter-pad-x) !important;
+  font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius);
+  max-width: max-content;
+}
+#export-button .icon { width: 16px; height: 16px; }
