@@ -32,6 +32,7 @@ from routes import (
     webhooks,
     sync_control,
     config,
+    forecasting,
 )
 
 load_dotenv()
@@ -96,6 +97,10 @@ async def get_mutations_page(request: Request):
 @app.get("/sync-control", response_class=HTMLResponse, include_in_schema=False)
 async def get_sync_control_page(request: Request):
     return templates.TemplateResponse("sync_control.html", {"request": request, "title": "Sync Control"})
+
+@app.get("/forecasting", response_class=HTMLResponse, include_in_schema=False)
+async def get_forecasting_page(request: Request):
+    return templates.TemplateResponse("forecasting.html", {"request": request, "title": "Forecasting"})
 
 @app.get("/config", response_class=HTMLResponse, include_in_schema=False)
 async def get_config_page(request: Request):

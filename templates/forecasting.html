@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+    <hgroup class="page-header">
+        <h1>Inventory Forecasting</h1>
+        <h2>Analyze sales velocity and stock levels to make informed purchasing decisions.</h2>
+    </hgroup>
+
+    <article class="filter-container">
+        <section class="controls-grid sticky-controls" aria-label="Filters">
+            <div class="control">
+                <label for="lead-time">Lead Time (days)</label>
+                <input type="number" id="lead-time" value="14">
+            </div>
+
+            <div class="control">
+                <label for="coverage-period">Coverage Period (days)</label>
+                <input type="number" id="coverage-period" value="30">
+            </div>
+
+            <details role="list" class="dropdown">
+                <summary aria-haspopup="listbox"><svg class="icon"><use href="#i-filter"/></svg> Stores</summary>
+                <ul role="listbox" id="store-filter-list"><li>Loading...</li></ul>
+            </details>
+
+            <details role="list" class="dropdown">
+                <summary aria-haspopup="listbox"><svg class="icon"><use href="#i-filter"/></svg> Product Type</summary>
+                <ul role="listbox" id="type-filter-list"><li>Loading...</li></ul>
+            </details>
+
+            <details role="list" class="dropdown">
+                <summary aria-haspopup="listbox"><svg class="icon"><use href="#i-filter"/></svg> Vendor</summary>
+                <ul role="listbox" id="vendor-filter-list"><li>Loading...</li></ul>
+            </details>
+
+            <details role="list" class="dropdown">
+                <summary aria-haspopup="listbox"><svg class="icon"><use href="#i-filter"/></svg> Stock Status</summary>
+                <ul role="listbox" id="status-filter-list">
+                    <li><label><input type="checkbox" name="status" value="urgent"> Urgent</label></li>
+                    <li><label><input type="checkbox" name="status" value="warning"> Warning</label></li>
+                    <li><label><input type="checkbox" name="status" value="watch"> Watch</label></li>
+                    <li><label><input type="checkbox" name="status" value="healthy"> Healthy</label></li>
+                    <li><label><input type="checkbox" name="status" value="overstocked"> Overstocked</label></li>
+                    <li><label><input type="checkbox" name="status" value="slow_mover"> Slow Mover</label></li>
+                </ul>
+            </details>
+
+            <div class="controls-end">
+                <button id="export-button">
+                    <svg class="icon"><use href="#i-download"/></svg> Export to Excel
+                </button>
+            </div>
+        </section>
+    </article>
+
+    <article id="forecasting-table-container" class="table-wrap" aria-busy="true">
+        <p>Loading forecasting data...</p>
+    </article>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/config.js"></script>
+<script src="/static/js/forecasting.js"></script>
+{% endblock %}

@@ -4,16 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ title }} - Inventory Intelligence</title>
-<!-- Pico CSS (kept) -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
-<!-- App styles -->
 <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
 <a class="skip-link" href="#main-content">Skip to content</a>
 
 
-<!-- SVG Icon Sprite (lightweight, themable) -->
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
 <symbol id="i-search" viewBox="0 0 24 24">
 <path d="M10 18a8 8 0 1 1 5.292-14.043l.22.184.276.23a8 8 0 0 1 1.26 10.532l4.21 4.21-1.414 1.414-4.21-4.21A8 8 0 0 1 10 18Zm0-2a6 6 0 1 0 0-12 6 6 0 0 0 0 12Z"/>
@@ -45,6 +42,7 @@
 <ul>
 <li><a href="/dashboard-v2" {% if title == "Dashboard" %}class="contrast active"{% endif %}>Dashboard</a></li>
 <li><a href="/inventory" {% if title == "Inventory Report" %}class="contrast active"{% endif %}>Inventory Report</a></li>
+<li><a href="/forecasting" {% if title == "Forecasting" %}class="contrast active"{% endif %}>Forecasting</a></li>
 <li><a href="/bulk-update" {% if title == "Bulk Update" %}class="contrast active"{% endif %}>Bulk Update</a></li>
 <li><a href="/sync-control" {% if title == "Sync Control" %}class="contrast active"{% endif %}>Sync Control</a></li>
 <li><a href="/config" {% if title == "Configuration" %}class="contrast active"{% endif %}>Configuration</a></li>
