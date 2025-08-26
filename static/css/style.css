@@ -849,3 +849,116 @@ section.controls-grid:has(#financial-status-filter) #column-visibility-button {
   height: var(--filter-h) !important; min-height: var(--filter-h) !important;
   padding: 0 var(--filter-pad-x) !important; line-height: 1.1 !important;
 }
+
+/* ===================== DASHBOARD v2 — tighter, wider chips ===================== */
+section.controls-grid:has(#financial-status-filter) {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)) !important; /* wider controls */
+  column-gap: var(--s-2) !important; /* closer together */
+  row-gap: .5rem !important;
+}
+section.controls-grid:has(#financial-status-filter) #column-visibility-button {
+  display: inline-flex !important; align-items: center !important;
+  height: var(--filter-h) !important; min-height: var(--filter-h) !important;
+  padding: 0 var(--filter-pad-x) !important; font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius) !important; margin: 0 !important;
+}
+
+/* ===================== BULK UPDATE — filters aligned & tighter ===================== */
+.bulk-update-controls .controls-grid {
+  align-items: center !important; /* same baseline for all */
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)) !important; /* wider chips */
+  column-gap: var(--s-2) !important; row-gap: .5rem !important;
+}
+.bulk-update-controls fieldset label {
+  display: inline-flex; align-items: center; gap: .5rem;
+  height: var(--filter-h); min-height: var(--filter-h);
+  padding: 0 var(--filter-pad-x);
+  border: 1px solid var(--filter-bd); border-radius: var(--filter-radius);
+  background: var(--filter-bg); font-size: var(--filter-font);
+}
+.bulk-update-controls .import-controls {
+  display: inline-flex !important; align-items: center !important; gap: .5rem;
+}
+.bulk-update-controls .import-controls input[type="file"] {
+  height: var(--filter-h); display: inline-flex; align-items: center;
+}
+.bulk-update-controls .import-controls input[type="file"]::file-selector-button,
+.bulk-update-controls #import-excel-btn,
+.bulk-update-controls #save-changes-btn {
+  height: var(--filter-h) !important; min-height: var(--filter-h) !important;
+  font-size: var(--filter-font) !important; border-radius: var(--filter-radius) !important;
+}
+
+/* Remove search icon in Bulk Update filter and fix padding */
+.bulk-update-controls .control .icon { display: none !important; }
+.bulk-update-controls .control input[type="search"] { padding-left: var(--filter-pad-x) !important; }
+
+/* ===================== BULK UPDATE — 30% smaller thumbs when grouped ===================== */
+/* Use multiple :has() paths for robustness */
+:root:has(#group-toggle:checked) #bulk-update-container .bulk-update-table img,
+.bulk-update-controls:has(#group-toggle:checked) ~ #bulk-update-container .bulk-update-table img {
+  width: calc(var(--bu-thumb) * 0.7) !important;
+  height: calc(var(--bu-thumb) * 0.7) !important;
+}
+/* (Optional fallback: uncomment to make them always smaller)
+#bulk-update-container .bulk-update-table img { width: calc(var(--bu-thumb)*0.7); height: calc(var(--bu-thumb)*0.7); }
+*/
+
+/* ===================== BULK UPDATE — column width & readability ===================== */
+/* Fixed layout to respect widths */
+#bulk-update-container .bulk-update-table { table-layout: fixed; }
+
+/* 1) Checkbox column (1) */
+#bulk-update-container .bulk-update-table th:nth-child(1),
+#bulk-update-container .bulk-update-table td:nth-child(1) {
+  width: 42px !important; max-width: 42px !important;
+}
+
+/* 2) Image column (2) — just a bit wider than the thumbnail */
+#bulk-update-container .bulk-update-table th:nth-child(2),
+#bulk-update-container .bulk-update-table td:nth-child(2) {
+  width: calc(var(--bu-thumb) + 16px) !important;
+  max-width: calc(var(--bu-thumb) + 16px) !important;
+  padding-inline: 4px;
+}
+
+/* 3) Store (3) & SKU (4) — tighter but readable */
+#bulk-update-container .bulk-update-table th:nth-child(3),
+#bulk-update-container .bulk-update-table td:nth-child(3) { min-width: 110px !important; }
+#bulk-update-container .bulk-update-table th:nth-child(4),
+#bulk-update-container .bulk-update-table td:nth-child(4) { min-width: 150px !important; }
+
+/* 4) Product (5) — give it real space */
+#bulk-update-container .bulk-update-table th:nth-child(5),
+#bulk-update-container .bulk-update-table td:nth-child(5) { min-width: 360px !important; }
+
+/* 5) Barcode (6) — wider for full code */
+#bulk-update-container .bulk-update-table th:nth-child(6),
+#bulk-update-container .bulk-update-table td:nth-child(6) { min-width: 200px !important; }
+
+/* 6) Type (7) & Status (8) — compact */
+#bulk-update-container .bulk-update-table th:nth-child(7),
+#bulk-update-container .bulk-update-table td:nth-child(7),
+#bulk-update-container .bulk-update-table th:nth-child(8),
+#bulk-update-container .bulk-update-table td:nth-child(8) { min-width: 120px !important; }
+
+/* 7) Price (9) & Cost (10) — numeric, narrower */
+#bulk-update-container .bulk-update-table th:nth-child(9),
+#bulk-update-container .bulk-update-table td:nth-child(9),
+#bulk-update-container .bulk-update-table th:nth-child(10),
+#bulk-update-container .bulk-update-table td:nth-child(10) { min-width: 84px !important; }
+
+/* 8) On Hand (11) & Available (12) — tighter */
+#bulk-update-container .bulk-update-table th:nth-child(11),
+#bulk-update-container .bulk-update-table td:nth-child(11),
+#bulk-update-container .bulk-update-table th:nth-child(12),
+#bulk-update-container .bulk-update-table td:nth-child(12) { min-width: 76px !important; }
+
+/* Text size bump stays at +5% only for Bulk Update table */
+#bulk-update-container .bulk-update-table td { font-size: 1.05em !important; }
+#bulk-update-container .bulk-update-table th { font-size: calc(0.72em * 1.05) !important; }
+#bulk-update-container .bulk-update-table input[type="text"],
+#bulk-update-container .bulk-update-table input[type="number"],
+#bulk-update-container .bulk-update-table select {
+  font-size: calc(var(--bu-input-font) * 1.05) !important;
+}
