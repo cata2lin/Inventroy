@@ -1,107 +1,53 @@
 {% extends "base.html" %}
-
 {% block content %}
-<div class="container-fluid">
-  <hgroup>
-    <h1>Inventory Report</h1>
-    <h2>Detailed view of all product variants across all stores.</h2>
-  </hgroup>
+<h1>Inventory Report</h1>
+<h2>Detailed view of all product variants across all stores.</h2>
 
-  <article class="filter-container">
-    <!-- Top metrics -->
-    <section id="metrics-container" class="grid"></section>
+<section class="card filter-container">
+  <div id="metrics-container" class="grid"></div>
+  <details>
+    <summary>Filters</summary>
+    <div class="grid compact-filter">
+      <label for="search-input" class="visually-hidden">Search inventory</label>
+      <input type="search" id="search-input" placeholder="Search SKU, Barcode, Name…" />
+      <!-- Additional filters here -->
+      <button id="reset-filters" class="secondary outline" aria-label="Reset filters">Reset</button>
+    </div>
+  </details>
+</section>
 
-    <!-- Controls bar -->
-    <section class="controls-grid">
-      <input type="search" id="search-input" placeholder="Search SKU, Barcode, Name...">
-      <select id="store-filter"><option value="">All Stores</option></select>
-      <select id="type-filter"><option value="">All Types</option></select>
-      <select id="category-filter"><option value="">All Categories</option></select>
-      <select id="status-filter"><option value="">All Statuses</option></select>
+<section id="inventory-table-container" class="card" aria-busy="true" aria-live="polite">
+  <p>Loading…</p>
+</section>
 
-      <!-- Numeric placeholders (kept for compatibility) -->
-      <input type="number" id="min-retail-input" placeholder="Min Retail" step="0.01">
-      <input type="number" id="max-retail-input" placeholder="Max Retail" step="0.01">
-      <input type="number" id="min-inv-input" placeholder="Min On Hand" step="1">
-      <input type="number" id="max-inv-input" placeholder="Max On Hand" step="1">
-
-      <!-- Group by barcode slider with label below (no overlap with Reset) -->
-      <label id="group-toggle-wrap" class="toggle-pill" style="display:inline-flex;flex-direction:column;align-items:center;gap:.25rem;width:fit-content;margin-right:.5rem;">
-        <input type="checkbox" id="group-toggle" style="display:none">
-        <span class="slider" style="position:relative;width:44px;height:24px;border-radius:999px;background:var(--muted-border-color);transition:background .2s;">
-          <span style="position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:var(--card-bg,#fff);box-shadow:0 1px 3px rgba(0,0,0,.2);transition:transform .2s;"></span>
-        </span>
-        <small>Group by barcode</small>
-      </label>
-
-      <button id="reset-filters" class="secondary outline" type="button" style="margin-left:.25rem;">Reset</button>
-
-      <!-- Grouped sorting controls (visible only in grouped view; compact) -->
-      <span id="group-sort-controls" style="display:none;align-items:center;gap:.5rem;margin-left:auto;">
-        <label style="display:flex;align-items:center;gap:.4rem;">
-          <small>Sort</small>
-          <select id="group-sort-by" style="min-width:10rem;">
-            <option value="on_hand">On hand/Total stock</option>
-            <option value="available">Available</option>
-            <option value="committed">Committed</option>
-            <option value="retail_value">Retail value</option>
-            <option value="inventory_value">Inventory value</option>
-            <option value="total_stock">Total stock</option>
-          </select>
-        </label>
-        <label style="display:flex;align-items:center;gap:.4rem;">
-          <small>Order</small>
-          <select id="group-sort-order">
-            <option value="desc">Descending</option>
-            <option value="asc">Ascending</option>
-          </select>
-        </label>
-        <button id="apply-group-sort" class="secondary" type="button" title="Apply sorting for grouped view">Apply</button>
-      </span>
-    </section>
-  </article>
-
-  <!-- Table / Groups container -->
-  <article id="inventory-table-container" aria-busy="true"><p>Loading...</p></article>
-
-  <!-- Pagination -->
-  <div class="grid pagination-controls">
-    <button id="prev-button" class="secondary outline" disabled>&larr; Previous</button>
-    <span id="page-indicator">Page 1</span>
-    <button id="next-button" class="secondary outline">Next &rarr;</button>
-  </div>
-
-  <!-- Details modal (legacy; image click opens dedicated page) -->
-  <dialog id="details-modal">
-    <article>
-      <header>
-        <button class="close" aria-label="Close" data-target="details-modal"></button>
-        <strong id="modal-title">Product Details</strong>
-      </header>
-      <div id="modal-content" aria-busy="true">
-        <p>Loading details...</p>
-      </div>
-    </article>
-  </dialog>
+<div class="grid pagination-controls">
+  <button id="prev-button" class="secondary outline" aria-label="Previous page" disabled>← Previous</button>
+  <span id="page-indicator" role="status" aria-live="polite">Page 1</span>
+  <button id="next-button" class="secondary outline" aria-label="Next page">Next →</button>
 </div>
-{% endblock %}
 
+<dialog id="details-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <h2 id="modal-title">Product Details</h2>
+  <div id="modal-content" aria-busy="true" aria-live="polite">
+    <p>Loading details…</p>
+  </div>
+</dialog>
+{% endblock %}
 {% block scripts %}
+<script src="/static/js/config.js"></script>
 <script>
-  // Slider visual toggle
-  (function(){
-    const wrap = document.getElementById('group-toggle-wrap');
-    const input = document.getElementById('group-toggle');
-    const slider = wrap?.querySelector('.slider');
-    if (!wrap || !input || !slider) return;
-    const knob = slider.firstElementChild;
-    const sync = () => {
-      slider.style.background = input.checked ? 'var(--primary, #0d6efd)' : 'var(--muted-border-color)';
-      if (knob) knob.style.transform = input.checked ? 'translateX(20px)' : 'translateX(0)';
-    };
-    input.addEventListener('change', sync);
-    sync();
-  })();
+(function(){
+  const wrap = document.getElementById('group-toggle-wrap');
+  const input = document.getElementById('group-toggle');
+  const slider = wrap.querySelector('.slider');
+  const knob = slider.firstElementChild;
+  const sync = () => {
+    slider.style.background = input.checked ? 'var(--pico-primary)' : 'var(--pico-muted-border-color)';
+    knob.style.transform = input.checked ? 'translateX(20px)' : 'translateX(0)';
+  };
+  input.addEventListener('change', sync);
+  sync();
+})();
 </script>
 <script src="/static/js/config.js"></script>
 <script src="/static/js/inventory.js"></script>

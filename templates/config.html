@@ -1,81 +1,64 @@
 {% extends "base.html" %}
-
 {% block content %}
-<div class="container">
-    <hgroup>
-        <h1>Configuration</h1>
-        <h2>Manage your connected Shopify stores.</h2>
-    </hgroup>
+<h1>Configuration</h1>
+<h2>Manage your connected Shopify stores.</h2>
 
-    <div class="grid">
-        <article>
-            <header><strong>Add a New Store</strong></header>
-            <form id="add-store-form">
-                <label for="name">Store Name</label>
-                <input type="text" id="name" name="name" placeholder="My Awesome Store" required>
-                
-                <label for="shopify_url">Shopify URL</label>
-                <input type="text" id="shopify_url" name="shopify_url" placeholder="your-shop.myshopify.com" required>
-                
-                <label for="api_token">Admin API Access Token</label>
-                <input type="password" id="api_token" name="api_token" required>
-                
-                <label for="api_secret">API Secret Key</label>
-                <input type="password" id="api_secret" name="api_secret" placeholder="Used for webhook verification" required>
-                
-                <button type="submit" id="add-store-btn">Add Store</button>
-            </form>
-        </article>
-        <article>
-            <header><strong>Connected Stores</strong></header>
-            <div id="stores-list-container" aria-busy="true">
-                <p>Loading stores...</p>
-            </div>
-        </article>
+<section class="card">
+  <h3>Add a New Store</h3>
+  <form id="add-store-form">
+    <label for="name">Store Name</label>
+    <input type="text" id="name" name="name" required placeholder="My Awesome Store" />
+
+    <label for="shopify_url">Shopify URL</label>
+    <input type="text" id="shopify_url" name="shopify_url" required placeholder="your-shop.myshopify.com" />
+
+    <label for="api_token">Admin API Access Token</label>
+    <input type="password" id="api_token" name="api_token" required />
+
+    <label for="api_secret">API Secret Key</label>
+    <input type="password" id="api_secret" name="api_secret" required placeholder="For webhook verification" />
+
+    <button type="submit" class="secondary">Add Store</button>
+  </form>
+</section>
+
+<section class="card" aria-busy="true" aria-live="polite">
+  <h3>Connected Stores</h3>
+  <div id="stores-list-container">
+    <p>Loading stores…</p>
+  </div>
+</section>
+
+<dialog id="edit-store-modal" role="dialog" aria-modal="true" aria-labelledby="edit-store-title">
+  <h2 id="edit-store-title">Edit Store</h2>
+  <form id="edit-store-form">
+    <input type="hidden" id="edit-store-id" name="id" />
+    <label for="edit-name">Store Name</label>
+    <input type="text" id="edit-name" name="name" required />
+
+    <label for="edit-shopify_url">Shopify URL</label>
+    <input type="text" id="edit-shopify_url" name="shopify_url" required />
+
+    <label for="edit-api_token">Admin API Access Token</label>
+    <input type="password" id="edit-api_token" name="api_token" placeholder="Leave blank to keep unchanged" />
+
+    <label for="edit-api_secret">API Secret Key</label>
+    <input type="password" id="edit-api_secret" name="api_secret" placeholder="Leave blank to keep unchanged" />
+
+    <button type="submit" class="secondary">Save Store Details</button>
+  </form>
+  <hr />
+  <section>
+    <h3>Webhook Subscriptions</h3>
+    <p>Your webhook URL is: <code id="webhook-url-display"></code></p>
+    <button id="create-all-webhooks-btn" class="secondary">Create / Verify Webhooks</button>
+    <div id="webhooks-list-container" aria-busy="true" aria-live="polite">
+      <p>Loading webhooks…</p>
     </div>
-
-    <dialog id="edit-store-modal">
-      <article>
-        <header>
-            <button class="close" aria-label="Close" data-target="edit-store-modal"></button>
-            <strong>Edit Store</strong>
-        </header>
-        <form id="edit-store-form">
-            <input type="hidden" id="edit-store-id" name="id">
-            
-            <label for="edit-name">Store Name</label>
-            <input type="text" id="edit-name" name="name" required>
-            
-            <label for="edit-shopify_url">Shopify URL</label>
-            <input type="text" id="edit-shopify_url" name="shopify_url" required>
-            
-            <label for="edit-api_token">Admin API Access Token</label>
-            <input type="password" id="edit-api_token" name="api_token" placeholder="Leave blank to keep unchanged">
-            
-            <label for="edit-api_secret">API Secret Key</label>
-            <input type="password" id="edit-api_secret" name="api_secret" placeholder="Leave blank to keep unchanged">
-            
-            <button type="submit" id="update-store-btn">Save Store Details</button>
-        </form>
-        
-        <hr>
-
-        <section id="webhook-management-section">
-            <header><strong>Webhook Subscriptions</strong></header>
-            <p>Your webhook URL is: <code id="webhook-url-display"></code></p>
-            
-            <button id="create-all-webhooks-btn">Create / Verify All Necessary Webhooks</button>
-            
-            <div id="webhooks-list-container" aria-busy="true">
-                <p>Loading webhooks...</p>
-            </div>
-        </section>
-
-      </article>
-    </dialog>
-</div>
+  </section>
+  <button class="close" aria-label="Close">Close</button>
+</dialog>
 {% endblock %}
-
 {% block scripts %}
 <script src="/static/js/config.js"></script>
 <script src="/static/js/config_page.js"></script>
