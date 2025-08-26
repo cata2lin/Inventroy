@@ -7,8 +7,8 @@ document.addEventListener('DOMContentLoaded', () => {
         coveragePeriod: document.getElementById('coverage-period'),
         storeFilter: document.getElementById('store-filter-list'),
         typeFilter: document.getElementById('type-filter-list'),
-        vendorFilter: document.getElementById('vendor-filter-list'),
         statusFilter: document.getElementById('status-filter-list'),
+        reorderDateFilter: document.getElementById('reorder-date-filter'),
         exportBtn: document.getElementById('export-button'),
     };
 
@@ -26,13 +26,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const getSelectedFilters = () => {
         const selectedStores = Array.from(elements.storeFilter.querySelectorAll('input:checked')).map(cb => cb.value);
         const selectedTypes = Array.from(elements.typeFilter.querySelectorAll('input:checked')).map(cb => cb.value);
-        const selectedVendors = Array.from(elements.vendorFilter.querySelectorAll('input:checked')).map(cb => cb.value);
         const selectedStatuses = Array.from(elements.statusFilter.querySelectorAll('input:checked')).map(cb => cb.value);
         return {
             store_ids: selectedStores,
             product_types: selectedTypes,
-            vendors: selectedVendors,
             stock_statuses: selectedStatuses,
+            reorder_before: elements.reorderDateFilter.value,
         };
     };
 
@@ -45,7 +44,11 @@ document.addEventListener('DOMContentLoaded', () => {
         params.set('coverage_period', elements.coveragePeriod.value);
 
         Object.entries(filters).forEach(([key, values]) => {
-            values.forEach(value => params.append(key, value));
+            if (Array.isArray(values)) {
+                values.forEach(value => params.append(key, value));
+            } else if (values) {
+                params.set(key, values);
+            }
         });
 
         try {
@@ -67,7 +70,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const valB = b[sortState.key];
             if (valA === null || valA === undefined) return 1;
             if (valB === null || valB === undefined) return -1;
-            return sortState.order === 'asc' ? valA - valB : valB - valA;
+            
+            if (typeof valA === 'string') {
+                return sortState.order === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+            } else {
+                return sortState.order === 'asc' ? valA - valB : valB - valA;
+            }
         });
 
         const headers = [
@@ -96,7 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <tr>
                         <td>
                             <div class="product-cell">
-                                <img src="${item.image_url || '/static/img/placeholder.png'}" alt="${item.product_title}">
+                                <img src="${item.image_url || '/static/img/placeholder.png'}" alt="${item.product_title}" style="width: 50px; height: 50px; object-fit: cover;">
                                 <div>
                                     <strong>${item.product_title}</strong><br>
                                     <small>${item.sku}</small>
@@ -145,7 +153,6 @@ document.addEventListener('DOMContentLoaded', () => {
             
             populateList(elements.storeFilter, data.stores);
             populateList(elements.typeFilter, data.product_types);
-            populateList(elements.vendorFilter, data.vendors);
 
         } catch (error) {
             console.error('Failed to load filters:', error);
@@ -159,18 +166,22 @@ document.addEventListener('DOMContentLoaded', () => {
         params.set('lead_time', elements.leadTime.value);
         params.set('coverage_period', elements.coveragePeriod.value);
         Object.entries(filters).forEach(([key, values]) => {
-            values.forEach(value => params.append(key, value));
+            if (Array.isArray(values)) {
+                values.forEach(value => params.append(key, value));
+            } else if (values) {
+                params.set(key, values);
+            }
         });
 
         window.location.href = `/api/forecasting/export?${params.toString()}`;
     };
 
     // Event Listeners
-    [elements.leadTime, elements.coveragePeriod].forEach(input => {
+    [elements.leadTime, elements.coveragePeriod, elements.reorderDateFilter].forEach(input => {
         input.addEventListener('change', debounce(loadForecastingData, 400));
     });
 
-    [elements.storeFilter, elements.typeFilter, elements.vendorFilter, elements.statusFilter].forEach(filter => {
+    [elements.storeFilter, elements.typeFilter, elements.statusFilter].forEach(filter => {
         filter.addEventListener('change', loadForecastingData);
     });
     

@@ -20,22 +20,17 @@
             </div>
 
             <details role="list" class="dropdown">
-                <summary aria-haspopup="listbox"><svg class="icon"><use href="#i-filter"/></svg> Stores</summary>
+                <summary aria-haspopup="listbox">Stores</summary>
                 <ul role="listbox" id="store-filter-list"><li>Loading...</li></ul>
             </details>
 
             <details role="list" class="dropdown">
-                <summary aria-haspopup="listbox"><svg class="icon"><use href="#i-filter"/></svg> Product Type</summary>
+                <summary aria-haspopup="listbox">Product Type</summary>
                 <ul role="listbox" id="type-filter-list"><li>Loading...</li></ul>
             </details>
 
             <details role="list" class="dropdown">
-                <summary aria-haspopup="listbox"><svg class="icon"><use href="#i-filter"/></svg> Vendor</summary>
-                <ul role="listbox" id="vendor-filter-list"><li>Loading...</li></ul>
-            </details>
-
-            <details role="list" class="dropdown">
-                <summary aria-haspopup="listbox"><svg class="icon"><use href="#i-filter"/></svg> Stock Status</summary>
+                <summary aria-haspopup="listbox">Stock Status</summary>
                 <ul role="listbox" id="status-filter-list">
                     <li><label><input type="checkbox" name="status" value="urgent"> Urgent</label></li>
                     <li><label><input type="checkbox" name="status" value="warning"> Warning</label></li>
@@ -46,10 +41,13 @@
                 </ul>
             </details>
 
+            <div class="control">
+                <label for="reorder-date-filter">Reorder Before</label>
+                <input type="date" id="reorder-date-filter">
+            </div>
+
             <div class="controls-end">
-                <button id="export-button">
-                    <svg class="icon"><use href="#i-download"/></svg> Export to Excel
-                </button>
+                <button id="export-button">Export to Excel</button>
             </div>
         </section>
     </article>

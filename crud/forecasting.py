@@ -11,7 +11,7 @@ def get_forecasting_data(
     coverage_period: int,
     store_ids: list[int] = None,
     product_types: list[str] = None,
-    vendors: list[str] = None
+    reorder_before: str = None
 ):
     """
     Generates a forecasting report by calculating stock levels, sales velocities,
@@ -24,7 +24,7 @@ def get_forecasting_data(
     # Base query for product variants
     base_query = db.query(
         models.ProductVariant.barcode,
-        func.sum(models.ProductVariant.inventory_quantity).label('total_stock'),
+        func.min(models.ProductVariant.inventory_quantity).label('total_stock'),
         models.Product.title,
         models.ProductVariant.sku,
         models.Product.image_url
@@ -36,8 +36,6 @@ def get_forecasting_data(
         base_query = base_query.filter(models.Product.store_id.in_(store_ids))
     if product_types:
         base_query = base_query.filter(models.Product.product_type.in_(product_types))
-    if vendors:
-        base_query = base_query.filter(models.Product.vendor.in_(vendors))
 
     product_groups = base_query.group_by(
         models.ProductVariant.barcode,
@@ -112,16 +110,17 @@ def get_forecasting_data(
             "reorder_date": reorder_date,
             "reorder_qty": reorder_qty
         })
+    
+    if reorder_before:
+        report = [item for item in report if item['reorder_date'] and item['reorder_date'] <= reorder_before]
         
     return report
 
 def get_forecasting_filters(db: Session):
     stores = db.query(models.Store.name).distinct().all()
     product_types = db.query(models.Product.product_type).distinct().all()
-    vendors = db.query(models.Product.vendor).distinct().all()
     
     return {
         "stores": [s[0] for s in stores if s[0]],
         "product_types": [pt[0] for pt in product_types if pt[0]],
-        "vendors": [v[0] for v in vendors if v[0]]
     }
