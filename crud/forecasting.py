@@ -79,30 +79,45 @@ def get_forecasting_data(
 
     # Get all variant IDs for sales velocity calculation
     group_keys_for_sales = [p.group_key for p in product_groups]
-    sales_variants_query = db.query(
-        models.ProductVariant.id,
-        group_key
-    ).filter(group_key.in_(group_keys_for_sales))
-
+    
+    # Map group keys to their constituent variant IDs
     sales_variants_map = {}
-    for vid, gkey in sales_variants_query.all():
-        if gkey not in sales_variants_map:
-            sales_variants_map[gkey] = []
-        sales_variants_map[gkey].append(vid)
+    if group_keys_for_sales:
+        sales_variants_query = db.query(
+            models.ProductVariant.id,
+            group_key
+        ).filter(group_key.in_(group_keys_for_sales))
 
-    # Calculate sales velocity
+        for vid, gkey in sales_variants_query.all():
+            if gkey not in sales_variants_map:
+                sales_variants_map[gkey] = []
+            sales_variants_map[gkey].append(vid)
+
+    # Calculate sales velocity using the map
     def get_sales(start_date):
+        all_variant_ids = [v for sublist in sales_variants_map.values() for v in sublist]
+        if not all_variant_ids:
+            return {}
+
+        # Define the grouping expression consistently
+        group_key_expr = case(
+            (models.ProductVariant.barcode != None, models.ProductVariant.barcode),
+            else_=models.ProductVariant.sku
+        )
+
         sales_data = db.query(
             func.sum(models.LineItem.quantity).label('total_sales'),
-            text("CASE WHEN line_items.variant_id IS NOT NULL THEN pv.barcode ELSE pv.sku END as group_key")
+            group_key_expr.label("group_key")
         ).join(
             models.ProductVariant, models.ProductVariant.id == models.LineItem.variant_id
-        ).alias("pv").join(
+        ).join(
             models.Order, models.Order.id == models.LineItem.order_id
         ).filter(
-            models.LineItem.variant_id.in_([v for sublist in sales_variants_map.values() for v in sublist]),
+            models.LineItem.variant_id.in_(all_variant_ids),
             models.Order.created_at >= start_date
-        ).group_by("group_key").all()
+        ).group_by(
+            group_key_expr
+        ).all()
         return {s.group_key: s.total_sales for s in sales_data}
 
     sales_map_7d = get_sales(start_date_7d)
@@ -118,7 +133,8 @@ def get_forecasting_data(
 
         days_of_stock = None
         if velocity_30d > 0 and product.total_stock is not None:
-            days_of_stock = int(product.total_stock / velocity_30d)
+            # Prevent division by zero if total_stock is 0
+            days_of_stock = int(product.total_stock / velocity_30d) if product.total_stock > 0 else 0
 
         stock_status = "slow_mover"
         if days_of_stock is not None:
