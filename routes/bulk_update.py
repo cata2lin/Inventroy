@@ -175,23 +175,26 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                 if len(variant_changes) > 1:
                     service.variants_bulk_update(variant_db.product.shopify_gid, [variant_changes])
 
-                # FIX: Handle inventory updates for both onHand and available with only one API call
+                # --- FIX: Handle inventory updates with added validation ---
                 if inventory_changes and variant_db.inventory_levels:
                     location_gid = f"gid://shopify/Location/{variant_db.inventory_levels[0].location_id}"
                     inventory_item_gid = f"gid://shopify/InventoryItem/{variant_db.inventory_item_id}"
                     
-                    if 'available' in inventory_changes:
-                        current_qty = variant_db.inventory_levels[0].available or 0
-                        delta = int(inventory_changes['available']) - current_qty
-                        if delta != 0:
-                            service.adjust_inventory_quantity(inventory_item_gid, location_gid, delta)
-                    
-                    elif 'onHand' in inventory_changes:
-                        # Only adjust based on onHand if available was not changed
-                        current_on_hand = variant_db.inventory_levels[0].on_hand or 0
-                        delta = int(inventory_changes['onHand']) - current_on_hand
-                        if delta != 0:
-                            service.adjust_inventory_quantity(inventory_item_gid, location_gid, delta)
+                    try:
+                        if 'available' in inventory_changes:
+                            current_qty = variant_db.inventory_levels[0].available or 0
+                            delta = int(inventory_changes['available']) - current_qty
+                            if delta != 0:
+                                service.adjust_inventory_quantity(inventory_item_gid, location_gid, delta)
+                        
+                        elif 'onHand' in inventory_changes:
+                            current_on_hand = variant_db.inventory_levels[0].on_hand or 0
+                            delta = int(inventory_changes['onHand']) - current_on_hand
+                            if delta != 0:
+                                service.adjust_inventory_quantity(inventory_item_gid, location_gid, delta)
+                    except (ValueError, TypeError):
+                        # Catch errors if the value is not a valid integer
+                        raise ValueError("Invalid quantity provided. Please enter a valid number.")
 
                 # --- Local Database Update ---
                 crud_bulk_update.update_local_variant(db, update_data.variant_id, {**product_changes, **changes, **inventory_changes})
