@@ -364,3 +364,89 @@ button.close::after {
   .controls-grid { grid-template-columns: 1fr 1fr; }
   .cards-grid { grid-template-columns: 1fr; }
 }
+/* === Fix: search icon overlap (Inventory + Bulk Update) === */
+.controls-grid .control { position: relative; display: block; }
+.controls-grid .control .icon {
+  position: absolute;
+  left: 10px; top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.controls-grid .control input[type="search"] {
+  padding-left: 2rem; /* room for icon */
+}
+
+/* === Make dropdown filters (Stores/Types/Status/Barcode Actions) match selects === */
+.controls-grid .dropdown > summary {
+  display: flex; align-items: center; gap: .5rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: inherit;
+  border-radius: 10px;
+  min-height: var(--controls-min-h);
+  padding: var(--controls-pad-y) calc(var(--controls-pad-x) * 1.2);
+  font-size: var(--controls-font);
+}
+.controls-grid .dropdown[open] > summary {
+  border-color: color-mix(in oklab, var(--accent), var(--border) 60%);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 80%);
+}
+
+/* === Compact numeric filters (Min/Max Retail, Min/Max On Hand) === */
+#min-retail-input, #max-retail-input,
+#min-inv-input,   #max-inv-input {
+  min-height: var(--controls-min-h);
+  padding: var(--controls-pad-y) var(--controls-pad-x);
+  font-size: var(--controls-font);
+  border-radius: 10px;
+  width: 100%;
+}
+#min-retail-input, #max-retail-input,
+#min-inv-input,   #max-inv-input {
+  /* optional narrower feel on wide screens */
+  max-width: 180px;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; }
+
+/* === Bulk Update: align Save button + search, tidy toolbar === */
+.bulk-update-controls .controls-grid { align-items: end; }
+#save-changes-btn {
+  align-self: end;
+  min-height: var(--controls-min-h);
+  padding: var(--controls-pad-y) var(--controls-pad-x);
+  font-size: var(--controls-font);
+}
+
+/* === Bulk Update: make file input + Import button match height and sit nicely === */
+.import-controls {
+  display: grid;
+  grid-auto-flow: column;
+  gap: .5rem;
+  align-items: center;
+}
+.import-controls input[type="file"] {
+  font-size: var(--controls-font);
+  line-height: 1;
+}
+.import-controls input[type="file"]::file-selector-button {
+  min-height: var(--controls-min-h);
+  padding: var(--controls-pad-y) var(--controls-pad-x);
+  font-size: var(--controls-font);
+  border-radius: 10px;
+}
+#import-excel-btn {
+  min-height: var(--controls-min-h);
+  padding: var(--controls-pad-y) var(--controls-pad-x);
+  font-size: var(--controls-font);
+}
+
+/* === Bulk Update: ensure search icon uses the same non-overlap fix === */
+.bulk-update-controls .control .icon { left: 10px; }
+.bulk-update-controls .control input[type="search"] { padding-left: 2rem; }
+
+/* === Bulk Update: smaller thumbs already controlled via --bu-thumb; enforce tighter cells === */
+.bulk-update-table th,
+.bulk-update-table td { padding: 0.06rem 0.32rem; }
+.bulk-update-table img { width: var(--bu-thumb); height: var(--bu-thumb); }
