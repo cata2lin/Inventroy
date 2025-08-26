@@ -480,7 +480,8 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
                 "variant_id": item.variant.legacy_resource_id if item.variant else None,
                 "product_id": item.variant.product.legacy_resource_id if (item.variant and item.variant.product) else None,
                 "title": item.title, "quantity": item.quantity, "sku": item.sku, "vendor": item.vendor,
-                "price": item.price.amount if item.price else None,
+                # FIX: Access the price from the correct attribute
+                "price": item.original_unit_price.amount if item.original_unit_price else None,
                 "total_discount": item.total_discount.amount if item.total_discount else None, "taxable": item.taxable,
             })
 

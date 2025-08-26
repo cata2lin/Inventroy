@@ -143,6 +143,10 @@ class ProductModel(APIBase):
     published_at: Optional[datetime] = Field(None, alias="publishedAt")
     category: Optional[Dict[str, Any]] = None
     featured_image: Optional[Dict[str, Any]] = Field(None, alias="featuredImage")
+    tags: Optional[List[str]] = None
+    handle: Optional[str] = None
+    vendor: Optional[str] = None
+
 
 
 class VariantModel(APIBase):
@@ -154,7 +158,6 @@ class VariantModel(APIBase):
     barcode: Optional[str] = None
     inventory_item: Optional[InventoryItemModel] = Field(None, alias="inventoryItem")
     product: Optional[ProductModel] = None
-    # FIX: Added inventory_policy with its alias to handle the API response
     inventory_policy: Optional[str] = Field(None, alias="inventoryPolicy")
     inventory_quantity: Optional[int] = Field(None, alias="inventoryQuantity")
     position: Optional[int] = None
@@ -173,6 +176,8 @@ class LineItemModel(APIBase):
     variant: Optional[VariantModel] = None
     original_unit_price: Optional[Money] = Field(None, alias="originalUnitPriceSet")
     total_discount: Optional[Money] = Field(None, alias="totalDiscountSet")
+    # FIX: Added vendor to prevent a future crash
+    vendor: Optional[str] = None
 
 
 class TrackingInfo(APIBase):
@@ -224,6 +229,11 @@ class ShopifyOrder(APIBase):
 
     # tags, etc.
     tags: Optional[List[str]] = None
+    note: Optional[str] = None
+    paymentGatewayNames: Optional[List[str]] = Field(None, alias="paymentGatewayNames")
+    cancel_reason: Optional[str] = Field(None, alias="cancelReason")
+    currency: Optional[str] = Field(None, alias="currencyCode")
+
 
     # lines & fulfillments (ShopifyService flattens edges)
     line_items: Optional[List[LineItemModel]] = Field(None, alias="lineItems")
