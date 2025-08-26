@@ -11,7 +11,9 @@ from dotenv import load_dotenv
 
 # ADD THESE IMPORTS
 from apscheduler.schedulers.background import BackgroundScheduler
+import pytz # Import pytz
 from database import SessionLocal
+# Ensure you have this file created: jobs/daily_snapshot.py
 from jobs.daily_snapshot import run_daily_inventory_snapshot
 # END OF ADDED IMPORTS
 
@@ -51,7 +53,8 @@ def scheduled_snapshot_job():
     finally:
         db.close()
 
-scheduler = BackgroundScheduler(timezone="utc")
+# FIX: Use pytz to handle the timezone robustly
+scheduler = BackgroundScheduler(timezone=pytz.utc)
 scheduler.add_job(scheduled_snapshot_job, 'cron', hour=1) # Runs every day at 1:00 AM UTC
 scheduler.start()
 # --- END OF SCHEDULER BLOCK ---
