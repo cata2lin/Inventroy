@@ -176,7 +176,6 @@ class LineItemModel(APIBase):
     variant: Optional[VariantModel] = None
     original_unit_price: Optional[Money] = Field(None, alias="originalUnitPriceSet")
     total_discount: Optional[Money] = Field(None, alias="totalDiscountSet")
-    # FIX: Added vendor to prevent a future crash
     vendor: Optional[str] = None
 
 
@@ -188,6 +187,7 @@ class TrackingInfo(APIBase):
 
 class FulfillmentEventModel(APIBase):
     id: Optional[str] = None  # GID
+    # FIX: Changed 'description' to 'message' to match the API payload
     message: Optional[str] = None
     status: Optional[str] = None
     happened_at: Optional[datetime] = Field(None, alias="happenedAt")
