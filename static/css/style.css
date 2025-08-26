@@ -1,5 +1,5 @@
 /* ==============================
-   Inventory Intelligence — UI System (Compact+Statuses)
+   Inventory Intelligence — UI System (Compact + Unified Filters)
    ============================== */
 
 /* -------- Design tokens -------- */
@@ -43,16 +43,25 @@
   --s-6: 32px;
   --s-7: 40px;
 
-  /* Compact controls (global knobs) */
-  --controls-font: 0.62rem;      /* smaller filter text */
-  --controls-min-h: 30px;        /* smaller control height */
-  --controls-pad-y: 0.25rem;
-  --controls-pad-x: 0.5rem;
+  /* Unified filter knobs (match “Columns” button / Inventory selects) */
+  --filter-h: 38px;
+  --filter-radius: 12px;
+  --filter-font: 0.7rem;
+  --filter-pad-x: 14px;
+  --filter-bg: var(--surface);
+  --filter-bd: var(--border);
+  --filter-focus: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 75%);
+
+  /* Backwards-compat for earlier rules */
+  --controls-font: var(--filter-font);
+  --controls-min-h: var(--filter-h);
+  --controls-pad-y: 0;
+  --controls-pad-x: var(--filter-pad-x);
 
   /* Bulk Update density */
-  --bu-thumb: 36px;              /* smaller pictures */
-  --bu-input-font: 0.66em;       /* smaller edit font */
-  --bu-input-h: 22px;            /* smaller edit height */
+  --bu-thumb: 36px;
+  --bu-input-font: 0.66em;
+  --bu-input-h: 22px;
 }
 
 /* Light theme overrides */
@@ -141,43 +150,35 @@ body {
 .metric strong { font-size: 13px; color: var(--muted); }
 .metric .value { font-size: 18px; font-weight: 700; }
 
-/* ----------------- Controls (compact everywhere) ----------------- */
+/* ----------------- Controls (Unified filter style) ----------------- */
 .controls-grid {
   display: grid;
   gap: var(--s-3);
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   align-items: end;
-  font-size: var(--controls-font); /* smaller filter text */
+  font-size: var(--filter-font);
 }
-.sticky-controls {
-  position: sticky; top: 0; z-index: 10;
-  background: color-mix(in oklab, var(--surface), transparent 5%);
-  padding: var(--s-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-}
-.control {
-  display: grid; grid-template-columns: 18px 1fr; gap: 6px; align-items: center;
-}
-.icon { width: 16px; height: 16px; vertical-align: middle; }
 
-/* Inputs / buttons in filter areas: smaller height/font */
-.controls-grid input[type="text"],
+/* Base “chip/select” filter look */
 .controls-grid input[type="search"],
+.controls-grid input[type="text"],
 .controls-grid input[type="number"],
 .controls-grid input[type="date"],
 .controls-grid select,
-.controls-grid textarea,
-.controls-grid button,
 .controls-grid .dropdown > summary {
-  min-height: var(--controls-min-h);
-  padding: var(--controls-pad-y) var(--controls-pad-x);
-  font-size: var(--controls-font);
-  border-radius: 10px;
+  min-height: var(--filter-h);
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
+}
+.controls-grid .dropdown[open] > summary {
+  border-color: color-mix(in oklab, var(--accent), var(--filter-bd) 60%);
+  box-shadow: var(--filter-focus);
 }
 
-/* Dropdown panel */
+/* Dropdown panel (theme-safe) */
 .dropdown[open] > ul {
   position: absolute; z-index: 1000; top: 100%; left: 0;
   margin-top: 0.25rem; padding: 0.6rem;
@@ -186,10 +187,20 @@ body {
   border-radius: var(--radius);
   box-shadow: var(--shadow-md);
   width: max-content; min-width: 200px; max-height: 300px; overflow-y: auto;
-  font-size: var(--controls-font);
+  font-size: var(--filter-font);
 }
 .dropdown li label { padding: 0.2rem; display: block; }
 .dropdown input[type="radio"], .dropdown input[type="checkbox"] { margin-right: 0.5em; }
+
+/* Control with search icon: prevent overlap (Inventory + Bulk Update) */
+.controls-grid .control { position: relative; display: block; }
+.controls-grid .control .icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  pointer-events: none; width: 16px; height: 16px;
+}
+.controls-grid .control input[type="search"] {
+  padding-left: calc(var(--filter-pad-x) + 18px);
+}
 
 /* Generic buttons */
 button { gap: 8px; display: inline-flex; align-items: center; justify-content: center; }
@@ -259,7 +270,7 @@ button.close::after {
 .inline { display: inline-flex; gap: 8px; align-items: center; }
 .hint { cursor: help; font-weight: 700; padding-left: 6px; }
 
-/* ----------------- STATUS COLORS (text only) ----------------- */
+/* ----------------- STATUS COLORS ----------------- */
 /* Financial */
 .status-paid { color: var(--c-green); }
 .status-authorized,
@@ -282,45 +293,62 @@ button.close::after {
 .status-cancelled,
 .status-archived { color: var(--c-grey); }
 
-/* Optional: pill/badge look if you wrap text with .status-badge */
+/* Optional pill badge */
 .status-badge {
-  display: inline-block; padding: 0.12rem 0.45rem; border-radius: 999px;
-  border: 1px solid currentColor; font-size: 0.68rem; font-weight: 600; letter-spacing: .01em;
+  display: inline-block;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: .01em;
   background: color-mix(in oklab, currentColor, transparent 90%);
 }
 
-/* ----------------- BULK UPDATE (tighter) ----------------- */
-.bulk-update-controls .compact-controls > * {
-  font-size: calc(var(--controls-font) * 0.85);
-  padding: 0.18rem 0.35rem; height: auto;
+/* ----------------- BULK UPDATE (tighter + aligned) ----------------- */
+.bulk-update-controls .controls-grid { align-items: end; }
+
+/* Align Save button baseline with filters */
+#save-changes-btn {
+  min-height: var(--filter-h);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  border-radius: var(--filter-radius);
 }
 
+/* File input + Import button same height/feel */
 .import-controls {
-  display: grid; grid-template-columns: auto auto; gap: 0.5rem; margin-top: 1rem; align-items: center; justify-content: start;
+  display: grid; grid-auto-flow: column; gap: .5rem; align-items: center;
 }
-.import-controls .bulk-update-action-btn,
+.import-controls input[type="file"] { font-size: var(--filter-font); }
 .import-controls input[type="file"]::file-selector-button {
-  font-size: calc(var(--controls-font) * 0.85);
-  padding: 0.18rem 0.35rem;
+  min-height: var(--filter-h);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  border-radius: var(--filter-radius);
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
 }
-.import-controls input[type="file"] { font-size: calc(var(--controls-font) * 0.85); padding: 0; width: auto; }
+#import-excel-btn {
+  min-height: var(--filter-h);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  border-radius: var(--filter-radius);
+}
 
+/* Smaller thumbnail & tight cells */
 .bulk-update-table { table-layout: fixed; width: 100%; }
 .bulk-update-table th,
 .bulk-update-table td {
-  height: 26px; max-height: 26px; padding: 0.08rem 0.35rem; vertical-align: middle;
+  height: 26px; max-height: 26px; padding: 0.06rem 0.32rem; vertical-align: middle;
 }
 .bulk-update-table th { font-size: 0.72em; }
-
-/* Smaller thumbnail */
 .bulk-update-table img {
   width: var(--bu-thumb);
   height: var(--bu-thumb);
   object-fit: cover;
   border-radius: var(--radius);
 }
-
-/* Smaller editable fields */
 .bulk-update-table input[type="text"],
 .bulk-update-table input[type="number"],
 .bulk-update-table select {
@@ -342,14 +370,36 @@ button.close::after {
 }
 #bulk-apply-row input { font-size: 0.85em; font-style: italic; }
 
-/* Column width helpers from your previous sheet (keep if needed) */
-/*
-.bulk-update-table th:nth-child(2), .bulk-update-table td:nth-child(2) { width: 60px; }
-.bulk-update-table th:nth-child(5), .bulk-update-table td:nth-child(5) { width: 20%; }
-.bulk-update-table th:nth-child(6), .bulk-update-table td:nth-child(6) { width: 12%; }
-.bulk-update-table th:nth-child(8), .bulk-update-table td:nth-child(8) { width: 8%; }
-.bulk-update-table th:nth-child(9), .bulk-update-table td:nth-child(9) { width: 5%; }
-*/
+/* ----------------- INVENTORY numeric filters (match filters) ----------------- */
+#min-retail-input, #max-retail-input, #min-inv-input, #max-inv-input {
+  min-height: var(--filter-h);
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; }
+
+/* ----------------- DASHBOARD v2: unify + hide search icon ----------------- */
+/* Scope via presence of #financial-status-filter in the controls section */
+section.controls-grid:has(#financial-status-filter) input[type="search"],
+section.controls-grid:has(#financial-status-filter) input[type="date"],
+section.controls-grid:has(#financial-status-filter) select,
+section.controls-grid:has(#financial-status-filter) .dropdown > summary {
+  min-height: var(--filter-h);
+  border-radius: var(--filter-radius);
+  padding: 0 var(--filter-pad-x);
+  font-size: var(--filter-font);
+  background: var(--filter-bg);
+  border: 1px solid var(--filter-bd);
+}
+section.controls-grid:has(#financial-status-filter) .control .icon { display: none !important; }
+section.controls-grid:has(#financial-status-filter) .control input[type="search"] {
+  padding-left: var(--filter-pad-x) !important;
+}
 
 /* ----------------- Responsive ----------------- */
 @media (max-width: 1024px) {
@@ -364,266 +414,3 @@ button.close::after {
   .controls-grid { grid-template-columns: 1fr 1fr; }
   .cards-grid { grid-template-columns: 1fr; }
 }
-/* === Fix: search icon overlap (Inventory + Bulk Update) === */
-.controls-grid .control { position: relative; display: block; }
-.controls-grid .control .icon {
-  position: absolute;
-  left: 10px; top: 50%;
-  transform: translateY(-50%);
-  pointer-events: none;
-}
-.controls-grid .control input[type="search"] {
-  padding-left: 2rem; /* room for icon */
-}
-
-/* === Make dropdown filters (Stores/Types/Status/Barcode Actions) match selects === */
-.controls-grid .dropdown > summary {
-  display: flex; align-items: center; gap: .5rem;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: inherit;
-  border-radius: 10px;
-  min-height: var(--controls-min-h);
-  padding: var(--controls-pad-y) calc(var(--controls-pad-x) * 1.2);
-  font-size: var(--controls-font);
-}
-.controls-grid .dropdown[open] > summary {
-  border-color: color-mix(in oklab, var(--accent), var(--border) 60%);
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 80%);
-}
-
-/* === Compact numeric filters (Min/Max Retail, Min/Max On Hand) === */
-#min-retail-input, #max-retail-input,
-#min-inv-input,   #max-inv-input {
-  min-height: var(--controls-min-h);
-  padding: var(--controls-pad-y) var(--controls-pad-x);
-  font-size: var(--controls-font);
-  border-radius: 10px;
-  width: 100%;
-}
-#min-retail-input, #max-retail-input,
-#min-inv-input,   #max-inv-input {
-  /* optional narrower feel on wide screens */
-  max-width: 180px;
-}
-input[type="number"]::-webkit-outer-spin-button,
-input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-input[type="number"] { -moz-appearance: textfield; }
-
-/* === Bulk Update: align Save button + search, tidy toolbar === */
-.bulk-update-controls .controls-grid { align-items: end; }
-#save-changes-btn {
-  align-self: end;
-  min-height: var(--controls-min-h);
-  padding: var(--controls-pad-y) var(--controls-pad-x);
-  font-size: var(--controls-font);
-}
-
-/* === Bulk Update: make file input + Import button match height and sit nicely === */
-.import-controls {
-  display: grid;
-  grid-auto-flow: column;
-  gap: .5rem;
-  align-items: center;
-}
-.import-controls input[type="file"] {
-  font-size: var(--controls-font);
-  line-height: 1;
-}
-.import-controls input[type="file"]::file-selector-button {
-  min-height: var(--controls-min-h);
-  padding: var(--controls-pad-y) var(--controls-pad-x);
-  font-size: var(--controls-font);
-  border-radius: 10px;
-}
-#import-excel-btn {
-  min-height: var(--controls-min-h);
-  padding: var(--controls-pad-y) var(--controls-pad-x);
-  font-size: var(--controls-font);
-}
-
-/* === Bulk Update: ensure search icon uses the same non-overlap fix === */
-.bulk-update-controls .control .icon { left: 10px; }
-.bulk-update-controls .control input[type="search"] { padding-left: 2rem; }
-
-/* === Bulk Update: smaller thumbs already controlled via --bu-thumb; enforce tighter cells === */
-.bulk-update-table th,
-.bulk-update-table td { padding: 0.06rem 0.32rem; }
-.bulk-update-table img { width: var(--bu-thumb); height: var(--bu-thumb); }
-/* === DASHBOARD v2 ONLY (scope via presence of #financial-status-filter) === */
-/* Make all controls look like Inventory’s filters */
-section.controls-grid:has(#financial-status-filter) input[type="search"],
-section.controls-grid:has(#financial-status-filter) input[type="date"],
-section.controls-grid:has(#financial-status-filter) select,
-section.controls-grid:has(#financial-status-filter) textarea,
-section.controls-grid:has(#financial-status-filter) button,
-section.controls-grid:has(#financial-status-filter) .dropdown > summary {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: inherit;
-  border-radius: 10px;
-  min-height: var(--controls-min-h);
-  padding: var(--controls-pad-y) var(--controls-pad-x);
-  font-size: var(--controls-font);
-}
-
-/* Remove the magnifying icon only on Dashboard v2 searches */
-section.controls-grid:has(#financial-status-filter) .control .icon { display: none !important; }
-/* And remove the extra left padding reserved for the icon */
-section.controls-grid:has(#financial-status-filter) .control input[type="search"] {
-  padding-left: var(--controls-pad-x) !important;
-}
-
-/* Datepicker: make it visually identical to other filters */
-section.controls-grid:has(#financial-status-filter) input[type="date"] {
-  appearance: none;
-  -webkit-appearance: none;
-  line-height: 1.2;
-}
-section.controls-grid:has(#financial-status-filter) input[type="date"]::-webkit-calendar-picker-indicator {
-  opacity: .8;
-  margin-right: .25rem;
-}
-
-/* Dropdown summaries on Dashboard v2: consistent hover/focus */
-section.controls-grid:has(#financial-status-filter) .dropdown[open] > summary {
-  border-color: color-mix(in oklab, var(--accent), var(--border) 60%);
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 80%);
-}
-
-/* Dashboard v2 dropdown panel style (same as inventory) */
-section.controls-grid:has(#financial-status-filter) .dropdown[open] > ul {
-  background: var(--surface) !important;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-md);
-  font-size: var(--controls-font);
-}
-
-/* Ensure search inputs on Dashboard v2 match the filter look everywhere */
-section.controls-grid:has(#financial-status-filter) input[type="search"] {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  border-radius: 10px;
-}
-
-/* Optional: keep cell heights tight in dashboard table to match compact filters */
-#orders-table-container th, #orders-table-container td {
-  padding: 6px 8px;
-}
-/* =========================
-   UNIFIED FILTER LOOK (all pages)
-   Matches the “Columns” button / Inventory selects
-   ========================= */
-:root{
-  --filter-h: 38px;             /* height like Columns */
-  --filter-radius: 12px;        /* rounded like Columns */
-  --filter-font: 0.7rem;        /* compact text */
-  --filter-pad-x: 14px;
-  --filter-bg: var(--surface);
-  --filter-bd: var(--border);
-  --filter-focus: 0 0 0 2px color-mix(in oklab, var(--accent), transparent 75%);
-}
-
-/* Base filter surface */
-.controls-grid input[type="search"],
-.controls-grid input[type="text"],
-.controls-grid input[type="number"],
-.controls-grid input[type="date"],
-.controls-grid select,
-.controls-grid .dropdown > summary {
-  min-height: var(--filter-h);
-  border-radius: var(--filter-radius);
-  padding: 0 var(--filter-pad-x);
-  font-size: var(--filter-font);
-  background: var(--filter-bg);
-  border: 1px solid var(--filter-bd);
-}
-.controls-grid .dropdown[open] > summary {
-  border-color: color-mix(in oklab, var(--accent), var(--filter-bd) 60%);
-  box-shadow: var(--filter-focus);
-}
-
-/* Date pickers: visually identical to other filters */
-.controls-grid input[type="date"] {
-  appearance: none; -webkit-appearance: none; line-height: 1.2;
-}
-.controls-grid input[type="date"]::-webkit-calendar-picker-indicator { opacity: .85; }
-
-/* Search with icon wrapper: prevent overlap */
-.controls-grid .control { position: relative; }
-.controls-grid .control .icon {
-  position: absolute; left: 10px; top: 50%; transform: translateY(-50%); pointer-events: none;
-}
-.controls-grid .control input[type="search"] { padding-left: calc(var(--filter-pad-x) + 18px); }
-
-/* Keep action buttons (Save/Export/Reset) as action styles – not filter chips */
-.controls-grid button:not(.outline):not(.secondary):not(#column-visibility-button) { /* leave as-is */ }
-
-/* =========================
-   DASHBOARD v2 scope
-   - filters identical to Inventory
-   - hide magnifying icon on dashboard searches
-   ========================= */
-section.controls-grid:has(#financial-status-filter) input[type="search"],
-section.controls-grid:has(#financial-status-filter) input[type="date"],
-section.controls-grid:has(#financial-status-filter) select,
-section.controls-grid:has(#financial-status-filter) .dropdown > summary {
-  min-height: var(--filter-h);
-  border-radius: var(--filter-radius);
-  padding: 0 var(--filter-pad-x);
-  font-size: var(--filter-font);
-  background: var(--filter-bg);
-  border: 1px solid var(--filter-bd);
-}
-section.controls-grid:has(#financial-status-filter) .control .icon { display: none !important; }
-section.controls-grid:has(#financial-status-filter) .control input[type="search"] { padding-left: var(--filter-pad-x) !important; }
-
-/* =========================
-   INVENTORY numeric filters (Min/Max Retail, Min/Max On Hand)
-   – same size as the rest
-   ========================= */
-#min-retail-input, #max-retail-input, #min-inv-input, #max-inv-input {
-  min-height: var(--filter-h);
-  border-radius: var(--filter-radius);
-  padding: 0 var(--filter-pad-x);
-  font-size: var(--filter-font);
-  background: var(--filter-bg);
-  border: 1px solid var(--filter-bd);
-}
-
-/* =========================
-   BULK UPDATE toolbar polish
-   - search icon non-overlap (kept)
-   - align Save button baseline with filters
-   - Make file input and Import button same height & feel
-   ========================= */
-.bulk-update-controls .controls-grid { align-items: end; }
-
-#save-changes-btn {
-  min-height: var(--filter-h);
-  padding: 0 var(--filter-pad-x);
-  font-size: var(--filter-font);
-  border-radius: var(--filter-radius);
-}
-
-.import-controls {
-  display: grid; grid-auto-flow: column; gap: .5rem; align-items: center;
-}
-.import-controls input[type="file"] { font-size: var(--filter-font); }
-.import-controls input[type="file"]::file-selector-button {
-  min-height: var(--filter-h);
-  padding: 0 var(--filter-pad-x);
-  font-size: var(--filter-font);
-  border-radius: var(--filter-radius);
-  background: var(--filter-bg);
-  border: 1px solid var(--filter-bd);
-}
-#import-excel-btn {
-  min-height: var(--filter-h);
-  padding: 0 var(--filter-pad-x);
-  font-size: var(--filter-font);
-  border-radius: var(--filter-radius);
-}
-.bulk-update-controls .control .icon { left: 10px; }
-.bulk-update-controls .control input[type="search"] { padding-left: calc(var(--filter-pad-x) + 18px); }
