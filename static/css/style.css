@@ -651,3 +651,93 @@ section.controls-grid:has(#financial-status-filter) .dropdown[open] > summary {
   line-height: 1.1 !important;
   -webkit-appearance: none; appearance: none;
 }
+/* ===========================================================
+   1) Pagination — +25% size, font, and width
+   =========================================================== */
+:root {
+  --pg-h: 33px;          /* 26px → ~+25% */
+  --pg-font: 0.75rem;    /* 0.60rem → +25% */
+  --pg-pad-x: 14px;      /* 10px → a bit wider */
+}
+.pagination-controls button {
+  height: var(--pg-h) !important;
+  min-height: var(--pg-h) !important;
+  padding: 0 var(--pg-pad-x) !important;
+  font-size: var(--pg-font) !important;
+  min-width: 140px;               /* make the buttons visibly wider */
+}
+.pagination-controls .icon { width: 16px; height: 16px; }
+
+/* ===========================================================
+   2) Orders Dashboard filters — remove icons and align text
+   =========================================================== */
+/* Hide all filter icons (search + summary funnels) in Dashboard v2 */
+section.controls-grid:has(#financial-status-filter) .control .icon,
+section.controls-grid:has(#financial-status-filter) summary .icon {
+  display: none !important;
+}
+/* Correct inner padding now that icons are gone */
+section.controls-grid:has(#financial-status-filter) .control input[type="search"] {
+  padding-left: var(--filter-pad-x) !important;
+}
+/* Make the dashboard filter row expand nicely like Inventory */
+section.controls-grid:has(#financial-status-filter) {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important;
+  column-gap: var(--s-3);
+  row-gap: .5rem;
+}
+section.controls-grid:has(#financial-status-filter) input[type="search"],
+section.controls-grid:has(#financial-status-filter) input[type="date"],
+section.controls-grid:has(#financial-status-filter) select,
+section.controls-grid:has(#financial-status-filter) .dropdown > summary {
+  display: inline-flex; align-items: center; /* perfect vertical alignment */
+}
+
+/* ===========================================================
+   3) Bulk Update — widen filters / reduce big gaps
+   =========================================================== */
+/* Remove the search icon from "Filter by SKU…" */
+.bulk-update-controls .control .icon { display: none !important; }
+.bulk-update-controls .control input[type="search"] {
+  padding-left: var(--filter-pad-x) !important;
+}
+
+/* Make the whole filter row auto-fill the width with wider chips */
+.bulk-update-controls .controls-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)) !important;
+  column-gap: var(--s-3);
+  row-gap: .5rem;
+}
+
+/* Ensure every chip stretches consistently (including <summary> and fieldsets) */
+.bulk-update-controls .controls-grid > *,
+.bulk-update-controls .controls-grid details,
+.bulk-update-controls .controls-grid .dropdown > summary,
+.bulk-update-controls .controls-grid fieldset {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Give the tiny "No Barcode" fieldset a real chip width so it doesn't leave a big hole */
+.bulk-update-controls fieldset { min-width: 230px; }
+
+/* Keep text centered vertically inside all Bulk Update chips */
+.bulk-update-controls .controls-grid input[type="search"],
+.bulk-update-controls .controls-grid input[type="text"],
+.bulk-update-controls .controls-grid input[type="number"],
+.bulk-update-controls .controls-grid input[type="date"],
+.bulk-update-controls .controls-grid select,
+.bulk-update-controls .controls-grid .dropdown > summary {
+  display: inline-flex;
+  align-items: center;
+  height: var(--filter-h) !important;
+  min-height: var(--filter-h) !important;
+  padding: 0 var(--filter-pad-x) !important;
+  font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius) !important;
+  background: var(--filter-bg) !important;
+  border: 1px solid var(--filter-bd) !important;
+  line-height: 1.1 !important;
+}
