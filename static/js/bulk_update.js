@@ -302,7 +302,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     changes: {}
                 };
                 changedFields.forEach(field => {
-                    update.changes[field.dataset.fieldKey] = field.value;
+                    // FIX: Ensure empty values are sent as null
+                    const value = field.value;
+                    update.changes[field.dataset.fieldKey] = value === '' ? null : value;
                 });
                 payload.updates.push(update);
             }

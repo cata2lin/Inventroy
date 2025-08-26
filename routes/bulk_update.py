@@ -181,13 +181,14 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                     inventory_item_gid = f"gid://shopify/InventoryItem/{variant_db.inventory_item_id}"
                     
                     try:
-                        if 'available' in inventory_changes:
+                        if 'available' in inventory_changes and inventory_changes['available'] is not None:
                             current_qty = variant_db.inventory_levels[0].available or 0
                             delta = int(inventory_changes['available']) - current_qty
                             if delta != 0:
                                 service.adjust_inventory_quantity(inventory_item_gid, location_gid, delta)
                         
-                        elif 'onHand' in inventory_changes:
+                        elif 'onHand' in inventory_changes and inventory_changes['onHand'] is not None:
+                            # Only adjust based on onHand if available was not changed
                             current_on_hand = variant_db.inventory_levels[0].on_hand or 0
                             delta = int(inventory_changes['onHand']) - current_on_hand
                             if delta != 0:
