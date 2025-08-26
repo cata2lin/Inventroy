@@ -741,3 +741,111 @@ section.controls-grid:has(#financial-status-filter) .dropdown > summary {
   border: 1px solid var(--filter-bd) !important;
   line-height: 1.1 !important;
 }
+/* ===================== DASHBOARD v2 ===================== */
+/* Pack filters tighter and align the Columns button */
+section.controls-grid:has(#financial-status-filter) {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)) !important; /* wider chips / fewer gaps */
+  column-gap: var(--s-2) !important;  /* closer together */
+  row-gap: .5rem !important;
+}
+section.controls-grid:has(#financial-status-filter) #column-visibility-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  height: var(--filter-h) !important;
+  min-height: var(--filter-h) !important;
+  padding: 0 var(--filter-pad-x) !important;
+  font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius) !important;
+  margin: 0 !important; /* line up perfectly with chips */
+}
+
+/* ===================== BULK UPDATE ===================== */
+/* A) Table: narrow image column, give space to Product + Barcode */
+#bulk-update-container .bulk-update-table {
+  table-layout: fixed;
+}
+#bulk-update-container .bulk-update-table th:nth-child(2),
+#bulk-update-container .bulk-update-table td:nth-child(2) {
+  /* just a bit wider than the thumbnail so it stops wasting space */
+  width: calc(var(--bu-thumb) + 12px) !important;
+  max-width: calc(var(--bu-thumb) + 12px) !important;
+  padding-left: 4px; padding-right: 4px;
+}
+#bulk-update-container .bulk-update-table th:nth-child(5),
+#bulk-update-container .bulk-update-table td:nth-child(5) {
+  width: 30% !important; /* Product wider */
+}
+#bulk-update-container .bulk-update-table th:nth-child(6),
+#bulk-update-container .bulk-update-table td:nth-child(6) {
+  width: 18% !important; /* Barcode wider */
+}
+
+/* B) Only +5% text size in bulk edit table (not +10%) */
+#bulk-update-container .bulk-update-table td { font-size: 1.05em !important; }
+#bulk-update-container .bulk-update-table th { font-size: calc(0.72em * 1.05) !important; }
+#bulk-update-container .bulk-update-table input[type="text"],
+#bulk-update-container .bulk-update-table input[type="number"],
+#bulk-update-container .bulk-update-table select {
+  font-size: calc(var(--bu-input-font) * 1.05) !important;
+}
+
+/* C) Align No Barcode / Group by Barcode / file & import on one baseline */
+.bulk-update-controls .controls-grid {
+  align-items: center !important;  /* baseline alignment across the row */
+}
+.bulk-update-controls fieldset {
+  border: 0; padding: 0; margin: 0;
+}
+.bulk-update-controls fieldset label {
+  display: inline-flex; align-items: center; gap: .5rem;
+  height: var(--filter-h); min-height: var(--filter-h);
+  padding: 0 var(--filter-pad-x);
+  border: 1px solid var(--filter-bd);
+  border-radius: var(--filter-radius);
+  background: var(--filter-bg);
+  font-size: var(--filter-font);
+}
+.bulk-update-controls #group-toggle { margin: 0; } /* remove stray input offset */
+
+.bulk-update-controls .import-controls {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: .5rem;
+}
+.bulk-update-controls #save-changes-btn,
+.bulk-update-controls #import-excel-btn,
+.bulk-update-controls .import-controls input[type="file"]::file-selector-button {
+  height: var(--filter-h) !important;
+  min-height: var(--filter-h) !important;
+  font-size: var(--filter-font) !important;
+  border-radius: var(--filter-radius) !important;
+}
+
+/* D) Make Bulk Update filters fill width more (reduce gaps) */
+.bulk-update-controls .controls-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)) !important;
+  column-gap: var(--s-2) !important;
+  row-gap: .5rem !important;
+}
+.bulk-update-controls .controls-grid > *,
+.bulk-update-controls .controls-grid details,
+.bulk-update-controls .controls-grid .dropdown > summary,
+.bulk-update-controls .controls-grid fieldset { width: 100%; min-width: 0; }
+
+/* E) In "Group by Barcode" view, make thumbnails 30% smaller */
+.bulk-update-controls:has(#group-toggle:checked) ~ #bulk-update-container .bulk-update-table img {
+  width: calc(var(--bu-thumb) * 0.7) !important;
+  height: calc(var(--bu-thumb) * 0.7) !important;
+}
+
+/* F) Keep Bulk Update chips vertically centered */
+.bulk-update-controls .controls-grid input[type="search"],
+.bulk-update-controls .controls-grid input[type="text"],
+.bulk-update-controls .controls-grid input[type="number"],
+.bulk-update-controls .controls-grid input[type="date"],
+.bulk-update-controls .controls-grid select,
+.bulk-update-controls .controls-grid .dropdown > summary {
+  display: inline-flex; align-items: center;
+  height: var(--filter-h) !important; min-height: var(--filter-h) !important;
+  padding: 0 var(--filter-pad-x) !important; line-height: 1.1 !important;
+}
