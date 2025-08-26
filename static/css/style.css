@@ -666,3 +666,57 @@ section.controls-grid:has(#financial-status-filter) .dropdown[open] > summary {
   max-width: max-content;
 }
 #export-button .icon { width: 16px; height: 16px; }
+/* ================================
+   FINAL PATCH — per your requests
+   ================================ */
+
+/* 1) Dashboard v2: remove search icons + correct padding */
+section.controls-grid:has(#financial-status-filter) .control .icon {
+  display: none !important;
+}
+section.controls-grid:has(#financial-status-filter) .control input[type="search"] {
+  padding-left: var(--filter-pad-x) !important;
+}
+
+/* 2) Smaller pagination buttons (Inventory + Dashboard v2) */
+:root {
+  --pg-h: 26px;
+  --pg-font: 0.60rem;
+  --pg-pad-x: 10px;
+}
+#orders-table-container + .pagination-controls button,
+#inventory-table-container + .pagination-controls button {
+  height: var(--pg-h);
+  min-height: var(--pg-h);
+  padding: 0 var(--pg-pad-x);
+  font-size: var(--pg-font);
+  border-radius: 10px;
+}
+#orders-table-container + .pagination-controls #page-indicator,
+#inventory-table-container + .pagination-controls #page-indicator {
+  font-size: calc(var(--pg-font) + 0.05rem);
+}
+
+/* 3) Bulk Update: file input & Import button — no clipping, same line */
+.import-controls {
+  display: grid;
+  grid-template-columns: minmax(300px, max-content) auto; /* give file input room */
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: start;
+}
+.import-controls input[type="file"] {
+  width: auto;
+  max-width: 100%;
+  white-space: nowrap; /* keep “No file chosen” visible */
+}
+#import-excel-btn {
+  white-space: nowrap; /* prevent wrapping */
+}
+
+/* 4) Bulk Update: editable fields 10% larger font */
+.bulk-update-table input[type="text"],
+.bulk-update-table input[type="number"],
+.bulk-update-table select {
+  font-size: calc(var(--bu-input-font) * 1.1);
+}
