@@ -1260,3 +1260,29 @@ section.controls-grid:has(#financial-status-filter) .controls-end{
   flex: 0 0 auto;
   margin-left: auto;
 }
+/* DASHBOARD v2 — make search narrower so both datepickers fit on the same row */
+section.controls-grid:has(#financial-status-filter) {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 6px 8px;            /* tighter spacing */
+  align-items: center;
+}
+
+/* cap the Search field width (responsive clamp) */
+section.controls-grid:has(#financial-status-filter) .control {
+  flex: 0 1 clamp(280px, 32vw, 420px) !important;
+  max-width: clamp(280px, 32vw, 420px) !important;
+}
+
+/* seat both date pickers side by side with fixed slots */
+section.controls-grid:has(#financial-status-filter) #start-date,
+section.controls-grid:has(#financial-status-filter) #end-date {
+  flex: 0 0 210px !important;
+  min-width: 210px !important;
+}
+
+/* keep the export/reset cluster at the end */
+section.controls-grid:has(#financial-status-filter) .controls-end {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
