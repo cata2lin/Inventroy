@@ -1227,3 +1227,36 @@ section.controls-grid:has(#financial-status-filter) #column-visibility-button{
   width: calc(var(--bu-thumb) * 0.7) !important;
   height: calc(var(--bu-thumb) * 0.7) !important;
 }
+
+/* DASHBOARD v2 — keep both date pickers on the same row */
+section.controls-grid:has(#financial-status-filter){
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 6px 8px;              /* tighter spacing */
+  align-items: center;
+}
+
+/* Make "Search Order Name" a bit less wide */
+section.controls-grid:has(#financial-status-filter) .control {
+  flex: 1 1 300px;           /* was growing too much */
+  max-width: 420px;          /* cap width so dates fit */
+}
+
+/* Tags input shouldn’t hog a whole row */
+section.controls-grid:has(#financial-status-filter) #tags-input{
+  flex: 1 1 320px;
+  max-width: 520px;
+}
+
+/* Seat both date pickers side-by-side */
+section.controls-grid:has(#financial-status-filter) #start-date,
+section.controls-grid:has(#financial-status-filter) #end-date{
+  flex: 0 0 200px;           /* fixed basis so they line up */
+  min-width: 200px;
+}
+
+/* Keep the Export/Reset cluster at the end of the row */
+section.controls-grid:has(#financial-status-filter) .controls-end{
+  flex: 0 0 auto;
+  margin-left: auto;
+}
