@@ -54,72 +54,73 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) { console.error(e); }
   };
 
-    const drawStockChart = (series) => {
-        const ctx = els.stockCanvas.getContext('2d');
-        const W = els.stockCanvas.width = els.stockCanvas.clientWidth;
-        const H = els.stockCanvas.height = 300; // Increased height
+  const drawStockChart = (series) => {
+    const ctx = els.stockCanvas.getContext('2d');
+    const W = els.stockCanvas.width = els.stockCanvas.clientWidth;
+    const H = els.stockCanvas.height = 300; // Increased height
 
-        ctx.clearRect(0, 0, W, H);
-        if (!series || !series.length) {
-            ctx.fillText('No stock snapshot data available for this period.', 10, 20);
-            return;
-        }
+    ctx.clearRect(0, 0, W, H);
+    if (!series || !series.length) {
+        ctx.fillText('No stock snapshot data available for this period.', 10, 20);
+        return;
+    }
 
-        // Padding
-        const padL = 40, padR = 10, padT = 10, padB = 24;
-        const xmin = 0, xmax = series.length - 1;
-        const ymax = Math.max(...series.map(p => p.on_hand));
-        const ymin = Math.min(...series.map(p => p.on_hand));
-        const scaleX = (x) => padL + (x - xmin) * ((W - padL - padR) / (xmax - xmin || 1));
-        const scaleY = (y) => H - padB - (y - ymin) * ((H - padT - padB) / (ymax - ymin || 1));
+    // Padding
+    const padL = 40, padR = 10, padT = 10, padB = 24;
+    const xmin = 0, xmax = series.length - 1;
+    const ymax = Math.max(...series.map(p => p.on_hand));
+    const ymin = Math.min(...series.map(p => p.on_hand));
+    const scaleX = (x) => padL + (x - xmin) * ((W - padL - padR) / (xmax - xmin || 1));
+    const scaleY = (y) => H - padB - (y - ymin) * ((H - padT - padB) / (ymax - ymin || 1));
 
-        // Axes
-        ctx.strokeStyle = '#ccc';
+    // Axes
+    ctx.strokeStyle = '#ccc';
+    ctx.beginPath();
+    ctx.moveTo(padL, padT);
+    ctx.lineTo(padL, H - padB);
+    ctx.lineTo(W - padR, H - padB);
+    ctx.stroke();
+
+    // Line
+    ctx.beginPath();
+    series.forEach((p, i) => {
+        const x = scaleX(i),
+            y = scaleY(p.on_hand);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = '#2ca02c';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Dots
+    ctx.fillStyle = '#2ca02c';
+    series.forEach((p, i) => {
+        const x = scaleX(i),
+            y = scaleY(p.on_hand);
         ctx.beginPath();
-        ctx.moveTo(padL, padT);
-        ctx.lineTo(padL, H - padB);
-        ctx.lineTo(W - padR, H - padB);
-        ctx.stroke();
+        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+    });
 
-        // Line
-        ctx.beginPath();
-        series.forEach((p, i) => {
-            const x = scaleX(i),
-                y = scaleY(p.on_hand);
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-        });
-        ctx.strokeStyle = '#2ca02c';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        // Dots
-        ctx.fillStyle = '#2ca02c';
-        series.forEach((p, i) => {
-            const x = scaleX(i),
-                y = scaleY(p.on_hand);
-            ctx.beginPath();
-            ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-            ctx.fill();
-        });
-
-        // X labels (sparse)
-        ctx.fillStyle = '#666';
-        ctx.font = '10px sans-serif';
-        const stride = Math.ceil(series.length / 10);
-        series.forEach((p, i) => {
-            if (i % stride === 0 || i === series.length - 1) {
-                ctx.fillText(new Date(p.date).toLocaleDateString(), scaleX(i) - 10, H - 6);
-            }
-        });
-
-        // Y labels
-        const yTicks = 4;
-        for (let i = 0; i <= yTicks; i++) {
-            const v = Math.round(ymin + (ymax - ymin) / yTicks * i);
-            ctx.fillText(String(v), 6, scaleY(v) + 3);
+    // X labels (sparse)
+    ctx.fillStyle = '#666';
+    ctx.font = '10px sans-serif';
+    const stride = Math.ceil(series.length / 10);
+    series.forEach((p, i) => {
+        if (i % stride === 0 || i === series.length - 1) {
+            ctx.fillText(new Date(p.date).toLocaleDateString(), scaleX(i) - 10, H - 6);
         }
-    };
+    });
+
+    // Y labels
+    const yTicks = 4;
+    for (let i = 0; i <= yTicks; i++) {
+        const v = Math.round(ymin + (ymax - ymin) / yTicks * i);
+        ctx.fillText(String(v), 6, scaleY(v) + 3);
+    }
+  };
+
   const render = (analytics, details) => {
     // Title
     els.title.textContent = analytics.header.title || 'Product Details';
@@ -143,9 +144,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Chart
     drawStockChart(analytics.stock_evolution);
+
     // Stock movements
-    els.smTableBody.innerHTML = (analytics.stock_movements_by_day || []).map(r =>
-      `<tr><td>${r.day}</td><td>${r.change}</td></tr>`
+    els.smTableBody.innerHTML = (details.stock_movements || []).map(r =>
+      `<tr><td>${new Date(r.created_at).toLocaleDateString()}</td><td>${r.change_quantity}</td></tr>`
     ).join('');
 
     // Committed orders
