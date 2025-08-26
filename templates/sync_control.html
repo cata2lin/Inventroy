@@ -1,54 +1,63 @@
 {% extends "base.html" %}
 
+
 {% block content %}
 <div class="container">
-    <hgroup>
-        <h1>Synchronization Control</h1>
-        <h2>Trigger and monitor data syncs across all connected stores.</h2>
-    </hgroup>
+<hgroup class="page-header">
+<h1>Synchronization Control</h1>
+<h2>Trigger and monitor data syncs across all connected stores.</h2>
+</hgroup>
 
-    <div class="grid">
-        <article>
-            <header><strong>Full Sync Actions</strong></header>
-            <p>These actions will sync data for ALL stores.</p>
-            <div class="grid">
-                <button id="sync-all-orders-btn">Sync All Orders</button>
-                <button id="sync-all-products-btn">Sync All Products</button>
-            </div>
-        </article>
-        <article>
-            <header><strong>Targeted Order Sync</strong></header>
-            <label for="store-select">Sync a specific store</label>
-            <select id="store-select">
-                <option value="">Select a store...</option>
-            </select>
-            <button id="sync-single-store-btn" disabled>Sync Selected Store Orders</button>
-        </article>
-    </div>
-    
-    <article>
-        <header><strong>Sync Orders by Date Range (All Stores)</strong></header>
-        <div class="grid">
-            <div>
-                <label for="start-date">Start Date</label>
-                <input type="date" id="start-date">
-            </div>
-            <div>
-                <label for="end-date">End Date</label>
-                <input type="date" id="end-date">
-            </div>
-        </div>
-        <button id="sync-date-range-btn">Sync Orders in Date Range</button>
-    </article>
 
-    <article id="progress-container">
-        <header>Sync Progress</header>
-        <div id="progress-bars">
-            <p>No sync jobs running. Click a button above to start.</p>
-        </div>
-    </article>
+<div class="grid cards-grid">
+<article class="card">
+<header><strong>Full Sync Actions</strong></header>
+<p>These actions will sync data for ALL stores.</p>
+<div class="grid">
+<button id="sync-all-orders-btn"><svg class="icon"><use href="#i-refresh"/></svg> Sync All Orders</button>
+<button id="sync-all-products-btn"><svg class="icon"><use href="#i-refresh"/></svg> Sync All Products</button>
+</div>
+</article>
+
+
+<article class="card">
+<header><strong>Targeted Order Sync</strong></header>
+<label for="store-select">Sync a specific store</label>
+<select id="store-select">
+<option value="">Select a store...</option>
+</select>
+<button id="sync-single-store-btn" disabled>Sync Selected Store Orders</button>
+</article>
+</div>
+
+
+<article class="card">
+<header><strong>Sync Orders by Date Range (All Stores)</strong></header>
+<div class="grid controls-grid">
+<div>
+<label for="start-date">Start Date</label>
+<input type="date" id="start-date">
+</div>
+<div>
+<label for="end-date">End Date</label>
+<input type="date" id="end-date">
+</div>
+<div class="controls-end">
+<button id="sync-date-range-btn"><svg class="icon"><use href="#i-refresh"/></svg> Sync Orders in Date Range</button>
+</div>
+</div>
+</article>
+
+
+<article id="progress-container" class="card">
+<header><strong>Sync Progress</strong></header>
+<div id="progress-bars" class="progress-area">
+<p>No sync jobs running. Click a button above to start.</p>
+</div>
+</article>
 </div>
 {% endblock %}
+
 
 {% block scripts %}
 <script src="/static/js/config.js"></script>
