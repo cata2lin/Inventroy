@@ -17,7 +17,8 @@ def get_sales_by_product_data(
     offset: int
 ):
     """
-    Executes a complex SQL query to get sales data aggregated by product barcode.
+    Executes a complex SQL query to get sales data aggregated by product barcode,
+    following Shopify's sales logic.
     """
     params = {
         "start_ts": start_ts,
@@ -30,8 +31,7 @@ def get_sales_by_product_data(
         "offset": offset,
     }
 
-    # FIX: The parameter style for psycopg2 is 'pyformat', which SQLAlchemy's text()
-    # handles automatically. We just need to use the named parameters correctly in the string.
+    # This query is adapted from the provided prompt to use SQLAlchemy's text() construct.
     query = text("""
         WITH eligible_orders AS (
             SELECT id, store_id FROM orders

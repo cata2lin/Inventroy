@@ -4,56 +4,77 @@ document.addEventListener('DOMContentLoaded', function () {
     const state = {
         page: 1,
         limit: 50,
-        sort_by: 'net_sales',
-        sort_order: 'desc',
         filters: {
-            start: new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().split('T')[0],
+            start: new Date(new Date().setDate(new Date().getDate() - 29)).toISOString().split('T')[0],
             end: new Date().toISOString().split('T')[0],
             stores: [],
             only_paid: false,
             exclude_canceled: false,
             search: ''
-        }
+        },
+        data: []
     };
 
     const elements = {
         kpiContainer: document.getElementById('kpi-container'),
-        controlsContainer: document.querySelector('.controls-grid'),
+        startDate: document.getElementById('start-date'),
+        endDate: document.getElementById('end-date'),
+        searchInput: document.getElementById('search-input'),
+        storeFilterList: document.getElementById('store-filter-list'),
+        onlyPaid: document.getElementById('only-paid'),
+        excludeCanceled: document.getElementById('exclude-canceled'),
+        exportCsv: document.getElementById('export-csv'),
         tableContainer: document.getElementById('sales-table-container'),
         prevButton: document.getElementById('prev-button'),
         nextButton: document.getElementById('next-button'),
         pageIndicator: document.getElementById('page-indicator'),
-        topProductsChartContainer: document.getElementById('top-products-chart-container'),
-        refundRateChartContainer: document.getElementById('refund-rate-chart-container')
+        topProductsChartCtx: document.getElementById('top-products-chart').getContext('2d'),
+        refundRateChartCtx: document.getElementById('refund-rate-chart').getContext('2d')
     };
 
     let topProductsChart = null;
     let refundRateChart = null;
 
-    function renderControls() {
-        // In a real app, you'd fetch stores from an API
-        const stores = [{id: 1, name: 'Main Store'}, {id: 2, name: 'Outlet'}];
+    async function initialize() {
+        elements.startDate.value = state.filters.start;
+        elements.endDate.value = state.filters.end;
+        
+        await loadStores();
+        addEventListeners();
+        fetchData();
+    }
 
-        elements.controlsContainer.innerHTML = `
-            <input type="date" id="start-date" value="${state.filters.start}">
-            <input type="date" id="end-date" value="${state.filters.end}">
-            <input type="search" id="search-input" placeholder="Search..." value="${state.filters.search}">
-            <div>${stores.map(s => `<label><input type="checkbox" name="store" value="${s.id}">${s.name}</label>`).join('')}</div>
-            <label><input type="checkbox" id="only-paid">Only Paid</label>
-            <label><input type="checkbox" id="exclude-canceled">Exclude Canceled</label>
-            <button id="export-csv">Export CSV</button>
-        `;
+    async function loadStores() {
+        try {
+            const response = await fetch('/api/config/stores');
+            const stores = await response.json();
+            elements.storeFilterList.innerHTML = stores.map(s => `<li><label><input type="checkbox" name="store" value="${s.id}"> ${s.name}</label></li>`).join('');
+            document.querySelectorAll('input[name="store"]').forEach(el => el.addEventListener('change', handleFilterChange));
+        } catch (error) {
+            elements.storeFilterList.innerHTML = '<li>Error loading stores</li>';
+        }
+    }
 
-        document.getElementById('start-date').addEventListener('change', e => { state.filters.start = e.target.value; fetchData(); });
-        document.getElementById('end-date').addEventListener('change', e => { state.filters.end = e.target.value; fetchData(); });
-        document.getElementById('search-input').addEventListener('input', e => { state.filters.search = e.target.value; fetchData(); });
-        document.querySelectorAll('input[name="store"]').forEach(el => el.addEventListener('change', () => {
-            state.filters.stores = Array.from(document.querySelectorAll('input[name="store"]:checked')).map(cb => cb.value);
-            fetchData();
-        }));
-        document.getElementById('only-paid').addEventListener('change', e => { state.filters.only_paid = e.target.checked; fetchData(); });
-        document.getElementById('exclude-canceled').addEventListener('change', e => { state.filters.exclude_canceled = e.target.checked; fetchData(); });
-        document.getElementById('export-csv').addEventListener('click', exportCSV);
+    function addEventListeners() {
+        elements.startDate.addEventListener('change', handleFilterChange);
+        elements.endDate.addEventListener('change', handleFilterChange);
+        elements.searchInput.addEventListener('input', debounce(handleFilterChange, 300));
+        elements.onlyPaid.addEventListener('change', handleFilterChange);
+        elements.excludeCanceled.addEventListener('change', handleFilterChange);
+        elements.exportCsv.addEventListener('click', exportCSV);
+        elements.prevButton.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchData(); } });
+        elements.nextButton.addEventListener('click', () => { state.page++; fetchData(); });
+    }
+
+    function handleFilterChange() {
+        state.filters.start = elements.startDate.value;
+        state.filters.end = elements.endDate.value;
+        state.filters.search = elements.searchInput.value;
+        state.filters.stores = Array.from(document.querySelectorAll('input[name="store"]:checked')).map(cb => cb.value);
+        state.filters.only_paid = elements.onlyPaid.checked;
+        state.filters.exclude_canceled = elements.excludeCanceled.checked;
+        state.page = 1;
+        fetchData();
     }
 
     async function fetchData() {
@@ -66,17 +87,16 @@ document.addEventListener('DOMContentLoaded', function () {
             search: state.filters.search,
             limit: state.limit,
             offset: (state.page - 1) * state.limit,
-            sort_by: state.sort_by,
-            sort_order: state.sort_order
         });
         state.filters.stores.forEach(id => params.append('stores', id));
 
         try {
             const response = await fetch(`/api/analytics/sales-by-product?${params.toString()}`);
-            const data = await response.json();
-            renderTable(data);
-            updateKPIs(data);
-            renderCharts(data);
+            state.data = await response.json();
+            renderTable();
+            updateKPIs();
+            renderCharts();
+            updatePagination();
         } catch (error) {
             elements.tableContainer.innerHTML = `<p>Error fetching data: ${error.message}</p>`;
         } finally {
@@ -84,19 +104,19 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function renderTable(data) {
+    function renderTable() {
         const headers = [
             {key: 'product_title', label: 'Product'},
             {key: 'barcode', label: 'Barcode'},
             {key: 'orders_count', label: 'Orders'},
             {key: 'units_sold', label: 'Units Sold'},
             {key: 'refunded_units', label: 'Refunded Units'},
-            {key: 'refund_rate_qty', label: 'Refund Rate'},
+            {key: 'refund_rate_qty', label: 'Refund Rate (%)'},
             {key: 'gross_sales', label: 'Gross Sales'},
             {key: 'discounts', label: 'Discounts'},
             {key: 'returns_value', label: 'Returns'},
             {key: 'net_sales', label: 'Net Sales'},
-            {key: 'velocity_units_per_day', label: 'Velocity'},
+            {key: 'velocity_units_per_day', label: 'Velocity (u/day)'},
             {key: 'asp', label: 'ASP'}
         ];
 
@@ -104,35 +124,42 @@ document.addEventListener('DOMContentLoaded', function () {
         headers.forEach(h => tableHTML += `<th>${h.label}</th>`);
         tableHTML += '</tr></thead><tbody>';
 
-        data.forEach(row => {
+        state.data.forEach(row => {
             tableHTML += '<tr>';
-            headers.forEach(h => tableHTML += `<td>${row[h.key]}</td>`);
+            headers.forEach(h => {
+                let value = row[h.key];
+                if (h.key === 'refund_rate_qty') value = (value * 100).toFixed(2);
+                if (['gross_sales', 'discounts', 'returns_value', 'net_sales', 'asp'].includes(h.key)) value = parseFloat(value).toFixed(2);
+                tableHTML += `<td>${value}</td>`;
+            });
             tableHTML += '</tr>';
         });
 
         tableHTML += '</tbody></table>';
         elements.tableContainer.innerHTML = tableHTML;
     }
-    
-    function updateKPIs(data) {
-        const totalNet = data.reduce((sum, row) => sum + parseFloat(row.net_sales), 0);
-        const totalOrders = data.reduce((sum, row) => sum + row.orders_count, 0);
-        const avgRefundRate = data.reduce((sum, row) => sum + row.refund_rate_qty, 0) / data.length;
-        const avgVelocity = data.reduce((sum, row) => sum + row.velocity_units_per_day, 0) / data.length;
+
+    function updateKPIs() {
+        const totalNet = state.data.reduce((sum, row) => sum + parseFloat(row.net_sales), 0);
+        const totalOrders = state.data.reduce((sum, row) => sum + row.orders_count, 0);
+        const totalRefunded = state.data.reduce((sum, row) => sum + row.refunded_units, 0);
+        const totalSold = state.data.reduce((sum, row) => sum + row.units_sold, 0);
+        const avgRefundRate = totalSold > 0 ? (totalRefunded / totalSold) * 100 : 0;
+        const avgVelocity = state.data.reduce((sum, row) => sum + row.velocity_units_per_day, 0) / state.data.length || 0;
 
         elements.kpiContainer.innerHTML = `
             <div class="metric"><h4>${totalNet.toFixed(2)}</h4><p>Total Net Sales</p></div>
             <div class="metric"><h4>${totalOrders}</h4><p>Total Orders</p></div>
-            <div class="metric"><h4>${(avgRefundRate * 100).toFixed(2)}%</h4><p>Avg. Refund Rate</p></div>
+            <div class="metric"><h4>${avgRefundRate.toFixed(2)}%</h4><p>Avg. Refund Rate</p></div>
             <div class="metric"><h4>${avgVelocity.toFixed(2)}</h4><p>Avg. Velocity</p></div>
         `;
     }
-
-    function renderCharts(data) {
-        const top20 = data.slice(0, 20);
+    
+    function renderCharts() {
+        const top20 = state.data.slice(0, 20);
         
         if (topProductsChart) topProductsChart.destroy();
-        topProductsChart = new Chart(elements.topProductsChartContainer, {
+        topProductsChart = new Chart(elements.topProductsChartCtx, {
             type: 'bar',
             data: {
                 labels: top20.map(p => p.product_title),
@@ -145,30 +172,70 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         if (refundRateChart) refundRateChart.destroy();
-        refundRateChart = new Chart(elements.refundRateChartContainer, {
+        refundRateChart = new Chart(elements.refundRateChartCtx, {
             type: 'scatter',
             data: {
                 datasets: [{
                     label: 'Refund Rate vs. Net Sales',
-                    data: data.map(p => ({
+                    data: state.data.map(p => ({
                         x: p.net_sales,
                         y: p.refund_rate_qty,
-                        r: p.velocity_units_per_day * 5 // Scale point size by velocity
+                        r: p.velocity_units_per_day * 5
                     })),
                     backgroundColor: 'rgba(255, 99, 132, 0.5)'
                 }]
             }
         });
     }
-    
-    function exportCSV() {
-        // Implement CSV export logic here
-        alert('CSV export not yet implemented.');
+
+    function updatePagination() {
+        elements.pageIndicator.textContent = `Page ${state.page}`;
+        elements.prevButton.disabled = state.page === 1;
+        elements.nextButton.disabled = state.data.length < state.limit;
     }
 
-    elements.prevButton.addEventListener('click', () => { if (state.page > 1) { state.page--; fetchData(); } });
-    elements.nextButton.addEventListener('click', () => { state.page++; fetchData(); });
+    function exportCSV() {
+        const headers = [
+            "Product", "Barcode", "Orders", "Units Sold", "Refunded Units", 
+            "Refund Rate (%)", "Gross Sales", "Discounts", "Returns", "Net Sales", 
+            "Velocity (u/day)", "ASP"
+        ];
+        const rows = state.data.map(row => [
+            `"${row.product_title.replace(/"/g, '""')}"`,
+            row.barcode,
+            row.orders_count,
+            row.units_sold,
+            row.refunded_units,
+            (row.refund_rate_qty * 100).toFixed(2),
+            row.gross_sales,
+            row.discounts,
+            row.returns_value,
+            row.net_sales,
+            row.velocity_units_per_day,
+            parseFloat(row.asp).toFixed(2)
+        ]);
 
-    renderControls();
-    fetchData();
+        const csvContent = "data:text/csv;charset=utf-8," 
+            + headers.join(",") + "\n" 
+            + rows.map(r => r.join(",")).join("\n");
+        
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "sales_by_product.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    function debounce(func, delay) {
+        let timeout;
+        return function(...args) {
+            const context = this;
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(context, args), delay);
+        };
+    }
+
+    initialize();
 });

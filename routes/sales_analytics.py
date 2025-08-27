@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import date
+from datetime import date, timedelta
 
 from database import get_db
 from crud import sales_analytics as crud_sales_analytics
@@ -16,8 +16,8 @@ router = APIRouter(
 @router.get("/sales-by-product")
 def get_sales_by_product(
     db: Session = Depends(get_db),
-    start: date = Query(...),
-    end: date = Query(...),
+    start: date = Query(date.today() - timedelta(days=30)),
+    end: date = Query(date.today()),
     stores: Optional[List[int]] = Query(None),
     only_paid: bool = Query(False),
     exclude_canceled: bool = Query(False),

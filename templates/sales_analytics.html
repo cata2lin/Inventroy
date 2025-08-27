@@ -10,11 +10,35 @@
     <article class="filter-container">
         <section id="kpi-container" class="metrics-grid"></section>
         <section class="controls-grid sticky-controls" aria-label="Filters">
-            </section>
+            <input type="date" id="start-date">
+            <input type="date" id="end-date">
+            <input type="search" id="search-input" placeholder="Search by Product, SKU, or Barcode...">
+            
+            <details role="list" class="dropdown">
+                <summary>Stores</summary>
+                <ul role="listbox" id="store-filter-list"><li>Loading...</li></ul>
+            </details>
+
+            <fieldset>
+                <label for="only-paid">
+                    <input type="checkbox" id="only-paid" name="only-paid">
+                    Only Paid Orders
+                </label>
+            </fieldset>
+            
+            <fieldset>
+                <label for="exclude-canceled">
+                    <input type="checkbox" id="exclude-canceled" name="exclude-canceled">
+                    Exclude Canceled
+                </label>
+            </fieldset>
+
+            <button id="export-csv" class="secondary outline">Export CSV</button>
+        </section>
     </article>
 
     <article id="sales-table-container" class="table-wrap" aria-busy="true">
-        <p>Loading...</p>
+        <p>Loading sales data...</p>
     </article>
     
     <div class="grid pagination-controls">
@@ -23,9 +47,15 @@
         <button id="next-button" class="secondary outline">Next</button>
     </div>
 
-    <div class="grid">
-        <article id="top-products-chart-container" class="card"></article>
-        <article id="refund-rate-chart-container" class="card"></article>
+    <div class="grid cards-grid">
+        <article class="card">
+            <header><strong>Top 20 Products by Net Sales</strong></header>
+            <canvas id="top-products-chart"></canvas>
+        </article>
+        <article class="card">
+            <header><strong>Refund Rate vs. Net Sales</strong></header>
+            <canvas id="refund-rate-chart"></canvas>
+        </article>
     </div>
 </div>
 {% endblock %}
