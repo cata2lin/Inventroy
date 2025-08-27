@@ -20,6 +20,10 @@ def get_sales_by_product_data(
     Executes a complex SQL query to get sales data aggregated by product barcode,
     following Shopify's sales logic.
     """
+    # --- START OF THE FIX ---
+    # Calculate the number of days in the window directly in Python
+    days_in_window = (end_ts - start_ts).days + 1
+    
     params = {
         "start_ts": start_ts,
         "end_ts": end_ts,
@@ -29,10 +33,10 @@ def get_sales_by_product_data(
         "search": f"%{search}%" if search else None,
         "limit": limit,
         "offset": offset,
+        "days_in_window": days_in_window # Add the calculated value to the parameters
     }
 
-    # FIX: The parameter style for psycopg2 is 'pyformat', which SQLAlchemy's text()
-    # handles automatically. We just need to use the named parameters correctly in the string.
+    # Updated the query to use the pre-calculated 'days_in_window' parameter
     query = text("""
         WITH eligible_orders AS (
             SELECT id, store_id FROM orders
@@ -68,9 +72,6 @@ def get_sales_by_product_data(
             JOIN line_items li ON li.id = rli.line_item_id
             LEFT JOIN product_variants pv ON pv.id = li.variant_id
             GROUP BY 1
-        ),
-        days AS (
-            SELECT GREATEST(1, 1 + DATE_PART('day', :end_ts::timestamp - :start_ts::timestamp))::numeric AS days_in_window
         )
         SELECT
             s.barcode,
@@ -83,7 +84,7 @@ def get_sales_by_product_data(
             s.discounts,
             COALESCE(r.returns_value,0) AS returns_value,
             (s.gross_sales - s.discounts - COALESCE(r.returns_value,0))::numeric(18,2) AS net_sales,
-            ROUND( (s.units_sold - COALESCE(r.refunded_units,0)) / (SELECT days_in_window FROM days), 4) AS velocity_units_per_day,
+            ROUND( (s.units_sold - COALESCE(r.refunded_units,0)) / :days_in_window, 4) AS velocity_units_per_day,
             CASE WHEN s.units_sold > 0 THEN (s.gross_sales - s.discounts) / NULLIF(s.units_sold, 0) ELSE 0 END as asp
         FROM sales_li s
         LEFT JOIN rli r USING (barcode)
