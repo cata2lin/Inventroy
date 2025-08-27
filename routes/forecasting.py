@@ -89,40 +89,45 @@ def export_forecasting_report(
     if stock_statuses:
         data = [item for item in data if item['stock_status'] in stock_statuses]
         
-    df = pd.DataFrame(data)
+    if not data:
+        return Response(content="No data to export for the selected filters.", media_type="text/plain")
 
-    # Define the columns and their desired order for the export
-    column_map = {
-        'image_url': 'Image URL',
-        'product_title': 'Product',
-        'sku': 'SKU',
-        'total_stock': 'Total Stock',
-        'velocity_7d': 'Velocity (7d)',
-        'velocity_30d': 'Velocity (30d)',
-        'velocity_lifetime': 'Velocity (Lifetime)',
-        'days_of_stock': 'Days of Stock',
-        'stock_status': 'Stock Status',
-        'reorder_date': 'Reorder Date',
-        'reorder_qty': 'Reorder Qty'
-    }
-
-    # Conditionally add the period velocity columns
-    if use_custom_velocity and 'velocity_period' in df.columns:
-        column_map['velocity_period'] = 'Velocity (Period)'
-        df['velocity_period_dates'] = f"{velocity_start_date} to {velocity_end_date}"
-        column_map['velocity_period_dates'] = 'Velocity Period Dates'
-
-    # Prepare the DataFrame for export
-    df.rename(columns=column_map, inplace=True)
-    export_columns = [col_name for col_name in column_map.values() if col_name in df.columns]
-    df = df[export_columns]
+    #
+    # --- START OF THE FIX ---
+    #
+    # We will now manually build the data for the Excel file to ensure all columns are included correctly.
     
+    export_data = []
+    for item in data:
+        row = {
+            "Product": item.get('product_title'),
+            "SKU": item.get('sku'),
+            "Image URL": item.get('image_url'),
+            "Total Stock": item.get('total_stock'),
+            "Velocity (7d)": item.get('velocity_7d'),
+            "Velocity (30d)": item.get('velocity_30d'),
+            "Velocity (Lifetime)": item.get('velocity_lifetime'),
+            "Days of Stock": item.get('days_of_stock'),
+            "Stock Status": item.get('stock_status'),
+            "Reorder Date": item.get('reorder_date'),
+            "Reorder Qty": item.get('reorder_qty')
+        }
+        if use_custom_velocity:
+            row["Velocity (Period)"] = item.get('velocity_period')
+            row["Velocity Period Dates"] = f"{velocity_start_date} to {velocity_end_date}"
+        
+        export_data.append(row)
+
+    df = pd.DataFrame(export_data)
+
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Forecasting Report')
     
-    # This is the crucial fix: reset the stream's position to the beginning
+    # Reset the stream's position to the beginning before sending
     output.seek(0)
+    
+    # --- END OF THE FIX ---
 
     return Response(
         content=output.getvalue(),
