@@ -69,7 +69,7 @@ def export_forecasting_report(
     search: Optional[str] = Query(None),
     lead_time: int = 30,
     coverage_period: int = 60,
-    store_ids: Optional[List[str]] = Query(None), # Accept strings to handle empty values
+    store_ids: Optional[List[str]] = Query(None),
     product_types: Optional[List[str]] = Query(None),
     stock_statuses: Optional[List[str]] = Query(None),
     reorder_start_date: Optional[str] = Query(None),
@@ -89,16 +89,42 @@ def export_forecasting_report(
     )
     if stock_statuses:
         data = [item for item in data if item['stock_status'] in stock_statuses]
+
+    if not data:
+        return Response(content="No data to export.", media_type="text/plain")
         
     df = pd.DataFrame(data)
-    
+
+    column_map = {
+        'image_url': 'Image URL',
+        'product_title': 'Product',
+        'sku': 'SKU',
+        'total_stock': 'Total Stock',
+        'velocity_7d': 'Velocity (7d)',
+        'velocity_30d': 'Velocity (30d)',
+        'velocity_lifetime': 'Velocity (Lifetime)',
+        'days_of_stock': 'Days of Stock',
+        'stock_status': 'Stock Status',
+        'reorder_date': 'Reorder Date',
+        'reorder_qty': 'Reorder Quantity'
+    }
+
     if use_custom_velocity:
+        column_map['velocity_period'] = 'Velocity (Period)'
         df['velocity_period_dates'] = f"{velocity_start_date} to {velocity_end_date}"
+        column_map['velocity_period_dates'] = 'Velocity Period Dates'
+
+    df.rename(columns=column_map, inplace=True)
+    
+    export_columns = [col for col in column_map.values() if col in df.columns]
+    df = df[export_columns]
     
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Forecasting Report')
     
+    output.seek(0)
+
     return Response(
         content=output.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
