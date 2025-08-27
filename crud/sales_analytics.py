@@ -31,7 +31,8 @@ def get_sales_by_product_data(
         "offset": offset,
     }
 
-    # This query is adapted from the provided prompt to use SQLAlchemy's text() construct.
+    # FIX: The parameter style for psycopg2 is 'pyformat', which SQLAlchemy's text()
+    # handles automatically. We just need to use the named parameters correctly in the string.
     query = text("""
         WITH eligible_orders AS (
             SELECT id, store_id FROM orders
