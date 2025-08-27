@@ -1746,3 +1746,67 @@ thead th :where(button, a, input, select) {
   position: relative;
   z-index: 1;
 }
+
+/* ===== Hover indicators (row + column) ===== */
+:root{
+  --row-hover-bg: color-mix(in oklab, var(--accent, #4ea1ff) 10%, transparent);
+  --col-hover-bg: color-mix(in oklab, var(--accent, #4ea1ff) 14%, transparent);
+  --col-hover-outline: color-mix(in oklab, var(--accent, #4ea1ff) 45%, transparent);
+}
+
+/* Row highlight */
+table tbody tr:hover > * {
+  background: var(--row-hover-bg);
+}
+
+/* Column highlight (class is set by JS) */
+[class*="col-hover-"] td,
+[class*="col-hover-"] th { /* allow blending nicely */
+  transition: background-color .08s ease-in-out, box-shadow .08s ease-in-out;
+}
+
+/* Generate up to 40 columns; increase if you have wider tables */
+.col-hover-1  :is(td:nth-child(1),  th:nth-child(1))  { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-2  :is(td:nth-child(2),  th:nth-child(2))  { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-3  :is(td:nth-child(3),  th:nth-child(3))  { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-4  :is(td:nth-child(4),  th:nth-child(4))  { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-5  :is(td:nth-child(5),  th:nth-child(5))  { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-6  :is(td:nth-child(6),  th:nth-child(6))  { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-7  :is(td:nth-child(7),  th:nth-child(7))  { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-8  :is(td:nth-child(8),  th:nth-child(8))  { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-9  :is(td:nth-child(9),  th:nth-child(9))  { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-10 :is(td:nth-child(10), th:nth-child(10)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-11 :is(td:nth-child(11), th:nth-child(11)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-12 :is(td:nth-child(12), th:nth-child(12)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-13 :is(td:nth-child(13), th:nth-child(13)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-14 :is(td:nth-child(14), th:nth-child(14)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-15 :is(td:nth-child(15), th:nth-child(15)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-16 :is(td:nth-child(16), th:nth-child(16)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-17 :is(td:nth-child(17), th:nth-child(17)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-18 :is(td:nth-child(18), th:nth-child(18)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-19 :is(td:nth-child(19), th:nth-child(19)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-20 :is(td:nth-child(20), th:nth-child(20)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-21 :is(td:nth-child(21), th:nth-child(21)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-22 :is(td:nth-child(22), th:nth-child(22)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-23 :is(td:nth-child(23), th:nth-child(23)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-24 :is(td:nth-child(24), th:nth-child(24)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-25 :is(td:nth-child(25), th:nth-child(25)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-26 :is(td:nth-child(26), th:nth-child(26)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-27 :is(td:nth-child(27), th:nth-child(27)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-28 :is(td:nth-child(28), th:nth-child(28)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-29 :is(td:nth-child(29), th:nth-child(29)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-30 :is(td:nth-child(30), th:nth-child(30)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-31 :is(td:nth-child(31), th:nth-child(31)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-32 :is(td:nth-child(32), th:nth-child(32)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-33 :is(td:nth-child(33), th:nth-child(33)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-34 :is(td:nth-child(34), th:nth-child(34)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-35 :is(td:nth-child(35), th:nth-child(35)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-36 :is(td:nth-child(36), th:nth-child(36)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-37 :is(td:nth-child(37), th:nth-child(37)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-38 :is(td:nth-child(38), th:nth-child(38)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-39 :is(td:nth-child(39), th:nth-child(39)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+.col-hover-40 :is(td:nth-child(40), th:nth-child(40)) { background: var(--col-hover-bg); box-shadow: inset 0 0 0 1px var(--col-hover-outline); }
+
+/* Make sure sticky header receives pointer events so hovering it also highlights */
+.sticky-thead { pointer-events: none; }
+.sticky-thead table { pointer-events: auto; }
