@@ -1286,3 +1286,58 @@ section.controls-grid:has(#financial-status-filter) .controls-end {
   margin-left: auto;
   flex: 0 0 auto;
 }
+
+/* ==========================================================================
+   Forecasting Page Status Colors
+   ========================================================================== */
+
+/* Stock Status Badge Colors */
+.status-badge.status-urgent {
+    background-color: #c62828; /* Red */
+    color: white;
+    border-color: #c62828;
+}
+.status-badge.status-warning {
+    background-color: #ef6c00; /* Orange */
+    color: white;
+    border-color: #ef6c00;
+}
+.status-badge.status-watch {
+    background-color: #fdd835; /* Yellow */
+    color: #424242;
+    border-color: #fdd835;
+}
+.status-badge.status-healthy {
+    background-color: #2e7d32; /* Green */
+    color: white;
+    border-color: #2e7d32;
+}
+.status-badge.status-overstocked {
+    background-color: #0d6efd; /* Blue */
+    color: white;
+    border-color: #0d6efd;
+}
+.status-badge.status-slow-mover {
+    background-color: #607d8b; /* Grey */
+    color: white;
+    border-color: #607d8b;
+}
+
+/* Reorder Date Text Colors */
+td.status-urgent {
+    color: #c62828 !important; /* Red */
+    font-weight: bold;
+}
+td.status-warning {
+    color: #ef6c00 !important; /* Orange */
+    font-weight: bold;
+}
+td.status-watch {
+    color: #fdd835 !important; /* Yellow */
+}
+td.status-healthy-light {
+    color: #9ccc65 !important; /* Light Green */
+}
+td.status-healthy {
+    color: #2e7d32 !important; /* Green */
+}
