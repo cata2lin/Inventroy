@@ -17,6 +17,7 @@ router = APIRouter(
 @router.get("/report")
 def get_forecasting_report(
     db: Session = Depends(get_db),
+    search: Optional[str] = Query(None),
     lead_time: int = 30,
     coverage_period: int = 60,
     store_ids: Optional[List[int]] = Query(None),
@@ -29,7 +30,7 @@ def get_forecasting_report(
     velocity_end_date: Optional[str] = Query(None)
 ):
     data = crud_forecasting.get_forecasting_data(
-        db, lead_time, coverage_period, store_ids, product_types, 
+        db, search, lead_time, coverage_period, store_ids, product_types, 
         reorder_start_date, reorder_end_date,
         use_custom_velocity, velocity_start_date, velocity_end_date
     )
@@ -44,6 +45,7 @@ def get_forecasting_filters(db: Session = Depends(get_db)):
 @router.get("/export")
 def export_forecasting_report(
     db: Session = Depends(get_db),
+    search: Optional[str] = Query(None),
     lead_time: int = 30,
     coverage_period: int = 60,
     store_ids: Optional[List[int]] = Query(None),
@@ -56,7 +58,7 @@ def export_forecasting_report(
     velocity_end_date: Optional[str] = Query(None)
 ):
     data = crud_forecasting.get_forecasting_data(
-        db, lead_time, coverage_period, store_ids, product_types, 
+        db, search, lead_time, coverage_period, store_ids, product_types, 
         reorder_start_date, reorder_end_date,
         use_custom_velocity, velocity_start_date, velocity_end_date
     )
@@ -64,6 +66,11 @@ def export_forecasting_report(
         data = [item for item in data if item['stock_status'] in stock_statuses]
         
     df = pd.DataFrame(data)
+    
+    # Add custom velocity to export if used
+    if use_custom_velocity:
+        df['velocity_period_dates'] = f"{velocity_start_date} to {velocity_end_date}"
+    
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Forecasting Report')
