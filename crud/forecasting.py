@@ -17,6 +17,7 @@ def get_forecasting_data(
     use_custom_velocity: bool = False,
     velocity_start_date: str = None,
     velocity_end_date: str = None,
+    velocity_metric: str = 'period', # 'period' or 'lifetime'
 ):
     """
     Generates a forecasting report with custom velocity period support.
@@ -94,27 +95,35 @@ def get_forecasting_data(
             if gkey not in sales_variants_map: sales_variants_map[gkey] = []
             sales_variants_map[gkey].append(vid)
 
-    def get_sales(start_date, end_date):
+    def get_sales_and_first_date(start_date=None, end_date=None):
         all_variant_ids = [v for sublist in sales_variants_map.values() for v in sublist]
-        if not all_variant_ids: return {}
+        if not all_variant_ids: return {}, {}
         
         group_key_expr = func.coalesce(func.nullif(models.ProductVariant.barcode, ''), models.ProductVariant.sku)
 
-        sales_data = db.query(
+        sales_query = db.query(
             func.sum(models.LineItem.quantity).label('total_sales'),
+            func.min(models.Order.created_at).label('first_sale_date'),
             group_key_expr.label("group_key")
         ).join(
             models.ProductVariant, models.ProductVariant.id == models.LineItem.variant_id
         ).join(
             models.Order, models.Order.id == models.LineItem.order_id
         ).filter(
-            models.LineItem.variant_id.in_(all_variant_ids),
-            models.Order.created_at.between(start_date, end_date)
-        ).group_by(group_key_expr).all()
-        return {s.group_key: s.total_sales for s in sales_data}
+            models.LineItem.variant_id.in_(all_variant_ids)
+        )
+        if start_date and end_date:
+            sales_query = sales_query.filter(models.Order.created_at.between(start_date, end_date))
+        
+        sales_data = sales_query.group_by(group_key_expr).all()
 
-    sales_map_7d = get_sales(today - timedelta(days=7), today)
-    sales_map_30d = get_sales(today - timedelta(days=30), today)
+        sales = {s.group_key: s.total_sales for s in sales_data}
+        first_dates = {s.group_key: s.first_sale_date for s in sales_data}
+
+        return sales, first_dates
+
+    sales_map_7d, _ = get_sales_and_first_date(today - timedelta(days=7), today)
+    sales_map_30d, _ = get_sales_and_first_date(today - timedelta(days=30), today)
     
     sales_map_period = {}
     period_days = 0
@@ -122,7 +131,9 @@ def get_forecasting_data(
         start = datetime.fromisoformat(velocity_start_date)
         end = datetime.fromisoformat(velocity_end_date)
         period_days = (end - start).days + 1
-        sales_map_period = get_sales(start, end)
+        sales_map_period, _ = get_sales_and_first_date(start, end)
+
+    lifetime_sales_map, first_sale_dates_map = get_sales_and_first_date()
 
     report = []
     for product in product_groups:
@@ -133,7 +144,21 @@ def get_forecasting_data(
         if use_custom_velocity and period_days > 0:
             velocity_period = (sales_map_period.get(product.group_key, 0) or 0) / period_days
 
-        active_velocity = velocity_period if use_custom_velocity and period_days > 0 else velocity_30d
+        velocity_lifetime = 0
+        first_sale_date = first_sale_dates_map.get(product.group_key)
+        if first_sale_date:
+            lifetime_days = (today - first_sale_date.date()).days + 1
+            if lifetime_days > 0:
+                total_sales = lifetime_sales_map.get(product.group_key, 0) or 0
+                velocity_lifetime = total_sales / lifetime_days
+
+        active_velocity = 0
+        if velocity_metric == 'lifetime':
+            active_velocity = velocity_lifetime
+        elif use_custom_velocity and period_days > 0:
+            active_velocity = velocity_period
+        else:
+            active_velocity = velocity_30d
         
         days_of_stock = 0
         if active_velocity > 0 and product.total_stock is not None and product.total_stock > 0:
@@ -156,7 +181,8 @@ def get_forecasting_data(
         report.append({
             "product_title": product.product_title, "sku": product.sku, "image_url": product.image_url,
             "total_stock": product.total_stock, "velocity_7d": velocity_7d, "velocity_30d": velocity_30d,
-            "velocity_period": velocity_period, "days_of_stock": days_of_stock,
+            "velocity_period": velocity_period, "velocity_lifetime": velocity_lifetime,
+            "days_of_stock": days_of_stock,
             "stock_status": stock_status, "reorder_date": reorder_date, "reorder_qty": reorder_qty
         })
     

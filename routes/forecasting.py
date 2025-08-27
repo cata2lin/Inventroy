@@ -27,12 +27,14 @@ def get_forecasting_report(
     reorder_end_date: Optional[str] = Query(None),
     use_custom_velocity: bool = Query(False),
     velocity_start_date: Optional[str] = Query(None),
-    velocity_end_date: Optional[str] = Query(None)
+    velocity_end_date: Optional[str] = Query(None),
+    velocity_metric: str = Query('period')
 ):
     data = crud_forecasting.get_forecasting_data(
         db, search, lead_time, coverage_period, store_ids, product_types, 
         reorder_start_date, reorder_end_date,
-        use_custom_velocity, velocity_start_date, velocity_end_date
+        use_custom_velocity, velocity_start_date, velocity_end_date,
+        velocity_metric
     )
     if stock_statuses:
         data = [item for item in data if item['stock_status'] in stock_statuses]
@@ -55,12 +57,14 @@ def export_forecasting_report(
     reorder_end_date: Optional[str] = Query(None),
     use_custom_velocity: bool = Query(False),
     velocity_start_date: Optional[str] = Query(None),
-    velocity_end_date: Optional[str] = Query(None)
+    velocity_end_date: Optional[str] = Query(None),
+    velocity_metric: str = Query('period')
 ):
     data = crud_forecasting.get_forecasting_data(
         db, search, lead_time, coverage_period, store_ids, product_types, 
         reorder_start_date, reorder_end_date,
-        use_custom_velocity, velocity_start_date, velocity_end_date
+        use_custom_velocity, velocity_start_date, velocity_end_date,
+        velocity_metric
     )
     if stock_statuses:
         data = [item for item in data if item['stock_status'] in stock_statuses]

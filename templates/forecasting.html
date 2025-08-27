@@ -58,18 +58,20 @@
             
             <fieldset id="custom-velocity-controls" class="grid">
                 <div class="control">
-                    <label for="use-custom-velocity">
-                        <input type="checkbox" id="use-custom-velocity">
-                        Use Custom Velocity Period
-                    </label>
+                    <label for="velocity-metric">Velocity Metric</label>
+                    <select id="velocity-metric">
+                        <option value="period">Custom Period</option>
+                        <option value="lifetime">Lifetime</option>
+                    </select>
                 </div>
-                <div class="grid" id="custom-velocity-dates" style="display: none;">
+                <div class="grid" id="custom-velocity-dates">
                     <input type="date" id="velocity-start-date" aria-label="Velocity Start Date">
                     <input type="date" id="velocity-end-date" aria-label="Velocity End Date">
                 </div>
             </fieldset>
 
             <div class="controls-end">
+                <button id="calculate-lifetime-velocity-btn">Calculate Lifetime Velocity</button>
                 <button id="export-button">Export to Excel</button>
             </div>
         </section>

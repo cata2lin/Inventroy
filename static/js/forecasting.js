@@ -11,10 +11,11 @@ document.addEventListener('DOMContentLoaded', () => {
         statusFilter: document.getElementById('status-filter-list'),
         reorderDateStart: document.getElementById('reorder-date-start'),
         reorderDateEnd: document.getElementById('reorder-date-end'),
-        useCustomVelocity: document.getElementById('use-custom-velocity'),
+        velocityMetric: document.getElementById('velocity-metric'),
         customVelocityDates: document.getElementById('custom-velocity-dates'),
         velocityStartDate: document.getElementById('velocity-start-date'),
         velocityEndDate: document.getElementById('velocity-end-date'),
+        calculateLifetimeVelocityBtn: document.getElementById('calculate-lifetime-velocity-btn'),
         exportBtn: document.getElementById('export-button'),
     };
 
@@ -52,7 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
             stock_statuses: params.getAll('stock_statuses'),
             reorder_start_date: params.get('reorder_start_date') || '',
             reorder_end_date: params.get('reorder_end_date') || '',
-            use_custom_velocity: params.get('use_custom_velocity') === 'true',
+            velocity_metric: params.get('velocity_metric') || 'period',
             velocity_start_date: params.get('velocity_start_date') || '',
             velocity_end_date: params.get('velocity_end_date') || '',
             sort_by: params.get('sort_by') || 'days_of_stock',
@@ -65,10 +66,10 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.coveragePeriod.value = state.coverage_period;
         elements.reorderDateStart.value = state.reorder_start_date;
         elements.reorderDateEnd.value = state.reorder_end_date;
-        elements.useCustomVelocity.checked = state.use_custom_velocity;
+        elements.velocityMetric.value = state.velocity_metric;
         elements.velocityStartDate.value = state.velocity_start_date;
         elements.velocityEndDate.value = state.velocity_end_date;
-        elements.customVelocityDates.style.display = state.use_custom_velocity ? 'grid' : 'none';
+        elements.customVelocityDates.style.display = state.velocity_metric === 'period' ? 'grid' : 'none';
     };
 
     const loadForecastingData = async () => {
@@ -121,8 +122,11 @@ document.addEventListener('DOMContentLoaded', () => {
             { key: 'velocity_7d', label: 'Velocity (7d)' },
             { key: 'velocity_30d', label: 'Velocity (30d)' },
         ];
-        if(state.use_custom_velocity){
+        if(state.velocity_metric === 'period'){
             headers.push({ key: 'velocity_period', label: 'Velocity (Period)' });
+        }
+        if(forecastingData.some(item => item.velocity_lifetime > 0)){
+            headers.push({ key: 'velocity_lifetime', label: 'Velocity (Lifetime)' });
         }
         headers.push(
             { key: 'days_of_stock', label: 'Days of Stock' },
@@ -160,7 +164,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     else reorderDateClass = 'status-healthy';
                 }
 
-                tableHtml += `
+                let rowHtml = `
                     <tr>
                         <td>
                             <div class="product-cell">
@@ -174,13 +178,21 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td>${item.total_stock}</td>
                         <td>${item.velocity_7d.toFixed(2)}</td>
                         <td>${item.velocity_30d.toFixed(2)}</td>
-                        ${state.use_custom_velocity ? `<td>${item.velocity_period.toFixed(2)}</td>` : ''}
+                `;
+                if(state.velocity_metric === 'period'){
+                    rowHtml += `<td>${item.velocity_period.toFixed(2)}</td>`;
+                }
+                if(forecastingData.some(i => i.velocity_lifetime > 0)){
+                    rowHtml += `<td>${item.velocity_lifetime.toFixed(2)}</td>`;
+                }
+                rowHtml += `
                         <td>${item.days_of_stock === null ? '0' : item.days_of_stock}</td>
                         <td><span class="status-badge status-${statusClass}">${item.stock_status.replace('_', ' ')}</span></td>
                         <td class="${reorderDateClass}">${item.reorder_date || 'N/A'}</td>
                         <td>${item.reorder_qty}</td>
                     </tr>
                 `;
+                tableHtml += rowHtml;
             });
         }
         tableHtml += '</tbody></table></div>';
@@ -236,9 +248,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 400));
     });
 
-    elements.useCustomVelocity.addEventListener('change', () => {
-        state.use_custom_velocity = elements.useCustomVelocity.checked;
-        elements.customVelocityDates.style.display = state.use_custom_velocity ? 'grid' : 'none';
+    elements.velocityMetric.addEventListener('change', () => {
+        state.velocity_metric = elements.velocityMetric.value;
+        elements.customVelocityDates.style.display = state.velocity_metric === 'period' ? 'grid' : 'none';
+        loadForecastingData();
+    });
+    
+    elements.calculateLifetimeVelocityBtn.addEventListener('click', () => {
+        state.velocity_metric = 'lifetime';
+        elements.velocityMetric.value = 'lifetime';
+        elements.customVelocityDates.style.display = 'none';
         loadForecastingData();
     });
 
