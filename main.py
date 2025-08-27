@@ -118,4 +118,4 @@ async def get_product_details_page(request: Request, group_key: str):
 
 @app.get("/sales-analytics", response_class=HTMLResponse, include_in_schema=False)
 async def get_sales_analytics_page(request: Request):
-    return templates.TemplateResponse("sales_analytics.html", {"request": request, "title": "Sales by Product"}
+    return templates.TemplateResponse("sales_analytics.html", {"request": request, "title": "Sales by Product"})
