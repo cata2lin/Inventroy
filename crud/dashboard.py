@@ -117,10 +117,17 @@ def export_orders_for_dashboard(
     data_to_export = []
     for order, store_name, hold_reason in results:
         data_to_export.append({
-            "Order": order.name, "Store": store_name, "Date": order.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-            "Total": f"{order.total_price} {order.currency}", "Financial Status": order.financial_status,
-            "Fulfillment": order.fulfillment_status, "Cancelled": f"Yes ({order.cancel_reason})" if order.cancelled_at else "No",
-            "Note": order.note, "Tags": order.tags, "Hold Reason": hold_reason
+            "Order": order.name, 
+            "Store": store_name, 
+            # FIX: Safely format the date, providing 'N/A' if it's missing
+            "Date": order.created_at.strftime('%Y-%m-%d %H:%M:%S') if order.created_at else 'N/A',
+            "Total": f"{order.total_price} {order.currency}", 
+            "Financial Status": order.financial_status,
+            "Fulfillment": order.fulfillment_status, 
+            "Cancelled": f"Yes ({order.cancel_reason})" if order.cancelled_at else "No",
+            "Note": order.note, 
+            "Tags": order.tags, 
+            "Hold Reason": hold_reason
         })
 
     if not data_to_export:
