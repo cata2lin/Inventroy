@@ -33,7 +33,7 @@ from routes import (
     sync_control,
     config,
     forecasting,
-    sales_analytics, # Import the new sales analytics router
+    sales_analytics
 )
 
 load_dotenv()
@@ -56,7 +56,7 @@ def scheduled_snapshot_job():
         db.close()
 
 # FIX: Use pytz to handle the timezone robustly
-scheduler = BackgroundScheduler(timezone=pyytz.utc)
+scheduler = BackgroundScheduler(timezone=pytz.utc)
 scheduler.add_job(scheduled_snapshot_job, 'cron', hour=1) # Runs every day at 1:00 AM UTC
 scheduler.start()
 # --- END OF SCHEDULER BLOCK ---
@@ -73,8 +73,8 @@ app.include_router(bulk_update.router)
 app.include_router(sync_control.router)
 app.include_router(config.router)
 app.include_router(webhooks.router)
-app.include_router(forecasting.router) # Include the forecasting router
-app.include_router(sales_analytics.router) # Include the sales analytics router
+app.include_router(forecasting.router) 
+app.include_router(sales_analytics.router)
 
 # ---------- HTML Page Routes ----------
 @app.get("/", response_class=RedirectResponse, include_in_schema=False)
