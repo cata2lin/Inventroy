@@ -1341,3 +1341,86 @@ td.status-healthy-light {
 td.status-healthy {
     color: #2e7d32 !important; /* Green */
 }
+
+/* ======================= INVENTORY FORECASTING — unified filters ======================= */
+/* Scope rules to pages that contain #forecasting-table-container */
+.container-fluid:has(#forecasting-table-container) .controls-grid{
+  /* match our best “dense chips” layout from the other pages */
+  display:flex !important;
+  flex-wrap:wrap;
+  gap:6px 8px;                 /* tight, even spacing */
+  align-items:center;          /* same baseline */
+}
+
+/* Undo the global width:100% so chips sit side-by-side */
+.container-fluid:has(#forecasting-table-container) .controls-grid > *{
+  width:auto !important;
+  max-width:none !important;
+}
+
+/* Make every control (inputs, selects, dropdown <summary>) use the unified chip spec */
+.container-fluid:has(#forecasting-table-container) .controls-grid input[type="search"],
+.container-fluid:has(#forecasting-table-container) .controls-grid input[type="text"],
+.container-fluid:has(#forecasting-table-container) .controls-grid input[type="number"],
+.container-fluid:has(#forecasting-table-container) .controls-grid input[type="date"],
+.container-fluid:has(#forecasting-table-container) .controls-grid select,
+.container-fluid:has(#forecasting-table-container) .controls-grid .dropdown > summary{
+  height:var(--filter-h) !important;
+  min-height:var(--filter-h) !important;
+  padding:0 var(--filter-pad-x) !important;
+  font-size:var(--filter-font) !important;
+  border-radius:var(--filter-radius) !important;
+  background:var(--filter-bg) !important;
+  border:1px solid var(--filter-bd) !important;
+  line-height:1.1 !important;
+  display:inline-flex; align-items:center;
+}
+
+/* Forecasting search has no icon → remove the extra left padding */
+.container-fluid:has(#forecasting-table-container) .controls-grid .control input[type="search"]{
+  padding-left:var(--filter-pad-x) !important;
+}
+
+/* The “grouped” .grid blocks should behave like inline clusters of chips */
+.container-fluid:has(#forecasting-table-container) .controls-grid > .grid{
+  display:flex; flex-wrap:wrap; gap:6px 8px; align-items:center;
+  width:auto !important; max-width:none !important;
+}
+
+/* Labels above numeric/date inputs: compact and muted (like elsewhere) */
+.container-fluid:has(#forecasting-table-container) .controls-grid .control > label{
+  display:block; margin-bottom:4px; font-size:.75em; color:var(--muted);
+}
+
+/* Dropdown open visual (same as Inventory) */
+.container-fluid:has(#forecasting-table-container) .dropdown[open] > summary{
+  border-color:color-mix(in oklab, var(--accent), var(--filter-bd) 60%) !important;
+  box-shadow:0 0 0 2px color-mix(in oklab, var(--accent), transparent 80%) !important;
+}
+
+/* “Use Custom Velocity Period” → chip-style checkbox + show dates inline when checked */
+.container-fluid:has(#forecasting-table-container) #custom-velocity-controls{
+  display:flex; flex-wrap:wrap; gap:6px 8px; align-items:center;
+}
+.container-fluid:has(#forecasting-table-container) #custom-velocity-controls > .control > label{
+  display:inline-flex; align-items:center; gap:.5rem;
+  height:var(--filter-h); min-height:var(--filter-h);
+  padding:0 var(--filter-pad-x);
+  font-size:var(--filter-font);
+  border-radius:var(--filter-radius);
+  background:var(--filter-bg);
+  border:1px solid var(--filter-bd);
+}
+.container-fluid:has(#forecasting-table-container) #custom-velocity-controls:has(#use-custom-velocity:checked) #custom-velocity-dates{
+  display:flex !important; gap:6px 8px; align-items:center;
+}
+
+/* Keep Export aligned to the right like other pages */
+.container-fluid:has(#forecasting-table-container) .controls-end{
+  margin-left:auto; flex:0 0 auto;
+}
+.container-fluid:has(#forecasting-table-container) #export-button{
+  height:var(--filter-h) !important; min-height:var(--filter-h) !important;
+  padding:0 var(--filter-pad-x) !important; font-size:var(--filter-font) !important;
+  border-radius:var(--filter-radius) !important;
+}
