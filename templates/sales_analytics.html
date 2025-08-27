@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+    <hgroup class="page-header">
+        <h1>Sales by Product</h1>
+        <h2>Aggregated sales analytics across all stores.</h2>
+    </hgroup>
+
+    <article class="filter-container">
+        <section id="kpi-container" class="metrics-grid"></section>
+        <section class="controls-grid sticky-controls" aria-label="Filters">
+            </section>
+    </article>
+
+    <article id="sales-table-container" class="table-wrap" aria-busy="true">
+        <p>Loading...</p>
+    </article>
+    
+    <div class="grid pagination-controls">
+        <button id="prev-button" class="secondary outline" disabled>Previous</button>
+        <span id="page-indicator">Page 1</span>
+        <button id="next-button" class="secondary outline">Next</button>
+    </div>
+
+    <div class="grid">
+        <article id="top-products-chart-container" class="card"></article>
+        <article id="refund-rate-chart-container" class="card"></article>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="/static/js/sales_analytics.js"></script>
+{% endblock %}

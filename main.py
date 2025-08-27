@@ -64,6 +64,7 @@ scheduler.start()
 # Routers
 app.include_router(dashboard.router)
 app.include_router(dashboard_v2.router)
+app.include_router(sales_analytics.router)
 app.include_router(orders.router)
 app.include_router(products.router)
 app.include_router(inventory.router)
@@ -114,3 +115,7 @@ async def get_product_details_page(request: Request, group_key: str):
         "product_details.html",
         {"request": request, "title": f"Product {group_key}", "group_key": group_key},
     )
+
+@app.get("/sales-analytics", response_class=HTMLResponse, include_in_schema=False)
+async def get_sales_analytics_page(request: Request):
+    return templates.TemplateResponse("sales_analytics.html", {"request": request, "title": "Sales by Product"}
