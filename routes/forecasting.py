@@ -14,13 +14,30 @@ router = APIRouter(
     tags=["Forecasting"],
 )
 
+def _parse_store_ids(store_ids_str: Optional[List[str]] = None) -> Optional[List[int]]:
+    """
+    Safely parses a list of strings into a list of integers, ignoring empty or invalid values.
+    """
+    if store_ids_str is None:
+        return None
+    
+    parsed_ids = []
+    for s_id in store_ids_str:
+        try:
+            # Try to convert to int, skip if it's an empty string or invalid
+            if s_id:
+                parsed_ids.append(int(s_id))
+        except (ValueError, TypeError):
+            continue
+    return parsed_ids if parsed_ids else None
+
 @router.get("/report")
 def get_forecasting_report(
     db: Session = Depends(get_db),
     search: Optional[str] = Query(None),
     lead_time: int = 30,
     coverage_period: int = 60,
-    store_ids: Optional[List[int]] = Query(None),
+    store_ids: Optional[List[str]] = Query(None), # Accept strings to handle empty values
     product_types: Optional[List[str]] = Query(None),
     stock_statuses: Optional[List[str]] = Query(None),
     reorder_start_date: Optional[str] = Query(None),
@@ -30,8 +47,10 @@ def get_forecasting_report(
     velocity_end_date: Optional[str] = Query(None),
     active_velocity_metric: str = Query('velocity_30d')
 ):
+    parsed_store_ids = _parse_store_ids(store_ids)
+
     data = crud_forecasting.get_forecasting_data(
-        db, search, lead_time, coverage_period, store_ids, product_types, 
+        db, search, lead_time, coverage_period, parsed_store_ids, product_types, 
         reorder_start_date, reorder_end_date,
         use_custom_velocity, velocity_start_date, velocity_end_date,
         active_velocity_metric
@@ -50,7 +69,7 @@ def export_forecasting_report(
     search: Optional[str] = Query(None),
     lead_time: int = 30,
     coverage_period: int = 60,
-    store_ids: Optional[List[int]] = Query(None),
+    store_ids: Optional[List[str]] = Query(None), # Accept strings to handle empty values
     product_types: Optional[List[str]] = Query(None),
     stock_statuses: Optional[List[str]] = Query(None),
     reorder_start_date: Optional[str] = Query(None),
@@ -60,8 +79,10 @@ def export_forecasting_report(
     velocity_end_date: Optional[str] = Query(None),
     active_velocity_metric: str = Query('velocity_30d')
 ):
+    parsed_store_ids = _parse_store_ids(store_ids)
+
     data = crud_forecasting.get_forecasting_data(
-        db, search, lead_time, coverage_period, store_ids, product_types, 
+        db, search, lead_time, coverage_period, parsed_store_ids, product_types, 
         reorder_start_date, reorder_end_date,
         use_custom_velocity, velocity_start_date, velocity_end_date,
         active_velocity_metric
@@ -71,7 +92,6 @@ def export_forecasting_report(
         
     df = pd.DataFrame(data)
     
-    # Add custom velocity to export if used
     if use_custom_velocity:
         df['velocity_period_dates'] = f"{velocity_start_date} to {velocity_end_date}"
     
