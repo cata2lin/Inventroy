@@ -22,7 +22,7 @@ def get_sales_by_product_data(
     params = {
         "start_ts": start_ts,
         "end_ts": end_ts,
-        "stores": stores,
+        "stores": stores if stores else None,
         "only_paid": only_paid,
         "exclude_canceled": exclude_canceled,
         "search": f"%{search}%" if search else None,
@@ -30,7 +30,8 @@ def get_sales_by_product_data(
         "offset": offset,
     }
 
-    # FIX: Replaced all instances of :param with %(param)s to match psycopg2's format
+    # FIX: The parameter style for psycopg2 is 'pyformat', which SQLAlchemy's text()
+    # handles automatically. We just need to use the named parameters correctly in the string.
     query = text("""
         WITH eligible_orders AS (
             SELECT id, store_id FROM orders
@@ -45,7 +46,7 @@ def get_sales_by_product_data(
                    SUM(li.quantity) AS units_sold,
                    SUM(li.quantity * li.price)::numeric(18,2) AS gross_sales,
                    SUM(li.total_discount)::numeric(18,2) AS discounts,
-                   MIN(p.title) as product_title -- Select one title for display
+                   MIN(p.title) as product_title
             FROM line_items li
             JOIN eligible_orders o ON o.id = li.order_id
             LEFT JOIN product_variants pv ON pv.id = li.variant_id
@@ -68,7 +69,7 @@ def get_sales_by_product_data(
             GROUP BY 1
         ),
         days AS (
-            SELECT GREATEST(1, 1 + DATE_PART('day', :end_ts::timestamptz - :start_ts::timestamptz))::numeric AS days_in_window
+            SELECT GREATEST(1, 1 + DATE_PART('day', :end_ts::timestamp - :start_ts::timestamp))::numeric AS days_in_window
         )
         SELECT
             s.barcode,
@@ -82,7 +83,7 @@ def get_sales_by_product_data(
             COALESCE(r.returns_value,0) AS returns_value,
             (s.gross_sales - s.discounts - COALESCE(r.returns_value,0))::numeric(18,2) AS net_sales,
             ROUND( (s.units_sold - COALESCE(r.refunded_units,0)) / (SELECT days_in_window FROM days), 4) AS velocity_units_per_day,
-            CASE WHEN s.units_sold > 0 THEN (s.gross_sales - s.discounts) / s.units_sold ELSE 0 END as asp
+            CASE WHEN s.units_sold > 0 THEN (s.gross_sales - s.discounts) / NULLIF(s.units_sold, 0) ELSE 0 END as asp
         FROM sales_li s
         LEFT JOIN rli r USING (barcode)
         ORDER BY net_sales DESC NULLS LAST
@@ -97,7 +98,6 @@ def get_inventory_for_barcode_data(db: Session, barcode: str):
     Gets the inventory breakdown for a given barcode.
     """
     params = {"barcode": barcode}
-    # FIX: Replaced :barcode with %(barcode)s
     query = text("""
         WITH group_variants AS (
             SELECT gm.group_id, pv.id AS variant_id, pv.inventory_item_id
