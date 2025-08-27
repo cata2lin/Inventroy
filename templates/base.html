@@ -10,7 +10,6 @@
 <body>
 <a class="skip-link" href="#main-content">Skip to content</a>
 
-
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
 <symbol id="i-search" viewBox="0 0 24 24">
 <path d="M10 18a8 8 0 1 1 5.292-14.043l.22.184.276.23a8 8 0 0 1 1.26 10.532l4.21 4.21-1.414 1.414-4.21-4.21A8 8 0 0 1 10 18Zm0-2a6 6 0 1 0 0-12 6 6 0 0 0 0 12Z"/>
@@ -32,7 +31,6 @@
 <symbol id="i-close" viewBox="0 0 24 24"><path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.29 19.71 2.88 18.3 9.17 12 2.88 5.71 4.29 4.3l6.3 6.29 6.29-6.29z"/></symbol>
 </svg>
 
-
 <div class="app-layout">
 <aside class="sidebar" aria-label="Primary">
 <div class="brand">
@@ -50,12 +48,108 @@
 </nav>
 </aside>
 
-
 <main id="main-content" class="main-content">
 {% block content %}{% endblock %}
 </main>
 </div>
 
+<!-- Fixed THEAD script -->
+<script>
+(() => {
+  const SELECT_TABLES = [
+    '#orders-table-container table',
+    '#inventory-table-container table',
+    '#forecasting-table-container table',
+    '#bulk-update-container table'
+  ].join(',');
+
+  const stickyBars = () => Array.from(document.querySelectorAll('.sticky-controls'));
+
+  function computeTopOffset() {
+    let offset = 0;
+    for (const el of stickyBars()) {
+      const r = el.getBoundingClientRect();
+      if (r.top <= 0 && r.bottom > offset) offset = Math.ceil(r.bottom);
+    }
+    return offset;
+  }
+
+  function makeStickyHeader(table) {
+    if (!table || table.__stickyClone) return;
+    const thead = table.querySelector('thead');
+    if (!thead) return;
+
+    const host = document.createElement('div');
+    host.className = 'sticky-thead';
+    const cloneTable = document.createElement('table');
+    const cloneThead = thead.cloneNode(true);
+    cloneTable.appendChild(cloneThead);
+    host.appendChild(cloneTable);
+    document.body.appendChild(host);
+
+    table.__stickyClone = { host, cloneTable, cloneThead, thead };
+
+    const syncWidths = () => {
+      const { thead, cloneThead } = table.__stickyClone;
+      const origRows = thead.querySelectorAll('tr');
+      const cloneRows = cloneThead.querySelectorAll('tr');
+      if (!origRows.length || origRows.length !== cloneRows.length) return;
+
+      cloneTable.className = table.className;
+
+      for (let r = 0; r < origRows.length; r++) {
+        const oCells = origRows[r].children;
+        const cCells = cloneRows[r].children;
+        for (let i = 0; i < oCells.length; i++) {
+          const w = Math.ceil(oCells[i].getBoundingClientRect().width);
+          cCells[i].style.minWidth = w + 'px';
+          cCells[i].style.maxWidth = w + 'px';
+          cCells[i].style.width = w + 'px';
+        }
+      }
+
+      const tb = table.getBoundingClientRect();
+      cloneTable.style.width = Math.ceil(tb.width) + 'px';
+      host.style.transform = `translateX(${Math.floor(tb.left)}px)`;
+    };
+
+    const syncTopAndVisibility = () => {
+      const rect = table.getBoundingClientRect();
+      const theadRect = thead.getBoundingClientRect();
+      const topOffset = computeTopOffset();
+
+      host.style.top = topOffset + 'px';
+
+      const passedTop = theadRect.top <= topOffset;
+      const stillInView = rect.bottom > (topOffset + Math.max(0, theadRect.height));
+
+      host.style.display = (passedTop && stillInView) ? 'block' : 'none';
+    };
+
+    const fullSync = () => { syncWidths(); syncTopAndVisibility(); };
+
+    const resizeObs = new ResizeObserver(fullSync);
+    resizeObs.observe(table);
+    Array.from(thead.querySelectorAll('*')).forEach(el => resizeObs.observe(el));
+
+    window.addEventListener('scroll', fullSync, { passive: true });
+    window.addEventListener('resize', fullSync);
+
+    setTimeout(fullSync, 0);
+    setTimeout(fullSync, 100);
+    setTimeout(fullSync, 300);
+  }
+
+  const attachToExisting = () => {
+    document.querySelectorAll(SELECT_TABLES).forEach(makeStickyHeader);
+  };
+
+  const mo = new MutationObserver(() => attachToExisting());
+  mo.observe(document.documentElement, { childList: true, subtree: true });
+
+  attachToExisting();
+})();
+</script>
 
 {% block scripts %}{% endblock %}
 </body>

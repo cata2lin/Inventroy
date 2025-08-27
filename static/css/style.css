@@ -1711,3 +1711,38 @@ thead th :where(button, a, input, select) {
   position: relative;
   z-index: 6;
 }
+
+/* ===== Fixed thead on page scroll (clone-based, robust) ===== */
+.sticky-thead {
+  position: fixed;
+  left: 0;
+  top: 0;                /* final offset set by JS */
+  z-index: 999;
+  display: none;         /* JS toggles */
+  pointer-events: none;  /* avoid blocking page; inputs re-enabled inside */
+  filter: drop-shadow(0 6px 12px rgba(0,0,0,.15));
+}
+.sticky-thead table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: auto;           /* JS sets exact px width */
+  background: var(--surface, #101419);
+  border-bottom: 1px solid var(--border, #243042);
+}
+.sticky-thead th,
+.sticky-thead td {
+  background: var(--surface, #101419);
+  font-weight: 700;
+  white-space: nowrap;
+  border-left: 1px solid var(--border, #243042);
+  padding: inherit;      /* match original header cell padding */
+}
+.sticky-thead th:first-child,
+.sticky-thead td:first-child { border-left: 0; }
+
+/* Allow interaction for header controls (sort buttons, filters) */
+.sticky-thead :where(button, a, input, select, label) {
+  pointer-events: auto;
+  position: relative;
+  z-index: 1;
+}
