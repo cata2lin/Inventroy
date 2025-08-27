@@ -10,8 +10,15 @@
     <article class="filter-container">
         <section class="controls-grid sticky-controls" aria-label="Filters">
             <div class="control">
-                <input type="search" id="search-input" placeholder="Search by Title or SKU...">
+                <label for="lead-time">Lead Time (days)</label>
+                <input type="number" id="lead-time" value="30">
             </div>
+
+            <div class="control">
+                <label for="coverage-period">Coverage Period (days)</label>
+                <input type="number" id="coverage-period" value="60">
+            </div>
+
             <details role="list" class="dropdown">
                 <summary aria-haspopup="listbox">Stores</summary>
                 <ul role="listbox" id="store-filter-list"><li>Loading...</li></ul>
@@ -33,18 +40,7 @@
                     <li><label><input type="checkbox" name="status" value="slow_mover"> Slow Mover</label></li>
                 </ul>
             </details>
-
-            <div class="grid">
-                <div class="control">
-                    <label for="lead-time">Lead Time (days)</label>
-                    <input type="number" id="lead-time" value="30">
-                </div>
-                <div class="control">
-                    <label for="coverage-period">Coverage Period (days)</label>
-                    <input type="number" id="coverage-period" value="60">
-                </div>
-            </div>
-
+            
             <div class="grid">
                 <div class="control">
                     <label for="reorder-date-start">Reorder After</label>
