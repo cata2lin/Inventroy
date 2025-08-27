@@ -1666,3 +1666,48 @@ tbody tr:hover {
     height: 50px;
 }
 
+/* ===== Fixed (sticky) table header on page scroll ===== */
+
+/* Offset for any sticky bars at the top (adjust if needed) */
+:root { --table-header-offset: 0px; }
+
+/* Ensure tables render well with sticky headers */
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+}
+
+/* Make the first header row stick to the viewport top */
+thead tr:first-child th,
+thead tr:first-child td {
+  position: sticky;
+  top: var(--table-header-offset);
+  z-index: 5;
+  background: var(--surface, #101419);
+  box-shadow:
+    0 1px 0 0 var(--border, #243042),
+    0 6px 12px rgba(0,0,0,.15);
+}
+
+/* If you have a second header row and want it to stick below the first, uncomment and set the height
+thead tr:nth-child(2) th,
+thead tr:nth-child(2) td {
+  position: sticky;
+  top: calc(var(--table-header-offset) + var(--thead-row1-height, 2.5rem));
+  z-index: 4;
+  background: var(--surface, #101419);
+}
+*/
+
+/* Preserve vertical separators between header cells */
+thead th + th,
+thead td + td {
+  border-left: 1px solid var(--border, #243042);
+}
+
+/* Keep interactive elements in header clickable above the shadow */
+thead th :where(button, a, input, select) {
+  position: relative;
+  z-index: 6;
+}
