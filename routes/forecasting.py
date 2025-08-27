@@ -14,6 +14,20 @@ router = APIRouter(
     tags=["Forecasting"],
 )
 
+# --- START OF FIX: Robust Parameter Parsing ---
+
+def _parse_list_str(params: Optional[List[str]] = None) -> Optional[List[str]]:
+    """
+    Safely parses a list of strings from query parameters, filtering out empty or null values.
+    """
+    if params is None:
+        return None
+    
+    # Filter out empty strings that can be sent by the browser (e.g., ?product_types=)
+    valid_params = [p for p in params if p and p.strip()]
+    
+    return valid_params if valid_params else None
+
 def _parse_store_ids(store_ids_str: Optional[List[str]] = None) -> Optional[List[int]]:
     """
     Safely parses a list of strings into a list of integers, ignoring empty or invalid values.
@@ -24,11 +38,14 @@ def _parse_store_ids(store_ids_str: Optional[List[str]] = None) -> Optional[List
     parsed_ids = []
     for s_id in store_ids_str:
         try:
-            if s_id:
+            if s_id and s_id.strip():
                 parsed_ids.append(int(s_id))
         except (ValueError, TypeError):
             continue
     return parsed_ids if parsed_ids else None
+
+# --- END OF FIX ---
+
 
 @router.get("/report")
 def get_forecasting_report(
@@ -46,16 +63,19 @@ def get_forecasting_report(
     velocity_end_date: Optional[str] = Query(None),
     active_velocity_metric: str = Query('velocity_30d')
 ):
+    # Apply robust parsing to all list parameters
     parsed_store_ids = _parse_store_ids(store_ids)
+    parsed_product_types = _parse_list_str(product_types)
+    parsed_stock_statuses = _parse_list_str(stock_statuses)
 
     data = crud_forecasting.get_forecasting_data(
-        db, search, lead_time, coverage_period, parsed_store_ids, product_types, 
+        db, search, lead_time, coverage_period, parsed_store_ids, parsed_product_types, 
         reorder_start_date, reorder_end_date,
         use_custom_velocity, velocity_start_date, velocity_end_date,
         active_velocity_metric
     )
-    if stock_statuses:
-        data = [item for item in data if item['stock_status'] in stock_statuses]
+    if parsed_stock_statuses:
+        data = [item for item in data if item['stock_status'] in parsed_stock_statuses]
     return data
     
 @router.get("/filters")
@@ -78,56 +98,53 @@ def export_forecasting_report(
     velocity_end_date: Optional[str] = Query(None),
     active_velocity_metric: str = Query('velocity_30d')
 ):
+    # Apply robust parsing to all list parameters
     parsed_store_ids = _parse_store_ids(store_ids)
+    parsed_product_types = _parse_list_str(product_types)
+    parsed_stock_statuses = _parse_list_str(stock_statuses)
 
     data = crud_forecasting.get_forecasting_data(
-        db, search, lead_time, coverage_period, parsed_store_ids, product_types, 
+        db, search, lead_time, coverage_period, parsed_store_ids, parsed_product_types, 
         reorder_start_date, reorder_end_date,
         use_custom_velocity, velocity_start_date, velocity_end_date,
         active_velocity_metric
     )
-    if stock_statuses:
-        data = [item for item in data if item['stock_status'] in stock_statuses]
+    if parsed_stock_statuses:
+        data = [item for item in data if item['stock_status'] in parsed_stock_statuses]
         
     if not data:
         return Response(content="No data to export for the selected filters.", media_type="text/plain")
-
-    #
-    # --- START OF THE FIX ---
-    #
-    # We will now manually build the data for the Excel file to ensure all columns are included correctly.
-    
-    export_data = []
-    for item in data:
-        row = {
-            "Product": item.get('product_title'),
-            "SKU": item.get('sku'),
-            "Image URL": item.get('image_url'),
-            "Total Stock": item.get('total_stock'),
-            "Velocity (7d)": item.get('velocity_7d'),
-            "Velocity (30d)": item.get('velocity_30d'),
-            "Velocity (Lifetime)": item.get('velocity_lifetime'),
-            "Days of Stock": item.get('days_of_stock'),
-            "Stock Status": item.get('stock_status'),
-            "Reorder Date": item.get('reorder_date'),
-            "Reorder Qty": item.get('reorder_qty')
-        }
-        if use_custom_velocity:
-            row["Velocity (Period)"] = item.get('velocity_period')
-            row["Velocity Period Dates"] = f"{velocity_start_date} to {velocity_end_date}"
         
-        export_data.append(row)
+    df = pd.DataFrame(data)
+    
+    column_map = {
+        'image_url': 'Image URL',
+        'product_title': 'Product',
+        'sku': 'SKU',
+        'total_stock': 'Total Stock',
+        'velocity_7d': 'Velocity (7d)',
+        'velocity_30d': 'Velocity (30d)',
+        'velocity_lifetime': 'Velocity (Lifetime)',
+        'days_of_stock': 'Days of Stock',
+        'stock_status': 'Stock Status',
+        'reorder_date': 'Reorder Date',
+        'reorder_qty': 'Reorder Qty'
+    }
 
-    df = pd.DataFrame(export_data)
+    if use_custom_velocity and 'velocity_period' in df.columns:
+        column_map['velocity_period'] = 'Velocity (Period)'
+        df['velocity_period_dates'] = f"{velocity_start_date} to {velocity_end_date}"
+        column_map['velocity_period_dates'] = 'Velocity Period Dates'
 
+    df.rename(columns=column_map, inplace=True)
+    export_columns = [col_name for col_name in column_map.values() if col_name in df.columns]
+    df = df[export_columns]
+    
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Forecasting Report')
     
-    # Reset the stream's position to the beginning before sending
     output.seek(0)
-    
-    # --- END OF THE FIX ---
 
     return Response(
         content=output.getvalue(),
