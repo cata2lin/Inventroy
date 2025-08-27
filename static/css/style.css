@@ -1120,7 +1120,7 @@ section.controls-grid:has(#financial-status-filter) #column-visibility-button{
 #bulk-update-container .bulk-update-table td input[type="number"],
 #bulk-update-container .bulk-update-table td select,
 #bulk-update-container .bulk-update-table [contenteditable="true"]{
-  font-size: calc(var(--bu-input-font) * 1.05) !important;
+  font-size: calc(var(--bu-input-font) * 1.45) !important;
 }
 
 /* ===================== 4) BULK UPDATE — 30% smaller images when grouped ========= */
@@ -1218,7 +1218,7 @@ section.controls-grid:has(#financial-status-filter) #column-visibility-button{
 #bulk-update-container .bulk-update-table td input[type="number"],
 #bulk-update-container .bulk-update-table td select,
 #bulk-update-container .bulk-update-table [contenteditable="true"]{
-  font-size: calc(var(--bu-input-font) * 1.25) !important;
+  font-size: calc(var(--bu-input-font) * 1.45) !important;
 }
 
 /* 30% smaller thumbnails when Group by Barcode is ON */
