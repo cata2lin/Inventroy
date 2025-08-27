@@ -56,14 +56,16 @@
                 </div>
             </div>
             
-            <fieldset id="custom-velocity-controls">
-                <label>
-                    <input type="checkbox" id="use-custom-velocity">
-                    Use Custom Velocity Period
-                </label>
+            <fieldset id="custom-velocity-controls" class="grid">
+                <div class="control">
+                    <label for="use-custom-velocity">
+                        <input type="checkbox" id="use-custom-velocity">
+                        Use Custom Velocity Period
+                    </label>
+                </div>
                 <div class="grid" id="custom-velocity-dates" style="display: none;">
-                    <input type="date" id="velocity-start-date">
-                    <input type="date" id="velocity-end-date">
+                    <input type="date" id="velocity-start-date" aria-label="Velocity Start Date">
+                    <input type="date" id="velocity-end-date" aria-label="Velocity End Date">
                 </div>
             </fieldset>
 

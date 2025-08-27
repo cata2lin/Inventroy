@@ -1,12 +1,13 @@
 # crud/forecasting.py
 
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import func, case, and_, text
+from sqlalchemy import func, case, and_
 from datetime import datetime, timedelta
 import models
 
 def get_forecasting_data(
     db: Session,
+    search: str,
     lead_time: int,
     coverage_period: int,
     store_ids: list[int] = None,
@@ -62,6 +63,15 @@ def get_forecasting_data(
     ).filter(
         group_key.isnot(None)
     )
+    
+    if search:
+        search_term = f"%{search}%"
+        base_query = base_query.filter(
+            or_(
+                PrimaryProduct.title.ilike(search_term),
+                PrimaryVariant.sku.ilike(search_term)
+            )
+        )
 
     if store_ids:
         base_query = base_query.filter(models.Product.store_id.in_(store_ids))
@@ -125,12 +135,12 @@ def get_forecasting_data(
 
         active_velocity = velocity_period if use_custom_velocity and period_days > 0 else velocity_30d
         
-        days_of_stock = None
-        if active_velocity > 0 and product.total_stock is not None:
-            days_of_stock = int(product.total_stock / active_velocity) if product.total_stock > 0 else 0
+        days_of_stock = 0
+        if active_velocity > 0 and product.total_stock is not None and product.total_stock > 0:
+            days_of_stock = int(product.total_stock / active_velocity)
 
         stock_status = "slow_mover"
-        if active_velocity > 0 and days_of_stock is not None:
+        if active_velocity > 0:
             if days_of_stock < 7: stock_status = "urgent"
             elif days_of_stock < 14: stock_status = "warning"
             elif days_of_stock < 30: stock_status = "watch"

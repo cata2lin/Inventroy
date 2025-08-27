@@ -144,8 +144,22 @@ document.addEventListener('DOMContentLoaded', () => {
         if (forecastingData.length === 0) {
             tableHtml += `<tr><td colspan="${headers.length}">No products match the current filters.</td></tr>`;
         } else {
+            const today = new Date();
+            const leadTime = parseInt(state.lead_time, 10);
+            
             forecastingData.forEach(item => {
                 const statusClass = item.stock_status.replace('_', '-');
+                let reorderDateClass = '';
+                if (item.reorder_date) {
+                    const reorderDate = new Date(item.reorder_date);
+                    const diffDays = (reorderDate - today) / (1000 * 3600 * 24);
+                    if (diffDays < 0) reorderDateClass = 'status-urgent';
+                    else if (diffDays < leadTime) reorderDateClass = 'status-warning';
+                    else if (diffDays < leadTime + 7) reorderDateClass = 'status-watch';
+                    else if (diffDays < leadTime + 14) reorderDateClass = 'status-healthy-light';
+                    else reorderDateClass = 'status-healthy';
+                }
+
                 tableHtml += `
                     <tr>
                         <td>
@@ -163,7 +177,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${state.use_custom_velocity ? `<td>${item.velocity_period.toFixed(2)}</td>` : ''}
                         <td>${item.days_of_stock === null ? '0' : item.days_of_stock}</td>
                         <td><span class="status-badge status-${statusClass}">${item.stock_status.replace('_', ' ')}</span></td>
-                        <td>${item.reorder_date || 'N/A'}</td>
+                        <td class="${reorderDateClass}">${item.reorder_date || 'N/A'}</td>
                         <td>${item.reorder_qty}</td>
                     </tr>
                 `;
@@ -196,7 +210,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
 
             const populateList = (element, items, stateKey) => {
-                element.innerHTML = items.map(item => `<li><label><input type="checkbox" name="${stateKey.replace('_ids', '')}" value="${item}" ${state[stateKey].includes(item) ? 'checked' : ''}> ${item}</label></li>`).join('');
+                element.innerHTML = items.map(item => `<li><label><input type="checkbox" name="${stateKey.replace('_ids', '')}" value="${item}" ${state[stateKey] && state[stateKey].includes(item) ? 'checked' : ''}> ${item}</label></li>`).join('');
             };
             
             populateList(elements.storeFilter, data.stores, 'store_ids');
