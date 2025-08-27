@@ -30,6 +30,7 @@ def get_sales_by_product_data(
         "offset": offset,
     }
 
+    # FIX: Replaced all instances of :param with %(param)s to match psycopg2's format
     query = text("""
         WITH eligible_orders AS (
             SELECT id, store_id FROM orders
@@ -96,6 +97,7 @@ def get_inventory_for_barcode_data(db: Session, barcode: str):
     Gets the inventory breakdown for a given barcode.
     """
     params = {"barcode": barcode}
+    # FIX: Replaced :barcode with %(barcode)s
     query = text("""
         WITH group_variants AS (
             SELECT gm.group_id, pv.id AS variant_id, pv.inventory_item_id
