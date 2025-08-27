@@ -1424,3 +1424,53 @@ td.status-healthy {
   padding:0 var(--filter-pad-x) !important; font-size:var(--filter-font) !important;
   border-radius:var(--filter-radius) !important;
 }
+
+/* ==========================================================================
+   Compact Layout, Sticky Headers, and Hover Effects
+   ========================================================================== */
+
+/* 1. Row Highlighting on Hover */
+/* Applies a subtle background color change to any table row on mouseover */
+tbody tr:hover {
+  background-color: color-mix(in oklab, var(--accent), transparent 90%);
+}
+
+/* 2. Sticky Table Headers */
+/* Makes the header row of any table within a .table-wrap container sticky */
+.table-wrap thead th {
+  position: -webkit-sticky; /* For Safari compatibility */
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background-color: var(--surface-2); /* Ensures scrolling content doesn't show through */
+}
+
+/* 3. Compact Product Cell Layout */
+/* A reusable class for displaying product image and text on the same line */
+.product-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px; /* Space between image and text */
+}
+
+.product-cell img {
+  width: 40px;   /* Smaller image size */
+  height: 40px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0; /* Prevents the image from shrinking */
+}
+
+.product-cell div {
+  display: flex;
+  flex-direction: column;
+}
+
+.product-cell strong {
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.product-cell small {
+  color: var(--muted);
+}
