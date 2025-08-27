@@ -17,12 +17,13 @@ def get_forecasting_data(
     use_custom_velocity: bool = False,
     velocity_start_date: str = None,
     velocity_end_date: str = None,
-    velocity_metric: str = 'period', # 'period' or 'lifetime'
+    active_velocity_metric: str = 'velocity_30d',
 ):
     """
     Generates a forecasting report with custom velocity period support.
     """
     today = datetime.utcnow().date()
+    yesterday = today - timedelta(days=1)
     
     # Define a robust grouping key: barcode, or SKU if barcode is null/empty
     group_key = func.coalesce(
@@ -122,10 +123,10 @@ def get_forecasting_data(
 
         return sales, first_dates
 
-    sales_map_7d, _ = get_sales_and_first_date(today - timedelta(days=7), today)
-    sales_map_30d, _ = get_sales_and_first_date(today - timedelta(days=30), today)
+    sales_map_7d, _ = get_sales_and_first_date(yesterday - timedelta(days=6), yesterday)
+    sales_map_30d, _ = get_sales_and_first_date(yesterday - timedelta(days=29), yesterday)
     
-    sales_map_period = {}
+    sales_map_period, _ = {}, {}
     period_days = 0
     if use_custom_velocity and velocity_start_date and velocity_end_date:
         start = datetime.fromisoformat(velocity_start_date)
@@ -137,28 +138,28 @@ def get_forecasting_data(
 
     report = []
     for product in product_groups:
-        velocity_7d = (sales_map_7d.get(product.group_key, 0) or 0) / 7
-        velocity_30d = (sales_map_30d.get(product.group_key, 0) or 0) / 30
+        velocities = {
+            'velocity_7d': (sales_map_7d.get(product.group_key, 0) or 0) / 7,
+            'velocity_30d': (sales_map_30d.get(product.group_key, 0) or 0) / 30,
+        }
         
-        velocity_period = 0
         if use_custom_velocity and period_days > 0:
-            velocity_period = (sales_map_period.get(product.group_key, 0) or 0) / period_days
+            velocities['velocity_period'] = (sales_map_period.get(product.group_key, 0) or 0) / period_days
+        else:
+            velocities['velocity_period'] = 0
 
-        velocity_lifetime = 0
         first_sale_date = first_sale_dates_map.get(product.group_key)
         if first_sale_date:
             lifetime_days = (today - first_sale_date.date()).days + 1
             if lifetime_days > 0:
                 total_sales = lifetime_sales_map.get(product.group_key, 0) or 0
-                velocity_lifetime = total_sales / lifetime_days
-
-        active_velocity = 0
-        if velocity_metric == 'lifetime':
-            active_velocity = velocity_lifetime
-        elif use_custom_velocity and period_days > 0:
-            active_velocity = velocity_period
+                velocities['velocity_lifetime'] = total_sales / lifetime_days
+            else:
+                velocities['velocity_lifetime'] = 0
         else:
-            active_velocity = velocity_30d
+            velocities['velocity_lifetime'] = 0
+        
+        active_velocity = velocities.get(active_velocity_metric, velocities['velocity_30d'])
         
         days_of_stock = 0
         if active_velocity > 0 and product.total_stock is not None and product.total_stock > 0:
@@ -180,8 +181,8 @@ def get_forecasting_data(
 
         report.append({
             "product_title": product.product_title, "sku": product.sku, "image_url": product.image_url,
-            "total_stock": product.total_stock, "velocity_7d": velocity_7d, "velocity_30d": velocity_30d,
-            "velocity_period": velocity_period, "velocity_lifetime": velocity_lifetime,
+            "total_stock": product.total_stock,
+            **velocities,
             "days_of_stock": days_of_stock,
             "stock_status": stock_status, "reorder_date": reorder_date, "reorder_qty": reorder_qty
         })
