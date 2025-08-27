@@ -1474,3 +1474,62 @@ tbody tr:hover {
 .product-cell small {
   color: var(--muted);
 }
+
+/* ==========================================================================
+   Compact Layout, Sticky Headers, and Hover Effects (Aug 2025 Update)
+   ========================================================================== */
+
+/* 1. Row Highlighting on Hover */
+/* Applies a subtle background color change to any table row on mouseover */
+tbody tr:hover {
+  background-color: color-mix(in oklab, var(--accent), transparent 90%) !important;
+}
+
+/* 2. Sticky Table Headers */
+/* This more specific rule ensures headers in all main tables stick to the top */
+#inventory-table-container thead th,
+#forecasting-table-container thead th,
+#orders-table-container thead th,
+#bulk-update-container thead th {
+  position: -webkit-sticky; /* For Safari compatibility */
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background-color: var(--surface-2); /* Ensures scrolling content doesn't show through */
+}
+
+/* 3. Compact Product Cell Layout for Forecasting & Inventory */
+/* Targets the product cells in the specified tables to make them more compact */
+#forecasting-table-container .product-cell,
+#inventory-table-container .product-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px; /* Space between image and text */
+}
+
+#forecasting-table-container .product-cell img,
+#inventory-table-container .product-cell img {
+  width: 36px;   /* Smaller image size */
+  height: 36px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+#forecasting-table-container .product-cell div,
+#inventory-table-container .product-cell div {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3; /* Tighter line spacing for title and SKU */
+}
+
+#forecasting-table-container td, #forecasting-table-container th,
+#inventory-table-container td, #inventory-table-container th {
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+
+#forecasting-table-container tr,
+#inventory-table-container tr {
+    height: 50px; /* Enforces the row height */
+}
