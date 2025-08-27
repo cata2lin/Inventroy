@@ -167,14 +167,18 @@ def _extract_variant_fields(variant: Any, product_id: int) -> Dict[str, Any]:
             unit_cost = float(amount)
         except Exception:
             unit_cost = None
+            
+    # FIX: Treat empty strings for SKU and barcode as None (NULL in DB)
+    sku = _get(variant, "sku")
+    barcode = _get(variant, "barcode")
 
     return {
         "id": int(vid),
         "shopify_gid": _get(variant, "id"),
         "product_id": product_id,
         "title": _get(variant, "title"),
-        "sku": _get(variant, "sku"),
-        "barcode": _get(variant, "barcode"),
+        "sku": sku if sku else None,
+        "barcode": barcode if barcode else None,
         "price": _get(variant, "price"),
         "compare_at_price": _get(variant, "compareAtPrice") or _get(variant, "compare_at_price"),
         "position": _get(variant, "position"),
@@ -256,7 +260,21 @@ def create_or_update_products(
                 continue
 
             vid = v_fields["id"]
-            var = db.query(models.ProductVariant).filter(models.ProductVariant.id == vid).first()
+            sku = v_fields["sku"]
+            var = None
+
+            # FIX: Prioritize finding by unique constraint (sku, store_id) to prevent conflicts
+            if sku:
+                var = db.query(models.ProductVariant).filter(
+                    models.ProductVariant.sku == sku,
+                    models.ProductVariant.store_id == store_id
+                ).first()
+
+            # If not found by SKU, try finding by the primary key (ID)
+            if not var:
+                var = db.query(models.ProductVariant).filter(models.ProductVariant.id == vid).first()
+            
+            # If still not found, create a new one
             if not var:
                 var = models.ProductVariant(id=vid, product_id=pid, store_id=store_id)
                 db.add(var)
@@ -335,8 +353,6 @@ def create_or_update_products(
                                 last_fetched_at=now,
                             )
                         )
-    # commit controlled by caller
-
 
 # ---------- upsert from product webhook (tolerant to shapes) ----------
 
