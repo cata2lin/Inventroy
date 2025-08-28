@@ -220,7 +220,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
 
             const populateList = (element, items, stateKey) => {
-                element.innerHTML = items.map(item => `<li><label><input type="checkbox" name="${stateKey.replace('_ids', '')}" value="${item}" ${state[stateKey] && state[stateKey].includes(item) ? 'checked' : ''}> ${item}</label></li>`).join('');
+                element.innerHTML = items.map(item => `<li><label><input type="checkbox" name="${stateKey.replace(/_ids$/, '')}" value="${item}" ${state[stateKey] && state[stateKey].includes(item) ? 'checked' : ''}> ${item}</label></li>`).join('');
             };
             
             populateList(elements.storeFilter, data.stores, 'store_ids');
@@ -251,13 +251,19 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.customVelocityDates.style.display = state.use_custom_velocity ? 'grid' : 'none';
         loadForecastingData();
     });
-
-    [elements.storeFilter, elements.typeFilter, elements.statusFilter].forEach(filter => {
-        filter.addEventListener('change', () => {
-            const key = filter.id.includes('status') ? 'stock_statuses' : filter.id.replace('-list', '').replace(/-/g, '_') + '_ids';
-            state[key] = Array.from(filter.querySelectorAll('input:checked')).map(cb => cb.value);
-            loadForecastingData();
-        });
+    
+    // *** THIS IS THE CORRECTED PART ***
+    elements.storeFilter.addEventListener('change', () => {
+        state.store_ids = Array.from(elements.storeFilter.querySelectorAll('input:checked')).map(cb => cb.value);
+        loadForecastingData();
+    });
+    elements.typeFilter.addEventListener('change', () => {
+        state.product_types = Array.from(elements.typeFilter.querySelectorAll('input:checked')).map(cb => cb.value);
+        loadForecastingData();
+    });
+    elements.statusFilter.addEventListener('change', () => {
+        state.stock_statuses = Array.from(elements.statusFilter.querySelectorAll('input:checked')).map(cb => cb.value);
+        loadForecastingData();
     });
     
     elements.exportBtn.addEventListener('click', handleExport);

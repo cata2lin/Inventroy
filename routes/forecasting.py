@@ -16,19 +16,18 @@ router = APIRouter(
 
 # --- START OF FIX: Robust Parameter Parsing ---
 
-def _parse_list_str(params: Optional[List[str]] = None) -> Optional[List[str]]:
+def _parse_list_str(params: Optional[List[str]] = Query(None)) -> Optional[List[str]]:
     """
     Safely parses a list of strings from query parameters, filtering out empty or null values.
     """
     if params is None:
         return None
     
-    # Filter out empty strings that can be sent by the browser (e.g., ?product_types=)
     valid_params = [p for p in params if p and p.strip()]
     
     return valid_params if valid_params else None
 
-def _parse_store_ids(store_ids_str: Optional[List[str]] = None) -> Optional[List[int]]:
+def _parse_store_ids(store_ids_str: Optional[List[str]] = Query(None)) -> Optional[List[int]]:
     """
     Safely parses a list of strings into a list of integers, ignoring empty or invalid values.
     """
@@ -53,9 +52,9 @@ def get_forecasting_report(
     search: Optional[str] = Query(None),
     lead_time: int = 30,
     coverage_period: int = 60,
-    store_ids: Optional[List[str]] = Query(None),
-    product_types: Optional[List[str]] = Query(None),
-    stock_statuses: Optional[List[str]] = Query(None),
+    store_ids: Optional[List[int]] = Depends(_parse_store_ids),
+    product_types: Optional[List[str]] = Depends(_parse_list_str),
+    stock_statuses: Optional[List[str]] = Depends(_parse_list_str),
     reorder_start_date: Optional[str] = Query(None),
     reorder_end_date: Optional[str] = Query(None),
     use_custom_velocity: bool = Query(False),
@@ -63,19 +62,14 @@ def get_forecasting_report(
     velocity_end_date: Optional[str] = Query(None),
     active_velocity_metric: str = Query('velocity_30d')
 ):
-    # Apply robust parsing to all list parameters
-    parsed_store_ids = _parse_store_ids(store_ids)
-    parsed_product_types = _parse_list_str(product_types)
-    parsed_stock_statuses = _parse_list_str(stock_statuses)
-
     data = crud_forecasting.get_forecasting_data(
-        db, search, lead_time, coverage_period, parsed_store_ids, parsed_product_types, 
+        db, search, lead_time, coverage_period, store_ids, product_types, 
         reorder_start_date, reorder_end_date,
         use_custom_velocity, velocity_start_date, velocity_end_date,
         active_velocity_metric
     )
-    if parsed_stock_statuses:
-        data = [item for item in data if item['stock_status'] in parsed_stock_statuses]
+    if stock_statuses:
+        data = [item for item in data if item['stock_status'] in stock_statuses]
     return data
     
 @router.get("/filters")
@@ -88,9 +82,9 @@ def export_forecasting_report(
     search: Optional[str] = Query(None),
     lead_time: int = 30,
     coverage_period: int = 60,
-    store_ids: Optional[List[str]] = Query(None),
-    product_types: Optional[List[str]] = Query(None),
-    stock_statuses: Optional[List[str]] = Query(None),
+    store_ids: Optional[List[int]] = Depends(_parse_store_ids),
+    product_types: Optional[List[str]] = Depends(_parse_list_str),
+    stock_statuses: Optional[List[str]] = Depends(_parse_list_str),
     reorder_start_date: Optional[str] = Query(None),
     reorder_end_date: Optional[str] = Query(None),
     use_custom_velocity: bool = Query(False),
@@ -98,19 +92,14 @@ def export_forecasting_report(
     velocity_end_date: Optional[str] = Query(None),
     active_velocity_metric: str = Query('velocity_30d')
 ):
-    # Apply robust parsing to all list parameters
-    parsed_store_ids = _parse_store_ids(store_ids)
-    parsed_product_types = _parse_list_str(product_types)
-    parsed_stock_statuses = _parse_list_str(stock_statuses)
-
     data = crud_forecasting.get_forecasting_data(
-        db, search, lead_time, coverage_period, parsed_store_ids, parsed_product_types, 
+        db, search, lead_time, coverage_period, store_ids, product_types, 
         reorder_start_date, reorder_end_date,
         use_custom_velocity, velocity_start_date, velocity_end_date,
         active_velocity_metric
     )
-    if parsed_stock_statuses:
-        data = [item for item in data if item['stock_status'] in parsed_stock_statuses]
+    if stock_statuses:
+        data = [item for item in data if item['stock_status'] in stock_statuses]
         
     if not data:
         return Response(content="No data to export for the selected filters.", media_type="text/plain")
