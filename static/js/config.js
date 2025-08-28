@@ -31,6 +31,7 @@ const API_ENDPOINTS = {
     syncOrders: '/api/sync-control/orders',
     syncProducts: '/api/sync-control/products',
     getSyncStatus: '/api/sync-control/status',
+    reconcileStock: '/api/sync-control/reconcile-stock',
 
     // Bulk Update Endpoints
     getAllVariantsForBulkEdit: '/api/bulk-update/variants/',

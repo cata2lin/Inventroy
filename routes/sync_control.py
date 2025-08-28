@@ -13,6 +13,7 @@ except Exception:
 
 from crud import store as crud_store
 from services import product_sync_runner, order_sync_runner, sync_tracker
+from jobs import reconciliation
 
 router = APIRouter(prefix="/api/sync-control", tags=["Sync Control"])
 
@@ -176,3 +177,19 @@ def trigger_orders_sync(
         "end": end,
         "tasks": tasks,
     }
+
+@router.post("/reconcile-stock")
+def trigger_stock_reconciliation(
+    background_tasks: BackgroundTasks,
+) -> Dict[str, Any]:
+    """
+    Triggers a full stock level reconciliation across all stores for all barcode groups.
+    This is a heavy operation and should be used sparingly.
+    """
+    task_id = sync_tracker.add_task("Full Stock Reconciliation")
+    background_tasks.add_task(
+        reconciliation.run_reconciliation,
+        db_factory=SessionLocal,
+        task_id=task_id
+    )
+    return {"status": "ok", "message": "Full stock reconciliation started.", "tasks": [{"task_id": task_id}]}
