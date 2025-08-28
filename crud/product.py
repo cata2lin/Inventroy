@@ -263,7 +263,7 @@ def create_or_update_products(
             sku = v_fields["sku"]
             var = None
 
-            # FIX: Prioritize finding by unique constraint (sku, store_id) to prevent conflicts
+            # Prioritize finding by unique constraint (sku, store_id) to prevent conflicts
             if sku:
                 var = db.query(models.ProductVariant).filter(
                     models.ProductVariant.sku == sku,
@@ -275,9 +275,14 @@ def create_or_update_products(
                 var = db.query(models.ProductVariant).filter(models.ProductVariant.id == vid).first()
             
             # If still not found, create a new one
-            if not var:
+            is_new_variant = not var
+            if is_new_variant:
                 var = models.ProductVariant(id=vid, product_id=pid, store_id=store_id)
                 db.add(var)
+
+            # Only set inventory_item_id on creation
+            if is_new_variant and v_fields["inventory_item_id"] is not None:
+                var.inventory_item_id = v_fields["inventory_item_id"]
 
             var.product_id = pid
             var.store_id = store_id
@@ -292,8 +297,6 @@ def create_or_update_products(
             var.inventory_policy = _coalesce(v_fields["inventory_policy"], var.inventory_policy)
             var.fulfillment_service = _coalesce(v_fields["fulfillment_service"], var.fulfillment_service)
             var.inventory_management = _coalesce(v_fields["inventory_management"], var.inventory_management)
-            if v_fields["inventory_item_id"] is not None:
-                var.inventory_item_id = v_fields["inventory_item_id"]
             var.inventory_quantity = _coalesce(v_fields["inventory_quantity"], var.inventory_quantity)
             var.created_at = _coalesce(v_fields["created_at"], var.created_at)
             var.updated_at = _coalesce(v_fields["updated_at"], var.updated_at)
