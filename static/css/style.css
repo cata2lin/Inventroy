@@ -1810,3 +1810,23 @@ table tbody tr:hover > * {
 /* Make sure sticky header receives pointer events so hovering it also highlights */
 .sticky-thead { pointer-events: none; }
 .sticky-thead table { pointer-events: auto; }
+
+/* Targets the container for the grouped sorting controls */
+#group-sort-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px; /* Adjust spacing between elements */
+}
+
+/* Makes the 'Sort by' and 'Order' dropdowns wider */
+#group-sort-by,
+#group-sort-order {
+  min-width: 180px; /* Increased from default */
+}
+
+/* Makes the 'Apply' button smaller and more compact */
+#apply-group-sort {
+  min-width: auto; /* Allow the button to shrink */
+  padding-left: 16px;
+  padding-right: 16px;
+}
