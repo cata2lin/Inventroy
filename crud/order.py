@@ -228,22 +228,22 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
         title = _get(it, "title")
         sku = _get(it, "sku")
 
-        if pid and pid not in existing_products:
+        if pid and int(pid) not in existing_products:
             products_to_create.append({
                 "id": int(pid),
                 "store_id": store_id,
-                "title": (str(title).split(' - ')[0] if title else None),
+                "title": (str(title).split(' - ')[0] if title else "Placeholder Product"),
                 "shopify_gid": f"gid://shopify/Product/{int(pid)}",
                 "status": "active",
             })
             existing_products.add(int(pid))
 
-        if vid and vid not in existing_variants:
+        if vid and int(vid) not in existing_variants:
             variants_to_create.append({
                 "id": int(vid),
                 "product_id": int(pid) if pid else None,
                 "store_id": store_id,
-                "title": title,
+                "title": title or "Placeholder Variant",
                 "sku": sku or None,
                 "shopify_gid": f"gid://shopify/ProductVariant/{int(vid)}",
             })
@@ -252,7 +252,19 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     if products_to_create:
         upsert_batch(db, models.Product, products_to_create, ['store_id', 'id'])
     if variants_to_create:
-        upsert_batch(db, models.ProductVariant, variants_to_create, ['store_id', 'id'])
+        # Before upserting, check for existing SKUs to avoid unique constraint violations
+        skus_to_check = {v['sku'] for v in variants_to_create if v['sku']}
+        if skus_to_check:
+            existing_skus = {
+                s[0] for s in db.query(models.ProductVariant.sku).filter(
+                    models.ProductVariant.store_id == store_id,
+                    models.ProductVariant.sku.in_(skus_to_check)
+                ).all()
+            }
+            variants_to_create = [v for v in variants_to_create if not v['sku'] or v['sku'] not in existing_skus]
+        
+        if variants_to_create:
+            upsert_batch(db, models.ProductVariant, variants_to_create, ['store_id', 'id'])
 
     # Line items
     line_items_list: List[Dict[str, Any]] = []
@@ -368,7 +380,7 @@ def create_refund_from_webhook(db: Session, store_id: int, refund_data: Any):
     line_items_to_create: List[Dict[str, Any]] = []
     for item in refund_line_items:
         li_id = _get(item, "line_item_id")
-        if not li_id or li_id in existing_line_item_ids:
+        if not li_id or int(li_id) in existing_line_item_ids:
             continue
         li = _get(item, "line_item") or {}
         line_items_to_create.append({
