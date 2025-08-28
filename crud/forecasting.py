@@ -184,33 +184,27 @@ def get_forecasting_data(
             "stock_status": stock_status, "reorder_date": reorder_date, "reorder_qty": reorder_qty
         })
     
-    final_report = []
-    reorder_filter_active = reorder_start_date and reorder_end_date
-    start_filter_date = None
-    end_filter_date = None
-
-    if reorder_filter_active:
+    # --- START OF FIX ---
+    if reorder_start_date and reorder_end_date:
         try:
-            start_filter_date = datetime.strptime(reorder_start_date, '%Y-%m-%d').date()
-            end_filter_date = datetime.strptime(reorder_end_date, '%Y-%m-%d').date()
+            start_filter = datetime.strptime(reorder_start_date, '%Y-%m-%d').date()
+            end_filter = datetime.strptime(reorder_end_date, '%Y-%m-%d').date()
+            
+            filtered_report = []
+            for item in report:
+                if item['reorder_date']:
+                    try:
+                        item_date = datetime.strptime(item['reorder_date'], '%Y-%m-%d').date()
+                        if start_filter <= item_date <= end_filter:
+                            filtered_report.append(item)
+                    except (ValueError, TypeError):
+                        continue 
+            return filtered_report
         except (ValueError, TypeError):
-            reorder_filter_active = False
-
-    for item in report:
-        if reorder_filter_active:
-            if not item['reorder_date']:
-                continue 
-
-            try:
-                item_reorder_date = datetime.strptime(item['reorder_date'], '%Y-%m-%d').date()
-                if not (start_filter_date <= item_reorder_date <= end_filter_date):
-                    continue 
-            except (ValueError, TypeError):
-                continue 
-
-        final_report.append(item)
-
-    return final_report
+            return report
+            
+    return report
+    # --- END OF FIX ---
 
 def get_forecasting_filters(db: Session):
     stores = db.query(models.Store.id, models.Store.name).distinct().all()
