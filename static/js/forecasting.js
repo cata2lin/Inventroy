@@ -219,12 +219,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) throw new Error('Filter options could not be loaded.');
             const data = await response.json();
 
-            const populateList = (element, items, stateKey) => {
-                element.innerHTML = items.map(item => `<li><label><input type="checkbox" name="${stateKey.replace(/_ids$/, '')}" value="${item}" ${state[stateKey] && state[stateKey].includes(String(item)) ? 'checked' : ''}> ${item}</label></li>`).join('');
-            };
+            // Correctly handle stores with both id and name
+            elements.storeFilter.innerHTML = data.stores.map(store => `<li><label><input type="checkbox" name="store_ids" value="${store.id}" ${state.store_ids.includes(String(store.id)) ? 'checked' : ''}> ${store.name}</label></li>`).join('');
             
-            populateList(elements.storeFilter, data.stores, 'store_ids');
-            populateList(elements.typeFilter, data.product_types, 'product_types');
+            // Correctly handle product types
+            elements.typeFilter.innerHTML = data.product_types.map(pt => `<li><label><input type="checkbox" name="product_types" value="${pt}" ${state.product_types.includes(pt) ? 'checked' : ''}> ${pt}</label></li>`).join('');
 
         } catch (error) {
             console.error('Failed to load filters:', error);
@@ -234,7 +233,14 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     
     const handleExport = () => {
-        const params = new URLSearchParams(state);
+        const params = new URLSearchParams();
+        for (const [key, value] of Object.entries(state)) {
+            if (Array.isArray(value)) {
+                value.forEach(v => params.append(key, v));
+            } else if (value) {
+                params.set(key, value);
+            }
+        }
         window.location.href = `/api/forecasting/export?${params.toString()}`;
     };
 

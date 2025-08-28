@@ -196,9 +196,9 @@ def get_forecasting_data(
     return report
 
 def get_forecasting_filters(db: Session):
-    stores = db.query(models.Store.name).distinct().all()
+    stores = db.query(models.Store.id, models.Store.name).distinct().all()
     product_types = db.query(models.Product.product_type).distinct().all()
     return {
-        "stores": [s[0] for s in stores if s[0]],
+        "stores": [{"id": s.id, "name": s.name} for s in stores if s.name],
         "product_types": [pt[0] for pt in product_types if pt[0]],
     }
