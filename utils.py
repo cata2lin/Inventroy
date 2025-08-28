@@ -1,48 +1,47 @@
-# utils.py
-
-import hmac
-import hashlib
-import random
+from typing import Iterable, List, Dict, Any
 from sqlalchemy.orm import Session
-import models
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import func
 
-def verify_hmac(secret, data, hmac_header):
-    mac = hmac.new(secret.encode("utf-8"), data, hashlib.sha256).digest()
-    calc_b64 = base64.b64encode(mac).decode()
-    # accept exact base64; allow hex as legacy
-    return hmac.compare_digest(calc_b64, hmac_header) or hmac.compare_digest(mac.hex(), hmac_header)
 
-# --- ADDED: Barcode Generation Logic ---
-
-def calculate_ean13_check_digit(barcode_without_check_digit: str) -> str:
-    """Calculates the check digit for an EAN-13 barcode."""
-    if len(barcode_without_check_digit) != 12:
-        raise ValueError("Input for check digit calculation must be 12 digits long.")
-    
-    digits = [int(d) for d in barcode_without_check_digit]
-    
-    # Sum odd and even positions (1-based index)
-    odd_sum = sum(digits[0::2])
-    even_sum = sum(digits[1::2])
-    
-    total_sum = odd_sum + (even_sum * 3)
-    check_digit = (10 - (total_sum % 10)) % 10
-    
-    return str(check_digit)
-
-def generate_ean13(db: Session) -> str:
+def upsert_batch(
+    db: Session,
+    model,
+    rows: List[Dict[str, Any]],
+    conflict_cols: Iterable[str],
+    exclude_from_update: Iterable[str] | None = None,
+) -> None:
     """
-    Generates a unique, EAN-13 compliant barcode by creating a random
-    12-digit base and calculating the 13th check digit.
-    It ensures the generated barcode is unique in the database.
+    Generic Postgres upsert that:
+      - Uses COALESCE(excluded.col, table.col) so NULLs from payload never erase existing values.
+      - Never re-binds inventory_item_id if it's already set (important for FK to inventory_levels).
     """
-    while True:
-        # Using a common prefix for Romania and random numbers
-        base = '594' + ''.join([str(random.randint(0, 9)) for _ in range(9)])
-        check_digit = calculate_ean13_check_digit(base)
-        barcode = base + check_digit
-        
-        # Check for uniqueness in the database
-        exists = db.query(models.ProductVariant).filter(models.ProductVariant.barcode == barcode).first()
-        if not exists:
-            return barcode
+    if not rows:
+        return
+
+    table = model.__table__
+    stmt = pg_insert(table).values(rows)
+
+    # Build set_ dynamically based on union of provided keys
+    all_cols: set[str] = set()
+    for r in rows:
+        all_cols.update(r.keys())
+
+    excl = set(exclude_from_update or ())
+    excl.update(conflict_cols)
+
+    update_cols = {}
+    for c in all_cols:
+        if c in excl:
+            continue
+        if c in table.c:
+            update_cols[c] = func.coalesce(getattr(stmt.excluded, c), getattr(table.c, c))
+
+    # One-way bind of inventory_item_id (set only if currently NULL)
+    if "inventory_item_id" in table.c:
+        update_cols["inventory_item_id"] = func.coalesce(
+            table.c.inventory_item_id, getattr(stmt.excluded, "inventory_item_id")
+        )
+
+    stmt = stmt.on_conflict_do_update(index_elements=list(conflict_cols), set_=update_cols)
+    db.execute(stmt)
