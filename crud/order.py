@@ -1,9 +1,9 @@
 # crud/order.py
 
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
+from sqlalchemy import func, select, delete
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 import models
 import schemas
@@ -23,59 +23,103 @@ def _get(obj: Any, key: str, default=None):
 
 
 def _parse_dt(val) -> Optional[datetime]:
+    """
+    Parse ISO/Shopify timestamps and return TZ-aware UTC datetimes.
+    """
     if not val:
         return None
     if isinstance(val, datetime):
-        return val
+        return val.astimezone(timezone.utc) if val.tzinfo else val.replace(tzinfo=timezone.utc)
     try:
-        s = str(val)
+        s = str(val).strip()
+        if not s:
+            return None
         if s.endswith("Z"):
-            s = s.replace("Z", "+00:00")
-        return datetime.fromisoformat(s)
+            s = s[:-1] + "+00:00"
+        if " " in s and "T" not in s:
+            s = s.replace(" ", "T")
+        dt = datetime.fromisoformat(s)
+        return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
     except Exception:
         return None
 
 
-# ---------------- committed stock projector helper ----------------
+# ---------------- committed stock projector (IDEMPOTENT + ORDERED) ----------------
 
 def update_committed_stock_for_order(db: Session, order: models.Order):
     """
-    Recalculates and updates the committed stock counts for all barcode groups
-    affected by a given order.
+    Re-project committed stock for ONLY the barcode groups touched by this order,
+    based on ALL OPEN orders for the same store. This is idempotent and safe to
+    call on create/update/cancel/fulfill.
+
+    Open orders = order.cancelled_at IS NULL AND fulfillment_status NOT IN ('fulfilled','restocked','cancelled')
     """
-    if order.cancelled_at or order.fulfillment_status in ['fulfilled', 'restocked', 'cancelled']:
+    # 1) Which groups are impacted by THIS order?
+    impacted_group_ids = [
+        gid for (gid,) in (
+            db.query(models.GroupMembership.group_id)
+            .join(models.ProductVariant, models.ProductVariant.id == models.GroupMembership.variant_id)
+            .join(models.LineItem, models.LineItem.variant_id == models.ProductVariant.id)
+            .filter(models.LineItem.order_id == order.id)
+            .distinct()
+            .all()
+        )
+        if gid
+    ]
+    if not impacted_group_ids:
         return
 
-    line_items = (
-        db.query(models.LineItem)
-        .options(
-            joinedload(models.LineItem.variant).joinedload(models.ProductVariant.group_membership)
+    # Stable, deterministic order to reduce lock contention between concurrent workers
+    impacted_group_ids.sort()
+
+    # 2) Compute totals for those groups across ALL open orders of this store
+    OPEN_EXCLUDE = ['fulfilled', 'restocked', 'cancelled']
+
+    totals = (
+        db.query(
+            models.GroupMembership.group_id.label("group_id"),
+            func.coalesce(func.sum(models.LineItem.quantity), 0).label("committed_units"),
+            func.count(func.distinct(models.LineItem.order_id)).label("open_orders_count"),
         )
+        .join(models.ProductVariant, models.ProductVariant.id == models.GroupMembership.variant_id)
+        .join(models.LineItem, models.LineItem.variant_id == models.ProductVariant.id)
+        .join(models.Order, models.Order.id == models.LineItem.order_id)
         .filter(
-            models.LineItem.order_id == order.id,
-            models.LineItem.variant_id.isnot(None),
+            models.Order.store_id == order.store_id,
+            models.Order.cancelled_at.is_(None),
+            ~models.Order.fulfillment_status.in_(OPEN_EXCLUDE),
+            models.GroupMembership.group_id.in_(impacted_group_ids),
         )
+        .group_by(models.GroupMembership.group_id)
         .all()
     )
 
-    group_deltas: Dict[str, int] = {}
-    for item in line_items:
-        if item.variant and item.variant.group_membership:
-            group_id = item.variant.group_membership.group_id
-            group_deltas[group_id] = group_deltas.get(group_id, 0) + int(item.quantity or 0)
+    totals_map: Dict[str, Dict[str, int]] = {
+        row.group_id: {
+            "committed_units": int(row.committed_units or 0),
+            "open_orders_count": int(row.open_orders_count or 0),
+        }
+        for row in totals
+    }
 
-    for group_id, qty in group_deltas.items():
-        stmt = insert(models.CommittedStock).values(
-            group_id=group_id,
-            store_id=order.store_id,
-            committed_units=qty,
-            open_orders_count=1,
-        )
+    # 3) UPSERT exact values (replace, not add) in sorted order
+    upsert_rows: List[Dict[str, Any]] = []
+    for gid in impacted_group_ids:
+        vals = totals_map.get(gid, {"committed_units": 0, "open_orders_count": 0})
+        upsert_rows.append({
+            "group_id": gid,
+            "store_id": order.store_id,
+            "committed_units": vals["committed_units"],
+            "open_orders_count": vals["open_orders_count"],
+        })
+
+    if upsert_rows:
+        stmt = insert(models.CommittedStock).values(upsert_rows)
         stmt = stmt.on_conflict_do_update(
             index_elements=['group_id', 'store_id'],
             set_={
-                'committed_units': models.CommittedStock.committed_units + stmt.excluded.committed_units,
-                'open_orders_count': models.CommittedStock.open_orders_count + 1,
+                'committed_units': stmt.excluded.committed_units,
+                'open_orders_count': stmt.excluded.open_orders_count,
             },
         )
         db.execute(stmt)
@@ -144,11 +188,10 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     if hasattr(models.Order, "hold_reason") and hold_reason is not None:
         order_dict["hold_reason"] = hold_reason
 
-    upsert_batch(db, models.Order, [order_dict], ['id'])
+    # STORE-SCOPED UPSERT
+    upsert_batch(db, models.Order, [order_dict], ['store_id', 'id'])
 
-    products_to_create: List[Dict[str, Any]] = []
-    variants_to_create: List[Dict[str, Any]] = []
-
+    # Ensure referenced Products/Variants exist FOR THIS STORE
     line_items_src = _get(order_data, "line_items") or []
     required_variant_ids = {int(_get(it, "variant_id")) for it in line_items_src if _get(it, "variant_id")}
     required_product_ids = {int(_get(it, "product_id")) for it in line_items_src if _get(it, "product_id")}
@@ -157,12 +200,27 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
     existing_products = set()
     if required_variant_ids:
         existing_variants = {
-            v[0] for v in db.query(models.ProductVariant.id).filter(models.ProductVariant.id.in_(required_variant_ids)).all()
+            v[0]
+            for v in db.query(models.ProductVariant.id)
+            .filter(
+                models.ProductVariant.store_id == store_id,
+                models.ProductVariant.id.in_(required_variant_ids),
+            )
+            .all()
         }
     if required_product_ids:
         existing_products = {
-            p[0] for p in db.query(models.Product.id).filter(models.Product.id.in_(required_product_ids)).all()
+            p[0]
+            for p in db.query(models.Product.id)
+            .filter(
+                models.Product.store_id == store_id,
+                models.Product.id.in_(required_product_ids),
+            )
+            .all()
         }
+
+    products_to_create: List[Dict[str, Any]] = []
+    variants_to_create: List[Dict[str, Any]] = []
 
     for it in line_items_src:
         pid = _get(it, "product_id")
@@ -178,7 +236,7 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
                 "shopify_gid": f"gid://shopify/Product/{int(pid)}",
                 "status": "active",
             })
-            existing_products.add(pid)
+            existing_products.add(int(pid))
 
         if vid and vid not in existing_variants:
             variants_to_create.append({
@@ -186,16 +244,17 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
                 "product_id": int(pid) if pid else None,
                 "store_id": store_id,
                 "title": title,
-                "sku": sku,
+                "sku": sku or None,
                 "shopify_gid": f"gid://shopify/ProductVariant/{int(vid)}",
             })
-            existing_variants.add(vid)
+            existing_variants.add(int(vid))
 
     if products_to_create:
-        upsert_batch(db, models.Product, products_to_create, ['id'])
+        upsert_batch(db, models.Product, products_to_create, ['store_id', 'id'])
     if variants_to_create:
-        upsert_batch(db, models.ProductVariant, variants_to_create, ['id'])
+        upsert_batch(db, models.ProductVariant, variants_to_create, ['store_id', 'id'])
 
+    # Line items
     line_items_list: List[Dict[str, Any]] = []
     for it in line_items_src:
         li_id = _get(it, "id")
@@ -219,9 +278,9 @@ def create_or_update_order_from_webhook(db: Session, store_id: int, order_data: 
         upsert_batch(db, models.LineItem, line_items_list, ['id'])
 
     db.flush()
-    order = db.query(models.Order).filter(models.Order.id == oid).one_or_none()
-    if order:
-        update_committed_stock_for_order(db, order)
+    order_obj = db.query(models.Order).filter(models.Order.id == oid).one_or_none()
+    if order_obj:
+        update_committed_stock_for_order(db, order_obj)
 
     db.commit()
 
@@ -237,13 +296,26 @@ def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfil
     order_id = int(order_id)
 
     if not db.query(models.Order.id).filter(models.Order.id == order_id).first():
-        upsert_batch(db, models.Order, [{"id": order_id, "store_id": store_id, "name": f"#{order_id}", "shopify_gid": f"gid://shopify/Order/{order_id}"}], ['id'])
+        upsert_batch(
+            db, models.Order,
+            [{"id": order_id, "store_id": store_id, "name": f"#{order_id}", "shopify_gid": f"gid://shopify/Order/{order_id}"}],
+            ['store_id', 'id']
+        )
 
     fid = _get(fulfillment_data, "id")
     status = _get(fulfillment_data, "status")
+
+    # Support both REST (top-level fields) and GraphQL-style tracking_info list
     tracking_company = _get(fulfillment_data, "tracking_company")
     tracking_number = _get(fulfillment_data, "tracking_number")
     tracking_url = _get(fulfillment_data, "tracking_url")
+
+    ti = _get(fulfillment_data, "tracking_info") or _get(fulfillment_data, "trackingInfo") or []
+    if (not tracking_company or not tracking_number or not tracking_url) and isinstance(ti, list) and ti:
+        first = ti[0] or {}
+        tracking_company = tracking_company or _get(first, "company")
+        tracking_number = tracking_number or _get(first, "number")
+        tracking_url = tracking_url or _get(first, "url")
 
     fulfillment_dict = {
         "id": int(fid) if fid else None,
@@ -265,6 +337,9 @@ def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfil
             order_to_update.fulfillment_status = 'fulfilled'
         elif status:
             order_to_update.fulfillment_status = str(status).lower()
+        db.flush()
+        # Re-project committed stock because order fulfillment status changed
+        update_committed_stock_for_order(db, order_to_update)
         db.commit()
 
 
@@ -275,13 +350,21 @@ def create_refund_from_webhook(db: Session, store_id: int, refund_data: Any):
     order_id = int(order_id)
 
     if not db.query(models.Order.id).filter(models.Order.id == order_id).first():
-        upsert_batch(db, models.Order, [{"id": order_id, "store_id": store_id, "name": f"#{order_id}", "shopify_gid": f"gid://shopify/Order/{order_id}"}], ['id'])
+        upsert_batch(
+            db, models.Order,
+            [{"id": order_id, "store_id": store_id, "name": f"#{order_id}", "shopify_gid": f"gid://shopify/Order/{order_id}"}],
+            ['store_id', 'id']
+        )
 
     refund_line_items = _get(refund_data, "refund_line_items") or []
     required_line_item_ids = { _get(item, "line_item_id") for item in refund_line_items if _get(item, "line_item_id") }
-    existing_line_item_ids = {
-        lid for (lid,) in db.query(models.LineItem.id).filter(models.LineItem.id.in_(required_line_item_ids)).all()
-    }
+    if required_line_item_ids:
+        existing_line_item_ids = {
+            lid for (lid,) in db.query(models.LineItem.id).filter(models.LineItem.id.in_(required_line_item_ids)).all()
+        }
+    else:
+        existing_line_item_ids = set()
+
     line_items_to_create: List[Dict[str, Any]] = []
     for item in refund_line_items:
         li_id = _get(item, "line_item_id")
@@ -342,18 +425,7 @@ def create_refund_from_webhook(db: Session, store_id: int, refund_data: Any):
         if refund_line_items_list:
             upsert_batch(db, models.RefundLineItem, refund_line_items_list, ['id'])
 
-    order_to_update = db.query(models.Order).filter(models.Order.id == order_id).first()
-    if order_to_update and order_to_update.total_price is not None:
-        current_refunds = (
-            db.query(func.sum(models.Refund.total_refunded))
-            .filter(models.Refund.order_id == order_id)
-            .scalar()
-            or 0
-        )
-        if float(current_refunds) >= float(order_to_update.total_price):
-            order_to_update.financial_status = 'refunded'
-        else:
-            order_to_update.financial_status = 'partially_refunded'
+    # (Refunds don't change committed stock; skip projector)
     db.commit()
 
 
@@ -372,7 +444,11 @@ def apply_order_hold_from_webhook(db: Session, store_id: int, payload: Any, on_h
     order_id = int(order_id)
 
     if not db.query(models.Order.id).filter(models.Order.id == order_id).first():
-        upsert_batch(db, models.Order, [{"id": order_id, "store_id": store_id, "name": f"#{order_id}", "shopify_gid": f"gid://shopify/Order/{order_id}"}], ['id'])
+        upsert_batch(
+            db, models.Order,
+            [{"id": order_id, "store_id": store_id, "name": f"#{order_id}", "shopify_gid": f"gid://shopify/Order/{order_id}"}],
+            ['store_id', 'id']
+        )
 
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
@@ -389,6 +465,8 @@ def apply_order_hold_from_webhook(db: Session, store_id: int, payload: Any, on_h
         if hasattr(order, "hold_reason"):
             order.hold_reason = None
 
+    db.flush()
+    update_committed_stock_for_order(db, order)
     db.commit()
 
 
@@ -396,7 +474,8 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
     if not orders_data:
         return
 
-    all_products, all_variants, all_inventory_levels, all_locations, all_orders, all_line_items, all_fulfillments, all_fulfillment_events = [], [], [], [], [], [], [], []
+    all_products, all_variants, all_inventory_levels, all_locations = [], [], [], []
+    all_orders, all_line_items, all_fulfillments, all_fulfillment_events = [], [], [], []
     processed_product_ids, processed_variant_ids, processed_location_ids, processed_line_item_ids = set(), set(), set(), set()
     order_ids_to_process: List[int] = []
 
@@ -430,13 +509,13 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
 
                 if product and product.legacy_resource_id not in processed_product_ids:
                     processed_product_ids.add(product.legacy_resource_id)
-                    
+
                     category_name = None
                     if product.category and isinstance(product.category, dict):
                         category_name = product.category.get('name')
                     elif product.category:
                         category_name = getattr(product.category, 'name', None)
-                    
+
                     image_url = None
                     if product.featured_image and isinstance(product.featured_image, dict):
                         image_url = product.featured_image.get('url')
@@ -456,10 +535,10 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
                     inv_item = variant.inventory_item
                     all_variants.append({
                         "id": variant.legacy_resource_id, "shopify_gid": variant.id, "product_id": product.legacy_resource_id if product else None,
-                        "store_id": store_id, "title": variant.title, "price": variant.price, "sku": variant.sku,
+                        "store_id": store_id, "title": variant.title, "price": variant.price, "sku": (variant.sku or None),
                         "position": variant.position, "inventory_policy": variant.inventory_policy,
                         "compare_at_price": variant.compare_at_price, "barcode": variant.barcode,
-                        "inventory_item_id": inv_item.legacy_resource_id if inv_item else None,
+                        "inventory_item_id": (inv_item.legacy_resource_id if inv_item else None),
                         "inventory_quantity": variant.inventory_quantity, "created_at": variant.created_at,
                         "updated_at": variant.updated_at, "cost": (inv_item.unit_cost.amount if (inv_item and inv_item.unit_cost) else None),
                         "inventory_management": "shopify" if (inv_item and getattr(inv_item, "tracked", False)) else "not_tracked",
@@ -489,32 +568,45 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
             })
 
         for fulfillment in order.fulfillments:
+            # Extract tracking from tracking_info list first; fallback to top-level fields
+            ti = _get(fulfillment, "tracking_info") or _get(fulfillment, "trackingInfo") or []
+            company = number = url = None
+            if isinstance(ti, list) and ti:
+                first = ti[0] or {}
+                company = _get(first, "company")
+                number = _get(first, "number")
+                url = _get(first, "url")
+            company = company or _get(fulfillment, "tracking_company")
+            number  = number  or _get(fulfillment, "tracking_number")
+            url     = url     or _get(fulfillment, "tracking_url")
+
             all_fulfillments.append({
                 "id": fulfillment.legacy_resource_id, "shopify_gid": fulfillment.id, "order_id": order.legacy_resource_id,
                 "status": fulfillment.status, "created_at": fulfillment.created_at, "updated_at": fulfillment.updated_at,
-                "tracking_company": fulfillment.tracking_company, "tracking_number": fulfillment.tracking_number,
-                "tracking_url": str(fulfillment.tracking_url) if fulfillment.tracking_url else None,
+                "tracking_company": company, "tracking_number": number,
+                "tracking_url": str(url) if url else None,
             })
             for event in fulfillment.events:
                 event_id = gid_to_id(event.id)
                 if event_id:
                     all_fulfillment_events.append({
                         "id": event_id, "shopify_gid": event.id, "fulfillment_id": fulfillment.legacy_resource_id,
-                        "status": event.status, "happened_at": event.happened_at, 
-                        # FIX: Use event.message instead of event.description
-                        "description": event.message,
+                        "status": event.status, "happened_at": event.happened_at,
+                        "description": getattr(event, "message", None) or getattr(event, "description", None),
                     })
 
-    upsert_batch(db, models.Location, all_locations, ['id'])
-    upsert_batch(db, models.Product, all_products, ['id'])
-    upsert_batch(db, models.ProductVariant, all_variants, ['id'])
+    # STORE-SCOPED upserts where possible
+    upsert_batch(db, models.Location, all_locations, ['store_id', 'id'])
+    upsert_batch(db, models.Product, all_products, ['store_id', 'id'])
+    upsert_batch(db, models.ProductVariant, all_variants, ['store_id', 'id'])
     upsert_batch(db, models.InventoryLevel, all_inventory_levels, ['inventory_item_id', 'location_id'])
-    upsert_batch(db, models.Order, all_orders, ['id'])
+    upsert_batch(db, models.Order, all_orders, ['store_id', 'id'])
     upsert_batch(db, models.LineItem, all_line_items, ['id'])
     upsert_batch(db, models.Fulfillment, all_fulfillments, ['id'])
     upsert_batch(db, models.FulfillmentEvent, all_fulfillment_events, ['id'])
 
     db.flush()
+    # Project committed stock for affected orders (idempotent)
     print(f"Updating committed stock for {len(order_ids_to_process)} orders...")
     orders_to_update = db.query(models.Order).filter(models.Order.id.in_(order_ids_to_process)).all()
     for order_obj in orders_to_update:

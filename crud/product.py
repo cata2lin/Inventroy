@@ -1,7 +1,9 @@
 # crud/product.py
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Iterable, Tuple
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
+from sqlalchemy import select, func, delete
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import models
 
@@ -34,54 +36,43 @@ def _get(obj: Any, *path: str, default=None):
 
 
 def _to_dt(val) -> Optional[datetime]:
+    """
+    Parse Shopify/ISO timestamps and return TZ-aware UTC datetimes.
+    """
     if not val:
         return None
     if isinstance(val, datetime):
-        return val
+        return val.astimezone(timezone.utc) if val.tzinfo else val.replace(tzinfo=timezone.utc)
+    s = str(val).strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    if " " in s and "T" not in s:
+        s = s.replace(" ", "T")
     try:
-        return datetime.fromisoformat(str(val))
+        dt = datetime.fromisoformat(s)
     except Exception:
         return None
+    return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _norm_text_empty_to_none(v: Optional[str]) -> Optional[str]:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
 
 
 def _norm_barcode(b: Optional[str]) -> Optional[str]:
     if not b:
         return None
-    v = b.strip().replace(" ", "")
+    v = str(b).strip().replace(" ", "")
     return v.upper() or None
 
 
-def _coalesce(new, old):
-    return new if new is not None else old
-
-
 def _product_status_to_db(val: Optional[str]) -> Optional[str]:
-    if not val:
-        return None
-    return str(val).upper()
-
-
-def _ensure_group_for_barcode(db: Session, barcode_norm: str) -> models.BarcodeGroup:
-    grp = db.query(models.BarcodeGroup).filter(models.BarcodeGroup.id == barcode_norm).first()
-    if not grp:
-        grp = models.BarcodeGroup(id=barcode_norm, status="active", pool_available=0)
-        db.add(grp)
-        db.flush()
-    return grp
-
-
-def _ensure_membership(db: Session, variant_id: int, group_id: str) -> None:
-    exists = (
-        db.query(models.GroupMembership)
-        .filter(
-            models.GroupMembership.variant_id == variant_id,
-            models.GroupMembership.group_id == group_id,
-        )
-        .first()
-    )
-    if exists:
-        return
-    db.add(models.GroupMembership(variant_id=variant_id, group_id=group_id))
+    return str(val).upper() if val else None
 
 
 def _first_image_url(prod: Any) -> Optional[str]:
@@ -90,7 +81,8 @@ def _first_image_url(prod: Any) -> Optional[str]:
       • GraphQL: product.featuredImage.url
       • Already stored: product.image_url
       • REST webhook: product.image.src
-      • REST list: product.images[0].src
+      • REST list: product.images[0].src / .url
+      • GraphQL: product.images.edges[0].node.url
     """
     url = _get(prod, "featuredImage", "url")
     if url:
@@ -105,11 +97,16 @@ def _first_image_url(prod: Any) -> Optional[str]:
     if isinstance(images, list) and images:
         first = images[0]
         if isinstance(first, dict):
-            return first.get("src")
+            return first.get("src") or first.get("url")
+    edges = _get(prod, "images", "edges")
+    if isinstance(edges, list) and edges:
+        node = _get(edges[0], "node")
+        if isinstance(node, dict):
+            return node.get("url")
     return None
 
 
-# ---------- field extraction (handles aliases + shapes) ----------
+# ---------- field extraction ----------
 
 def _extract_product_fields(prod: Any) -> Dict[str, Any]:
     pid = (
@@ -125,8 +122,6 @@ def _extract_product_fields(prod: Any) -> Dict[str, Any]:
     if isinstance(tags_val, list):
         tags_val = ",".join(tags_val)
 
-    image_url = _first_image_url(prod)
-
     return {
         "id": int(pid),
         "shopify_gid": _get(prod, "id") or _get(prod, "shopify_gid"),
@@ -138,10 +133,10 @@ def _extract_product_fields(prod: Any) -> Dict[str, Any]:
         "created_at": _to_dt(_get(prod, "createdAt")),
         "handle": _get(prod, "handle"),
         "updated_at": _to_dt(_get(prod, "updatedAt")),
-        "published_at": _to_dt(_get(prod, "publishedAt")),
+        "published_at": _to_dt(_get(prod, "PublishedAt") or _get(prod, "publishedAt")),
         "status": _product_status_to_db(_get(prod, "status")),
         "tags": tags_val,
-        "image_url": image_url,
+        "image_url": _first_image_url(prod),
     }
 
 
@@ -167,18 +162,18 @@ def _extract_variant_fields(variant: Any, product_id: int) -> Dict[str, Any]:
             unit_cost = float(amount)
         except Exception:
             unit_cost = None
-            
-    # FIX: Treat empty strings for SKU and barcode as None (NULL in DB)
-    sku = _get(variant, "sku")
-    barcode = _get(variant, "barcode")
+
+    sku = _norm_text_empty_to_none(_get(variant, "sku"))
+    barcode = _norm_text_empty_to_none(_get(variant, "barcode"))
 
     return {
         "id": int(vid),
         "shopify_gid": _get(variant, "id"),
         "product_id": product_id,
         "title": _get(variant, "title"),
-        "sku": sku if sku else None,
-        "barcode": barcode if barcode else None,
+        "sku": sku,
+        "barcode": barcode,
+        "barcode_normalized": _norm_barcode(barcode),
         "price": _get(variant, "price"),
         "compare_at_price": _get(variant, "compareAtPrice") or _get(variant, "compare_at_price"),
         "position": _get(variant, "position"),
@@ -195,8 +190,45 @@ def _extract_variant_fields(variant: Any, product_id: int) -> Dict[str, Any]:
         "weight_unit": _get(variant, "weightUnit") or _get(variant, "weight_unit"),
         "cost_per_item": unit_cost,
         "tracked": True if _get(variant, "inventoryItem") else _get(variant, "tracked"),
-        "inventory_levels": _get(variant, "inventoryItem", "inventoryLevels"),
+        "inventory_levels": _get(variant, "inventoryItem", "inventoryLevels") or [],
     }
+
+
+# ---------- core bulk-upsert helpers (Postgres) ----------
+
+def _pg_upsert(
+    db: Session,
+    table,
+    rows: List[Dict[str, Any]],
+    conflict_cols: Iterable[str],
+    exclude_from_update: Iterable[str] = (),
+):
+    """
+    Generic ON CONFLICT upsert:
+    - Updates use COALESCE(excluded.col, table.col) so NULLs from input never clobber existing values.
+    - Special rule: inventory_item_id is only set if currently NULL.
+    """
+    if not rows:
+        return
+    # union of keys across all rows
+    all_cols = set()
+    for r in rows:
+        all_cols.update(r.keys())
+
+    stmt = pg_insert(table).values(rows)
+    excl = set(exclude_from_update) | set(conflict_cols)
+    update_cols = {}
+    for c in all_cols - excl:
+        update_cols[c] = func.coalesce(getattr(stmt.excluded, c), getattr(table.c, c))
+
+    # never rebind inventory_item_id after first set
+    if "inventory_item_id" in table.c:
+        update_cols["inventory_item_id"] = func.coalesce(
+            table.c.inventory_item_id, getattr(stmt.excluded, "inventory_item_id")
+        )
+
+    stmt = stmt.on_conflict_do_update(index_elements=list(conflict_cols), set_=update_cols)
+    db.execute(stmt)
 
 
 # ---------- upsert from full product + variants (GraphQL pagination job) ----------
@@ -207,121 +239,58 @@ def create_or_update_products(
     items: List[Any],
 ) -> None:
     """
-    Upsert products + variants from the GraphQL product fetch.
-
-    Accepts pages in either of these shapes:
-      - [{ "product": ProductModel|dict, "variants": [VariantModel|dict, ...] }, ...]
-      - [ProductModel|dict, ...]  (we'll try to read .variants if present)
+    Fast & safe multi-store sync:
+      - Products upserted by (store_id, id)
+      - Variants resolved in 4 buckets with deterministic SKU ownership:
+          A) owner-by-id -> upsert by (store_id,id)
+          B) owner-new   -> insert by (store_id,id)
+          C) non-owner existing-by-id -> upsert by (store_id,id) skipping sku update
+          D) non-owner new -> merge by (store_id,sku) (id never changes)
+      - Inventory levels upserted by (inventory_item_id, location_id)
+      - Barcode groups + memberships kept in sync
     """
     now = datetime.now(timezone.utc)
 
+    # --- Collect rows
+    prod_rows: List[Dict[str, Any]] = []
+    var_rows: List[Dict[str, Any]] = []
+    inv_level_rows: List[Dict[str, Any]] = []
+
     for bundle in items or []:
-        # Unwrap to product + variants
-        if isinstance(bundle, dict) and ("product" in bundle or "variants" in bundle):
-            p = bundle.get("product", bundle.get("Product", bundle.get("PRODUCT")))
-            vs = bundle.get("variants") or []
-        else:
-            p = bundle
-            vs = _get(bundle, "variants") or []
-            if not isinstance(vs, list):
-                vs = []
+        p = bundle.get("product", bundle) if isinstance(bundle, dict) else bundle
+        vs = _get(p, "variants") or (bundle.get("variants") if isinstance(bundle, dict) else []) or []
+        if not isinstance(vs, list):
+            vs = []
 
-        # --- product fields & upsert ---
-        fields = _extract_product_fields(p)
-        pid = fields["id"]
+        try:
+            pf = _extract_product_fields(p)
+        except Exception:
+            continue
 
-        prod = db.query(models.Product).filter(models.Product.id == pid).first()
-        if not prod:
-            prod = models.Product(id=pid, store_id=store_id)
-            db.add(prod)
+        pf["store_id"] = store_id
+        pf["last_fetched_at"] = now
+        prod_rows.append(pf)
 
-        prod.store_id = store_id
-        prod.shopify_gid = _coalesce(fields["shopify_gid"], prod.shopify_gid)
-        prod.title = _coalesce(fields["title"], prod.title)
-        prod.body_html = _coalesce(fields["body_html"], prod.body_html)
-        prod.vendor = _coalesce(fields["vendor"], prod.vendor)
-        prod.product_type = _coalesce(fields["product_type"], prod.product_type)
-        prod.product_category = _coalesce(fields["product_category"], prod.product_category)
-        prod.created_at = _coalesce(fields["created_at"], prod.created_at)
-        prod.handle = _coalesce(fields["handle"], prod.handle)
-        prod.updated_at = _coalesce(fields["updated_at"], prod.updated_at)
-        prod.published_at = _coalesce(fields["published_at"], prod.published_at)
-        prod.status = _coalesce(fields["status"], prod.status)
-        prod.tags = _coalesce(fields["tags"], prod.tags)
-        if fields["image_url"]:
-            prod.image_url = fields["image_url"]
-        prod.last_fetched_at = now
-
-        # --- variants upsert ---
         for v in vs:
             try:
-                v_fields = _extract_variant_fields(v, product_id=pid)
+                vf = _extract_variant_fields(v, product_id=pf["id"])
             except Exception:
                 continue
+            vf["store_id"] = store_id
+            vf["last_fetched_at"] = now
 
-            vid = v_fields["id"]
-            sku = v_fields["sku"]
-            var = None
+            # peel inventory levels out
+            levels = vf.pop("inventory_levels", []) or []
+            var_rows.append(vf)
 
-            # Prioritize finding by unique constraint (sku, store_id) to prevent conflicts
-            if sku:
-                var = db.query(models.ProductVariant).filter(
-                    models.ProductVariant.sku == sku,
-                    models.ProductVariant.store_id == store_id
-                ).first()
-
-            # If not found by SKU, try finding by the primary key (ID)
-            if not var:
-                var = db.query(models.ProductVariant).filter(models.ProductVariant.id == vid).first()
-            
-            # If still not found, create a new one
-            is_new_variant = not var
-            if is_new_variant:
-                var = models.ProductVariant(id=vid, product_id=pid, store_id=store_id)
-                db.add(var)
-
-            # Only set inventory_item_id on creation
-            if is_new_variant and v_fields["inventory_item_id"] is not None:
-                var.inventory_item_id = v_fields["inventory_item_id"]
-
-            var.product_id = pid
-            var.store_id = store_id
-            var.shopify_gid = _coalesce(v_fields["shopify_gid"], var.shopify_gid)
-            var.title = _coalesce(v_fields["title"], var.title)
-            var.sku = _coalesce(v_fields["sku"], var.sku)
-            var.barcode = _coalesce(v_fields["barcode"], var.barcode)
-            var.barcode_normalized = _norm_barcode(var.barcode)
-            var.price = _coalesce(v_fields["price"], var.price)
-            var.compare_at_price = _coalesce(v_fields["compare_at_price"], var.compare_at_price)
-            var.position = _coalesce(v_fields["position"], var.position)
-            var.inventory_policy = _coalesce(v_fields["inventory_policy"], var.inventory_policy)
-            var.fulfillment_service = _coalesce(v_fields["fulfillment_service"], var.fulfillment_service)
-            var.inventory_management = _coalesce(v_fields["inventory_management"], var.inventory_management)
-            var.inventory_quantity = _coalesce(v_fields["inventory_quantity"], var.inventory_quantity)
-            var.created_at = _coalesce(v_fields["created_at"], var.created_at)
-            var.updated_at = _coalesce(v_fields["updated_at"], var.updated_at)
-            var.last_fetched_at = now
-            if v_fields["cost_per_item"] is not None:
-                var.cost_per_item = v_fields["cost_per_item"]
-            if v_fields["tracked"] is not None:
-                var.tracked = bool(v_fields["tracked"])
-
-            # Ensure group membership by barcode
-            if var.barcode_normalized:
-                grp = _ensure_group_for_barcode(db, var.barcode_normalized)
-                _ensure_membership(db, var.id, grp.id)
-
-            # Optional: seed inventory level snapshots if present on the variant
-            levels = v_fields["inventory_levels"]
-            if levels:
+            if levels and vf.get("inventory_item_id") is not None:
                 for lvl in levels:
                     loc_gid = _get(lvl, "location", "id")
                     loc_legacy = gid_to_id(loc_gid) if loc_gid else None
                     if not loc_legacy:
                         continue
-                    quantities = _get(lvl, "quantities") or []
                     qmap = {}
-                    for q in quantities:
+                    for q in (_get(lvl, "quantities") or []):
                         name = _get(q, "name")
                         qty = _get(q, "quantity")
                         if name is not None and qty is not None:
@@ -331,141 +300,177 @@ def create_or_update_products(
                                 pass
                     avail = qmap.get("available")
                     on_hand = qmap.get("on_hand", avail)
+                    inv_level_rows.append({
+                        "inventory_item_id": int(vf["inventory_item_id"]),
+                        "location_id": int(loc_legacy),
+                        "available": int(avail if avail is not None else 0),
+                        "on_hand": int(on_hand if on_hand is not None else (avail or 0) or 0),
+                        "last_fetched_at": now,
+                    })
 
-                    snap = (
-                        db.query(models.InventoryLevel)
-                        .filter(
-                            models.InventoryLevel.inventory_item_id == var.inventory_item_id,
-                            models.InventoryLevel.location_id == int(loc_legacy),
-                        )
-                        .first()
-                    )
-                    if snap:
-                        if avail is not None:
-                            snap.available = avail
-                        if on_hand is not None:
-                            snap.on_hand = on_hand
-                        snap.last_fetched_at = now
-                    else:
-                        db.add(
-                            models.InventoryLevel(
-                                inventory_item_id=var.inventory_item_id,
-                                location_id=int(loc_legacy),
-                                available=avail if avail is not None else 0,
-                                on_hand=on_hand if on_hand is not None else (avail or 0) or 0,
-                                last_fetched_at=now,
-                            )
-                        )
+    # --- Upsert products by (store_id, id)
+    _pg_upsert(
+        db,
+        models.Product.__table__,
+        prod_rows,
+        conflict_cols=("store_id", "id"),
+        exclude_from_update=("store_id", "id"),
+    )
 
-# ---------- upsert from product webhook (tolerant to shapes) ----------
+    # --- Preload existing variants for this store (by id and sku)
+    incoming_ids = [v["id"] for v in var_rows]
+    incoming_skus = [v["sku"] for v in var_rows if v.get("sku")]
+
+    existing = db.execute(
+        select(models.ProductVariant.id, models.ProductVariant.sku)
+        .where(
+            models.ProductVariant.store_id == store_id,
+            (models.ProductVariant.id.in_(incoming_ids)) |
+            (models.ProductVariant.sku.in_(incoming_skus))
+        )
+    ).all()
+
+    existing_by_id = {row.id: row.sku for row in existing}
+    existing_owner_by_sku = {row.sku: row.id for row in existing if row.sku}
+
+    # --- Decide a single “owner id” for each incoming SKU (avoid in-batch collisions)
+    # Prefer an existing DB owner; otherwise pick the lowest variant id among incoming
+    sku_to_incoming_ids: Dict[str, List[int]] = {}
+    for v in var_rows:
+        s = v.get("sku")
+        if s:
+            sku_to_incoming_ids.setdefault(s, []).append(v["id"])
+
+    owner_for_sku: Dict[str, int] = {}
+    for sku, vids in sku_to_incoming_ids.items():
+        if sku in existing_owner_by_sku:
+            owner_for_sku[sku] = int(existing_owner_by_sku[sku])
+        else:
+            owner_for_sku[sku] = int(min(vids))
+
+    # --- Bucketize variants
+    upsert_by_id: List[Dict[str, Any]] = []           # owner exists-by-id
+    upsert_by_id_skip_sku: List[Dict[str, Any]] = []   # non-owner exists-by-id (avoid sku update)
+    insert_new_by_id: List[Dict[str, Any]] = []        # owner not-exist-by-id
+    upsert_by_sku: List[Dict[str, Any]] = []           # non-owner not-exist-by-id (merge by sku)
+
+    for v in var_rows:
+        vid = v["id"]
+        vsku = v.get("sku")
+        exists_by_id = vid in existing_by_id
+
+        if not vsku:
+            # No SKU -> pure id path
+            if exists_by_id:
+                upsert_by_id.append(v)
+            else:
+                insert_new_by_id.append(v)
+            continue
+
+        owner_id = owner_for_sku.get(vsku, vid)
+
+        if vid == owner_id:
+            # This row owns the SKU
+            if exists_by_id:
+                upsert_by_id.append(v)
+            else:
+                insert_new_by_id.append(v)
+        else:
+            # This row does NOT own the SKU
+            if exists_by_id:
+                upsert_by_id_skip_sku.append(v)  # keep its other fields, do NOT change sku
+            else:
+                upsert_by_sku.append(v)          # merge into owner row by (store,sku), id untouched
+
+    # --- Apply upserts in a safe order to satisfy in-batch dependencies
+    # 1) Insert new owners (by id)
+    _pg_upsert(
+        db,
+        models.ProductVariant.__table__,
+        insert_new_by_id,
+        conflict_cols=("store_id", "id"),
+        exclude_from_update=("store_id", "id"),
+    )
+
+    # 2) Merge non-owners by (store, sku) – never touch id/sku/store_id
+    _pg_upsert(
+        db,
+        models.ProductVariant.__table__,
+        upsert_by_sku,
+        conflict_cols=("store_id", "sku"),
+        exclude_from_update=("id", "store_id", "sku"),
+    )
+
+    # 3) Update existing owners by id (normal) – allow sku change unless it would collide (already handled by ownership)
+    _pg_upsert(
+        db,
+        models.ProductVariant.__table__,
+        upsert_by_id,
+        conflict_cols=("store_id", "id"),
+        exclude_from_update=("store_id", "id"),
+    )
+
+    # 4) Update existing non-owners by id but skip sku (avoid unique (store,sku))
+    _pg_upsert(
+        db,
+        models.ProductVariant.__table__,
+        upsert_by_id_skip_sku,
+        conflict_cols=("store_id", "id"),
+        exclude_from_update=("store_id", "id", "sku"),
+    )
+
+    # --- Inventory levels (inventory_item_id, location_id)
+    _pg_upsert(
+        db,
+        models.InventoryLevel.__table__,
+        inv_level_rows,
+        conflict_cols=("inventory_item_id", "location_id"),
+        exclude_from_update=("inventory_item_id", "location_id"),
+    )
+
+    # --- Barcode groups & memberships (keep in sync)
+    touched_variant_ids = [v["id"] for v in var_rows]
+    # Collect desired memberships for those variants
+    desired_members: List[Dict[str, Any]] = []
+    groups_needed: Dict[str, Dict[str, Any]] = {}
+
+    for v in var_rows:
+        bc_norm = v.get("barcode_normalized")
+        if bc_norm:
+            desired_members.append({"variant_id": v["id"], "group_id": bc_norm})
+            groups_needed[bc_norm] = {"id": bc_norm, "status": "active", "pool_available": 0}
+
+    if groups_needed:
+        db.execute(
+            pg_insert(models.BarcodeGroup.__table__)
+            .values(list(groups_needed.values()))
+            .on_conflict_do_nothing()
+        )
+
+    if touched_variant_ids:
+        db.execute(
+            delete(models.GroupMembership)
+            .where(models.GroupMembership.variant_id.in_(touched_variant_ids))
+        )
+
+    if desired_members:
+        db.execute(
+            pg_insert(models.GroupMembership.__table__)
+            .values(desired_members)
+            .on_conflict_do_nothing()
+        )
+
+    db.commit()
+
+
+# ---------- webhook: reuse the same pipeline for identical behavior ----------
 
 def create_or_update_product_from_webhook(
     db: Session,
     store_id: int,
     payload: Any,
 ) -> None:
-    now = datetime.now(timezone.utc)
-
     prod = payload.get("product") if isinstance(payload, dict) and "product" in payload else payload
-
-    pid = (
-        _get(prod, "id") if isinstance(_get(prod, "id"), int) else None
-    ) or _get(prod, "legacyResourceId") or _get(prod, "legacy_resource_id") or gid_to_id(_get(prod, "admin_graphql_api_id"))
-
-    if pid is None:
-        pid = gid_to_id(_get(prod, "id"))
-
-    if pid is None:
-        raise ValueError("Webhook product payload missing usable id.")
-
-    pid = int(pid)
-
-    db_prod = db.query(models.Product).filter(models.Product.id == pid).first()
-    if not db_prod:
-        db_prod = models.Product(id=pid, store_id=store_id)
-        db.add(db_prod)
-
-    db_prod.store_id = store_id
-    db_prod.shopify_gid = _coalesce(_get(prod, "admin_graphql_api_id") or _get(prod, "id"), db_prod.shopify_gid)
-    db_prod.title = _coalesce(_get(prod, "title"), db_prod.title)
-    db_prod.body_html = _coalesce(_get(prod, "body_html"), db_prod.body_html)
-    db_prod.vendor = _coalesce(_get(prod, "vendor"), db_prod.vendor)
-    db_prod.product_type = _coalesce(_get(prod, "product_type"), db_prod.product_type)
-    db_prod.product_category = _coalesce(_get(prod, "product_category", "name"), db_prod.product_category)
-    db_prod.created_at = _coalesce(_to_dt(_get(prod, "created_at")), db_prod.created_at)
-    db_prod.handle = _coalesce(_get(prod, "handle"), db_prod.handle)
-    db_prod.updated_at = _coalesce(_to_dt(_get(prod, "updated_at")), db_prod.updated_at)
-    db_prod.published_at = _coalesce(_to_dt(_get(prod, "published_at")), db_prod.published_at)
-    db_prod.status = _coalesce(_product_status_to_db(_get(prod, "status")), db_prod.status)
-
-    tags_val = _get(prod, "tags")
-    if isinstance(tags_val, list):
-        tags_val = ",".join(tags_val)
-    db_prod.tags = _coalesce(tags_val, db_prod.tags)
-
-    image_src = _first_image_url(prod) or _get(prod, "image", "src")
-    if image_src:
-        db_prod.image_url = image_src
-
-    db_prod.last_fetched_at = now
-
-    # Variants (if present)
-    variants = _get(prod, "variants") or []
-    if not isinstance(variants, list):
-        variants = []
-
-    for v in variants:
-        vid = _get(v, "id")
-        if vid is None:
-            vid = gid_to_id(_get(v, "admin_graphql_api_id"))
-        if vid is None:
-            continue
-        vid = int(vid)
-
-        var = db.query(models.ProductVariant).filter(models.ProductVariant.id == vid).first()
-        if not var:
-            var = models.ProductVariant(id=vid, product_id=pid, store_id=store_id)
-            db.add(var)
-
-        var.product_id = pid
-        var.store_id = store_id
-        var.shopify_gid = _coalesce(_get(v, "admin_graphql_api_id") or _get(v, "id"), var.shopify_gid)
-        var.title = _coalesce(_get(v, "title"), var.title)
-        var.price = _coalesce(_get(v, "price"), var.price)
-        var.compare_at_price = _coalesce(_get(v, "compare_at_price"), var.compare_at_price)
-        var.sku = _coalesce(_get(v, "sku"), var.sku)
-        var.position = _coalesce(_get(v, "position"), var.position)
-        var.inventory_policy = _coalesce(_get(v, "inventory_policy"), var.inventory_policy)
-        var.fulfillment_service = _coalesce(_get(v, "fulfillment_service"), var.fulfillment_service)
-        var.inventory_management = _coalesce(_get(v, "inventory_management"), var.inventory_management)
-        var.barcode = _coalesce(_get(v, "barcode"), var.barcode)
-        var.barcode_normalized = _norm_barcode(var.barcode)
-        var.weight = _coalesce(_get(v, "weight"), var.weight)
-        var.weight_unit = _coalesce(_get(v, "weight_unit"), var.weight_unit)
-
-        inv_item_id = _get(v, "inventory_item_id")
-        if inv_item_id is not None:
-            try:
-                var.inventory_item_id = int(inv_item_id)
-            except Exception:
-                pass
-
-        var.inventory_quantity = _coalesce(_get(v, "inventory_quantity"), var.inventory_quantity)
-        var.created_at = _coalesce(_to_dt(_get(v, "created_at")), var.created_at)
-        var.updated_at = _coalesce(_to_dt(_get(v, "updated_at")), var.updated_at)
-        var.last_fetched_at = now
-
-        try:
-            vc = _get(v, "cost")
-            if vc is not None:
-                var.cost_per_item = float(vc)
-        except Exception:
-            pass
-
-        tracked_flag = _get(v, "tracked")
-        if tracked_flag is not None:
-            var.tracked = bool(tracked_flag)
-
-        if var.barcode_normalized:
-            grp = _ensure_group_for_barcode(db, var.barcode_normalized)
-            _ensure_membership(db, var.id, grp.id)
+    if not prod:
+        return
+    create_or_update_products(db, store_id, items=[prod])
