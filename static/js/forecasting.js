@@ -220,7 +220,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
 
             const populateList = (element, items, stateKey) => {
-                element.innerHTML = items.map(item => `<li><label><input type="checkbox" name="${stateKey.replace(/_ids$/, '')}" value="${item}" ${state[stateKey] && state[stateKey].includes(item) ? 'checked' : ''}> ${item}</label></li>`).join('');
+                element.innerHTML = items.map(item => `<li><label><input type="checkbox" name="${stateKey.replace(/_ids$/, '')}" value="${item}" ${state[stateKey] && state[stateKey].includes(String(item)) ? 'checked' : ''}> ${item}</label></li>`).join('');
             };
             
             populateList(elements.storeFilter, data.stores, 'store_ids');
@@ -252,7 +252,6 @@ document.addEventListener('DOMContentLoaded', () => {
         loadForecastingData();
     });
     
-    // *** THIS IS THE CORRECTED PART ***
     elements.storeFilter.addEventListener('change', () => {
         state.store_ids = Array.from(elements.storeFilter.querySelectorAll('input:checked')).map(cb => cb.value);
         loadForecastingData();

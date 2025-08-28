@@ -14,47 +14,15 @@ router = APIRouter(
     tags=["Forecasting"],
 )
 
-# --- START OF FIX: Robust Parameter Parsing ---
-
-def _parse_list_str(params: Optional[List[str]] = Query(None)) -> Optional[List[str]]:
-    """
-    Safely parses a list of strings from query parameters, filtering out empty or null values.
-    """
-    if params is None:
-        return None
-    
-    valid_params = [p for p in params if p and p.strip()]
-    
-    return valid_params if valid_params else None
-
-def _parse_store_ids(store_ids_str: Optional[List[str]] = Query(None)) -> Optional[List[int]]:
-    """
-    Safely parses a list of strings into a list of integers, ignoring empty or invalid values.
-    """
-    if store_ids_str is None:
-        return None
-    
-    parsed_ids = []
-    for s_id in store_ids_str:
-        try:
-            if s_id and s_id.strip():
-                parsed_ids.append(int(s_id))
-        except (ValueError, TypeError):
-            continue
-    return parsed_ids if parsed_ids else None
-
-# --- END OF FIX ---
-
-
 @router.get("/report")
 def get_forecasting_report(
     db: Session = Depends(get_db),
     search: Optional[str] = Query(None),
     lead_time: int = 30,
     coverage_period: int = 60,
-    store_ids: Optional[List[int]] = Depends(_parse_store_ids),
-    product_types: Optional[List[str]] = Depends(_parse_list_str),
-    stock_statuses: Optional[List[str]] = Depends(_parse_list_str),
+    store_ids: Optional[List[int]] = Query(None),
+    product_types: Optional[List[str]] = Query(None),
+    stock_statuses: Optional[List[str]] = Query(None),
     reorder_start_date: Optional[str] = Query(None),
     reorder_end_date: Optional[str] = Query(None),
     use_custom_velocity: bool = Query(False),
@@ -82,9 +50,9 @@ def export_forecasting_report(
     search: Optional[str] = Query(None),
     lead_time: int = 30,
     coverage_period: int = 60,
-    store_ids: Optional[List[int]] = Depends(_parse_store_ids),
-    product_types: Optional[List[str]] = Depends(_parse_list_str),
-    stock_statuses: Optional[List[str]] = Depends(_parse_list_str),
+    store_ids: Optional[List[int]] = Query(None),
+    product_types: Optional[List[str]] = Query(None),
+    stock_statuses: Optional[List[str]] = Query(None),
     reorder_start_date: Optional[str] = Query(None),
     reorder_end_date: Optional[str] = Query(None),
     use_custom_velocity: bool = Query(False),
