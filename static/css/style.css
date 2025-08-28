@@ -1754,7 +1754,7 @@ thead th :where(button, a, input, select) {
   --col-hover-outline: color-mix(in oklab, var(--accent, #4ea1ff) 45%, transparent);
 }
 
-/* Row highlight */
+/* Row highlights */
 table tbody tr:hover > * {
   background: var(--row-hover-bg);
 }
