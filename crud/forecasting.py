@@ -184,7 +184,6 @@ def get_forecasting_data(
             "stock_status": stock_status, "reorder_date": reorder_date, "reorder_qty": reorder_qty
         })
     
-    # --- START OF FIX ---
     final_report = []
     reorder_filter_active = reorder_start_date and reorder_end_date
     start_filter_date = None
@@ -212,7 +211,6 @@ def get_forecasting_data(
         final_report.append(item)
 
     return final_report
-    # --- END OF FIX ---
 
 def get_forecasting_filters(db: Session):
     stores = db.query(models.Store.id, models.Store.name).distinct().all()

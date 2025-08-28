@@ -219,10 +219,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) throw new Error('Filter options could not be loaded.');
             const data = await response.json();
 
-            // Correctly handle stores with both id and name
             elements.storeFilter.innerHTML = data.stores.map(store => `<li><label><input type="checkbox" name="store_ids" value="${store.id}" ${state.store_ids.includes(String(store.id)) ? 'checked' : ''}> ${store.name}</label></li>`).join('');
             
-            // Correctly handle product types
             elements.typeFilter.innerHTML = data.product_types.map(pt => `<li><label><input type="checkbox" name="product_types" value="${pt}" ${state.product_types.includes(pt) ? 'checked' : ''}> ${pt}</label></li>`).join('');
 
         } catch (error) {
@@ -244,13 +242,26 @@ document.addEventListener('DOMContentLoaded', () => {
         window.location.href = `/api/forecasting/export?${params.toString()}`;
     };
 
-    // Event Listeners
-    [elements.searchInput, elements.leadTime, elements.coveragePeriod, elements.reorderDateStart, elements.reorderDateEnd, elements.velocityStartDate, elements.velocityEndDate, elements.activeVelocityMetric].forEach(input => {
-        input.addEventListener('input', debounce(() => {
+    // --- START OF FIX ---
+    elements.searchInput.addEventListener('input', debounce(() => {
+        state.search = elements.searchInput.value;
+        loadForecastingData();
+    }, 400));
+    
+    [elements.leadTime, elements.coveragePeriod, elements.activeVelocityMetric].forEach(input => {
+        input.addEventListener('change', () => {
             state[input.id.replace(/-/g, '_')] = input.value;
             loadForecastingData();
-        }, 400));
+        });
     });
+
+    [elements.reorderDateStart, elements.reorderDateEnd, elements.velocityStartDate, elements.velocityEndDate].forEach(dateInput => {
+        dateInput.addEventListener('change', () => {
+            state[dateInput.id.replace(/-/g, '_')] = dateInput.value;
+            loadForecastingData();
+        });
+    });
+    // --- END OF FIX ---
 
     elements.useCustomVelocity.addEventListener('change', () => {
         state.use_custom_velocity = elements.useCustomVelocity.checked;
