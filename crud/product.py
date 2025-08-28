@@ -418,6 +418,9 @@ def create_or_update_products(
         conflict_cols=("store_id", "id"),
         exclude_from_update=("store_id", "id", "sku"),
     )
+    
+    # *** FIX: Commit variants before inserting inventory levels ***
+    db.commit()
 
     # --- Inventory levels (inventory_item_id, location_id)
     _pg_upsert(
