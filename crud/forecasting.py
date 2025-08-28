@@ -1,7 +1,7 @@
 # crud/forecasting.py
 
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import func, case, and_
+from sqlalchemy import func, case, and_, or_
 from datetime import datetime, timedelta
 import models
 

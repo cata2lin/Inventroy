@@ -333,8 +333,7 @@ def create_or_update_products(
     existing_by_id = {row.id: row.sku for row in existing}
     existing_owner_by_sku = {row.sku: row.id for row in existing if row.sku}
 
-    # --- Decide a single “owner id” for each incoming SKU (avoid in-batch collisions)
-    # Prefer an existing DB owner; otherwise pick the lowest variant id among incoming
+    # --- Decide a single “owner id” for each incoming SKU
     sku_to_incoming_ids: Dict[str, List[int]] = {}
     for v in var_rows:
         s = v.get("sku")
@@ -349,10 +348,10 @@ def create_or_update_products(
             owner_for_sku[sku] = int(min(vids))
 
     # --- Bucketize variants
-    upsert_by_id: List[Dict[str, Any]] = []           # owner exists-by-id
-    upsert_by_id_skip_sku: List[Dict[str, Any]] = []   # non-owner exists-by-id (avoid sku update)
-    insert_new_by_id: List[Dict[str, Any]] = []        # owner not-exist-by-id
-    upsert_by_sku: List[Dict[str, Any]] = []           # non-owner not-exist-by-id (merge by sku)
+    upsert_by_id: List[Dict[str, Any]] = []
+    upsert_by_id_skip_sku: List[Dict[str, Any]] = []
+    insert_new_by_id: List[Dict[str, Any]] = []
+    upsert_by_sku: List[Dict[str, Any]] = []
 
     for v in var_rows:
         vid = v["id"]
@@ -360,7 +359,6 @@ def create_or_update_products(
         exists_by_id = vid in existing_by_id
 
         if not vsku:
-            # No SKU -> pure id path
             if exists_by_id:
                 upsert_by_id.append(v)
             else:
@@ -370,20 +368,17 @@ def create_or_update_products(
         owner_id = owner_for_sku.get(vsku, vid)
 
         if vid == owner_id:
-            # This row owns the SKU
             if exists_by_id:
                 upsert_by_id.append(v)
             else:
                 insert_new_by_id.append(v)
         else:
-            # This row does NOT own the SKU
             if exists_by_id:
-                upsert_by_id_skip_sku.append(v)  # keep its other fields, do NOT change sku
+                upsert_by_id_skip_sku.append(v)
             else:
-                upsert_by_sku.append(v)          # merge into owner row by (store,sku), id untouched
+                upsert_by_sku.append(v)
 
-    # --- Apply upserts in a safe order to satisfy in-batch dependencies
-    # 1) Insert new owners (by id)
+    # --- Apply upserts in a safe order
     _pg_upsert(
         db,
         models.ProductVariant.__table__,
@@ -391,8 +386,6 @@ def create_or_update_products(
         conflict_cols=("store_id", "id"),
         exclude_from_update=("store_id", "id"),
     )
-
-    # 2) Merge non-owners by (store, sku) – never touch id/sku/store_id
     _pg_upsert(
         db,
         models.ProductVariant.__table__,
@@ -400,8 +393,6 @@ def create_or_update_products(
         conflict_cols=("store_id", "sku"),
         exclude_from_update=("id", "store_id", "sku"),
     )
-
-    # 3) Update existing owners by id (normal) – allow sku change unless it would collide (already handled by ownership)
     _pg_upsert(
         db,
         models.ProductVariant.__table__,
@@ -409,8 +400,6 @@ def create_or_update_products(
         conflict_cols=("store_id", "id"),
         exclude_from_update=("store_id", "id"),
     )
-
-    # 4) Update existing non-owners by id but skip sku (avoid unique (store,sku))
     _pg_upsert(
         db,
         models.ProductVariant.__table__,
@@ -419,10 +408,13 @@ def create_or_update_products(
         exclude_from_update=("store_id", "id", "sku"),
     )
     
-    # *** FIX: Commit variants before inserting inventory levels ***
+    # =================================================================
+    # THIS IS THE FIX: Commit the transaction to save the variants
+    # before attempting to insert inventory levels that depend on them.
+    # =================================================================
     db.commit()
 
-    # --- Inventory levels (inventory_item_id, location_id)
+    # --- Now it's safe to upsert Inventory levels ---
     _pg_upsert(
         db,
         models.InventoryLevel.__table__,
@@ -431,9 +423,8 @@ def create_or_update_products(
         exclude_from_update=("inventory_item_id", "location_id"),
     )
 
-    # --- Barcode groups & memberships (keep in sync)
+    # --- Barcode groups & memberships ---
     touched_variant_ids = [v["id"] for v in var_rows]
-    # Collect desired memberships for those variants
     desired_members: List[Dict[str, Any]] = []
     groups_needed: Dict[str, Dict[str, Any]] = {}
 
