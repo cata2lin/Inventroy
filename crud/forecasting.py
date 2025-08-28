@@ -25,13 +25,11 @@ def get_forecasting_data(
     today = datetime.utcnow().date()
     yesterday = today - timedelta(days=1)
     
-    # Define a robust grouping key: barcode, or SKU if barcode is null/empty
     group_key = func.coalesce(
         func.nullif(models.ProductVariant.barcode, ''),
         models.ProductVariant.sku
     ).label("group_key")
 
-    # Subquery to find the primary variant for each group
     RowNumber = func.row_number().over(
         partition_by=group_key,
         order_by=[models.ProductVariant.is_primary_variant.desc(), models.ProductVariant.id.asc()]
@@ -45,7 +43,6 @@ def get_forecasting_data(
     PrimaryVariant = aliased(models.ProductVariant)
     PrimaryProduct = aliased(models.Product)
 
-    # Base query to get stock and primary product info
     base_query = db.query(
         group_key,
         func.min(models.ProductVariant.inventory_quantity).label('total_stock'),
@@ -187,13 +184,35 @@ def get_forecasting_data(
             "stock_status": stock_status, "reorder_date": reorder_date, "reorder_qty": reorder_qty
         })
     
-    if reorder_start_date and reorder_end_date:
-        report = [
-            item for item in report 
-            if item['reorder_date'] and reorder_start_date <= item['reorder_date'] <= reorder_end_date
-        ]
-        
-    return report
+    # --- START OF FIX ---
+    final_report = []
+    reorder_filter_active = reorder_start_date and reorder_end_date
+    start_filter_date = None
+    end_filter_date = None
+
+    if reorder_filter_active:
+        try:
+            start_filter_date = datetime.strptime(reorder_start_date, '%Y-%m-%d').date()
+            end_filter_date = datetime.strptime(reorder_end_date, '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            reorder_filter_active = False
+
+    for item in report:
+        if reorder_filter_active:
+            if not item['reorder_date']:
+                continue 
+
+            try:
+                item_reorder_date = datetime.strptime(item['reorder_date'], '%Y-%m-%d').date()
+                if not (start_filter_date <= item_reorder_date <= end_filter_date):
+                    continue 
+            except (ValueError, TypeError):
+                continue 
+
+        final_report.append(item)
+
+    return final_report
+    # --- END OF FIX ---
 
 def get_forecasting_filters(db: Session):
     stores = db.query(models.Store.id, models.Store.name).distinct().all()
