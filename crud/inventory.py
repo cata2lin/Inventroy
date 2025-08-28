@@ -21,11 +21,12 @@ def get_inventory_report(
     # 1. Subquery to calculate committed stock for each SKU
     committed_sq = db.query(
         models.LineItem.sku,
+        models.Order.store_id,
         func.sum(models.LineItem.quantity).label("committed")
     ).join(models.Order).filter(
         models.Order.fulfillment_status.in_(['unfulfilled', 'partially_fulfilled', 'scheduled']),
         models.Order.cancelled_at.is_(None)
-    ).group_by(models.LineItem.sku).subquery('committed_sq')
+    ).group_by(models.LineItem.sku, models.Order.store_id).subquery('committed_sq')
 
     # 2. Base query for all variants, joining with products and committed stock
     base_query = db.query(
@@ -35,7 +36,9 @@ def get_inventory_report(
     ).join(
         models.Product, models.ProductVariant.product_id == models.Product.id
     ).outerjoin(
-        committed_sq, models.ProductVariant.sku == committed_sq.c.sku
+        committed_sq, 
+        (models.ProductVariant.sku == committed_sq.c.sku) & 
+        (models.Product.store_id == committed_sq.c.store_id)
     )
 
     # 3. Apply search filter if provided
@@ -126,7 +129,7 @@ def get_inventory_report(
         PrimaryVariant = aliased(models.ProductVariant)
 
         # Main aggregation query
-        on_hand_agg = func.max(models.ProductVariant.inventory_quantity).label("on_hand")
+        on_hand_agg = func.min(models.ProductVariant.inventory_quantity).label("on_hand")
         committed_agg = func.sum(func.coalesce(committed_sq.c.committed, 0)).label("committed")
 
         agg_query = query_base.join(

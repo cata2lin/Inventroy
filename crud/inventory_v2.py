@@ -127,7 +127,7 @@ def get_inventory_report(
         
         grouped_data_sq = query_base.group_by(models.ProductVariant.barcode).with_entities(
             models.ProductVariant.barcode.label("barcode"),
-            func.max(on_hand_col).label("on_hand"),
+            func.min(on_hand_col).label("on_hand"),
             func.sum(func.coalesce(committed_sq.c.committed, 0)).label("committed"),
             func.json_agg(func.json_build_object('variant_id', models.ProductVariant.id, 'sku', models.ProductVariant.sku, 'store_name', models.Store.name, 'status', models.Product.status, 'is_primary', models.ProductVariant.is_primary_variant)).label("variants_json")
         ).subquery('grouped_data_sq')
