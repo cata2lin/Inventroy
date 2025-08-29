@@ -56,11 +56,14 @@ def update_committed_stock_for_order(db: Session, order: models.Order):
     Open orders = order.cancelled_at IS NULL AND fulfillment_status NOT IN ('fulfilled','restocked','cancelled')
     """
     # 1) Which groups are impacted by THIS order?
+    # FIX: The query needs to properly join the tables to avoid the UndefinedTable error.
     impacted_group_ids = [
         gid for (gid,) in (
             db.query(models.GroupMembership.group_id)
-            .join(models.ProductVariant, models.ProductVariant.id == models.GroupMembership.variant_id)
+            .select_from(models.Order)
             .join(models.LineItem, models.LineItem.order_id == models.Order.id)
+            .join(models.ProductVariant, models.ProductVariant.id == models.LineItem.variant_id)
+            .join(models.GroupMembership, models.GroupMembership.variant_id == models.ProductVariant.id)
             .filter(models.Order.id == order.id)
             .distinct()
             .all()
@@ -483,7 +486,6 @@ def apply_order_hold_from_webhook(db: Session, store_id: int, payload: Any, on_h
     db.flush()
     update_committed_stock_for_order(db, order)
     db.commit()
-
 
 # FIX: Refactor this function to use the more robust create_or_update_products from crud/product.py
 def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder], store_id: int):
