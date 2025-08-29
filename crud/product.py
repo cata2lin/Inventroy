@@ -91,9 +91,6 @@ def _first_image_url(prod: Any) -> Optional[str]:
     url = _get(prod, "image_url")
     if url:
         return url
-    url = _get(prod, "image", "src")
-    if url:
-        return url
     images = _get(prod, "images")
     if isinstance(images, list) and images:
         first = images[0]
@@ -211,12 +208,24 @@ def _pg_upsert(
     """
     if not rows:
         return
+
+    # FIX: Deduplicate rows by the conflict key to prevent CardinalityViolation
+    unique_rows: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    for row in rows:
+        key = tuple(row.get(col) for col in conflict_cols)
+        unique_rows[key] = row
+    
+    deduplicated_rows = list(unique_rows.values())
+
+    if not deduplicated_rows:
+        return
+
     # union of keys across all rows
     all_cols = set()
-    for r in rows:
+    for r in deduplicated_rows:
         all_cols.update(r.keys())
 
-    stmt = pg_insert(table).values(rows)
+    stmt = pg_insert(table).values(deduplicated_rows)
     excl = set(exclude_from_update) | set(conflict_cols)
     update_cols = {}
     for c in all_cols - excl:
