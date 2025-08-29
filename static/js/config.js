@@ -32,6 +32,8 @@ const API_ENDPOINTS = {
     syncProducts: '/api/sync-control/products',
     getSyncStatus: '/api/sync-control/status',
     reconcileStock: '/api/sync-control/reconcile-stock',
+    // FIX: Add the missing endpoint for the optimistic inventory sync
+    syncAllInventoryMax: '/api/sync-control/sync-all-inventory-max',
 
     // Bulk Update Endpoints
     getAllVariantsForBulkEdit: '/api/bulk-update/variants/',
