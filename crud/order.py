@@ -10,7 +10,11 @@ import schemas
 from shopify_service import gid_to_id
 from .utils import upsert_batch
 from sqlalchemy.dialects.postgresql import insert
+# FIX: Import the advisory lock helper from the inventory sync service
 from services.inventory_sync_service import _acquire_lock
+
+# FIX: Import the product crud functions needed by this file
+from crud import product as crud_product
 
 
 # ---------------- helpers (dict/attr-safe) ----------------
@@ -328,7 +332,7 @@ def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfil
     tracking_number = _get(fulfillment_data, "tracking_number")
     tracking_url = _get(fulfillment_data, "tracking_url")
 
-    ti = _get(fulfillment_data, "tracking_info") or _get(fulfillment_data, "trackingInfo") or []
+    ti = _get(fulfillment_data, "tracking_info") or _get(fulfillment, "trackingInfo") or []
     if (not tracking_company or not tracking_number or not tracking_url) and isinstance(ti, list) and ti:
         first = ti[0] or {}
         tracking_company = tracking_company or _get(first, "company")
@@ -486,6 +490,7 @@ def apply_order_hold_from_webhook(db: Session, store_id: int, payload: Any, on_h
     db.flush()
     update_committed_stock_for_order(db, order)
     db.commit()
+
 
 # FIX: Refactor this function to use the more robust create_or_update_products from crud/product.py
 def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder], store_id: int):
