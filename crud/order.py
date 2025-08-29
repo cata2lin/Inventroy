@@ -10,11 +10,7 @@ import schemas
 from shopify_service import gid_to_id
 from .utils import upsert_batch
 from sqlalchemy.dialects.postgresql import insert
-# FIX: Import the advisory lock helper from the inventory sync service
 from services.inventory_sync_service import _acquire_lock
-
-# FIX: Import the product crud functions
-from crud import product as crud_product
 
 
 # ---------------- helpers (dict/attr-safe) ----------------
@@ -80,7 +76,7 @@ def update_committed_stock_for_order(db: Session, order: models.Order):
     # 2) Compute totals for those groups across ALL open orders of this store
     OPEN_EXCLUDE = ['fulfilled', 'restocked', 'cancelled']
 
-    # FIX: Correct the query to explicitly join all necessary tables
+    # FIX: Correct the query to explicitly start from the orders table and add a join to line_items.
     totals = (
         db.query(
             models.GroupMembership.group_id.label("group_id"),
@@ -487,6 +483,7 @@ def apply_order_hold_from_webhook(db: Session, store_id: int, payload: Any, on_h
     db.flush()
     update_committed_stock_for_order(db, order)
     db.commit()
+
 
 # FIX: Refactor this function to use the more robust create_or_update_products from crud/product.py
 def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder], store_id: int):

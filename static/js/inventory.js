@@ -44,6 +44,15 @@ document.addEventListener('DOMContentLoaded', () => {
     return res.json();
   };
 
+  // FIX: New helper function to format currency for consistent display
+  const formatCurrency = (value) => {
+    if (value === null || isNaN(value)) return 'N/A';
+    return Number(value).toLocaleString('ro-RO', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  };
+
   // Parse existing query to support back/forward navigation and deep links
   const urlParams = new URLSearchParams(window.location.search);
 
@@ -146,7 +155,8 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   const renderMetrics = (data) => {
-    const fmtCurrency = (v) => (v || 0).toLocaleString('ro-RO', { maximumFractionDigits: 2 }) + ' RON';
+    // FIX: Re-implement the currency formatter here for consistency
+    const fmtCurrency = (v) => formatCurrency(v) + ' RON';
     elements.metrics.innerHTML = `
       <div class="metric"><h4>${fmtCurrency(data.total_retail_value)}</h4><p>Total Retail Value</p></div>
       <div class="metric"><h4>${fmtCurrency(data.total_inventory_value)}</h4><p>Total Inventory Value</p></div>
@@ -205,8 +215,8 @@ document.addEventListener('DOMContentLoaded', () => {
           <td>${onHand}</td>
           <td>${item.committed || 0}</td>
           <td>${item.available || 0}</td>
-          <td>${Number(retailValue).toFixed(2)}</td>
-          <td>${Number(invValue).toFixed(2)}</td>
+          <td>${formatCurrency(retailValue)}</td>
+          <td>${formatCurrency(invValue)}</td>
         </tr>`;
     });
 
@@ -271,11 +281,11 @@ document.addEventListener('DOMContentLoaded', () => {
                   <span class="label">Total stock</span>
                 </div>
                 <div class="metric-pill" title="Available × Price" style="display:flex;flex-direction:column;align-items:center;min-width:110px;">
-                  <span class="value" style="font-weight:700">${retailValue.toFixed(2)}</span>
+                  <span class="value" style="font-weight:700">${formatCurrency(retailValue)}</span>
                   <span class="label">Retail value</span>
                 </div>
                 <div class="metric-pill" title="Available × Cost" style="display:flex;flex-direction:column;align-items:center;min-width:110px;">
-                  <span class="value" style="font-weight:700">${invValue.toFixed(2)}</span>
+                  <span class="value" style="font-weight:700">${formatCurrency(invValue)}</span>
                   <span class="label">Inv. value</span>
                 </div>
               </div>
