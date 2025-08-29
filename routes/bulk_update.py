@@ -6,11 +6,13 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import pandas as pd
 import re # Import the regular expression module
+import uuid
 
-from database import get_db
+from database import get_db, SessionLocal
 from crud import bulk_update as crud_bulk_update, store as crud_store
 from product_service import ProductService
 from utils import generate_ean13
+from services import inventory_sync_service
 
 router = APIRouter(
     prefix="/api/bulk-update",
@@ -218,6 +220,16 @@ def process_bulk_updates(payload: BulkUpdatePayload, db: Session = Depends(get_d
                         delta = on_hand_val - current_on_hand
                         if delta != 0:
                             service.inventory_adjust_quantities(inventory_item_gid, location_gid, delta)
+                            
+                # FIX: After a successful write to Shopify, manually trigger the sync loop
+                if variant_db.inventory_item_id and store.shopify_url and store.sync_location_id:
+                    inventory_sync_service.process_inventory_update_event(
+                        shop_domain=store.shopify_url,
+                        event_id=str(uuid.uuid4()), # Use a new UUID to prevent idempotent checks
+                        inventory_item_id=variant_db.inventory_item_id,
+                        location_id=store.sync_location_id,
+                        db_factory=SessionLocal # Pass the factory to create a new session
+                    )
 
                 crud_bulk_update.update_local_variant(db, update_data.variant_id, {**product_changes, **changes, **inventory_changes})
                 results["success"].append(f"Successfully updated variant ID {update_data.variant_id}")
