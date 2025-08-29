@@ -58,8 +58,9 @@ def _ensure_attrs_compat(order_obj: schemas.ShopifyOrder, store_currency: Option
             pass
     _set_if_missing(order_obj, "cancelled_at", ["cancelledAt", "canceledAt"])
 
-    _set_if_missing(order_obj, "financial_status", ["financialStatus"])
-    _set_if_missing(order_obj, "fulfillment_status", ["fulfillmentStatus"])
+    _set_if_missing(order_obj, "financial_status", ["displayFinancialStatus", "financialStatus"])
+    _set_if_missing(order_obj, "fulfillment_status", ["displayFulfillmentStatus", "fulfillmentStatus"])
+
 
     if not hasattr(order_obj, "currency"):
         fallback = None
@@ -70,7 +71,7 @@ def _ensure_attrs_compat(order_obj: schemas.ShopifyOrder, store_currency: Option
         elif store_currency:
             fallback = store_currency
         try:
-            setattr(obj, target, fallback)
+            setattr(order_obj, "currency", fallback)
         except Exception:
             pass
 

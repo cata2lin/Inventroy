@@ -332,7 +332,7 @@ def create_or_update_fulfillment_from_webhook(db: Session, store_id: int, fulfil
     tracking_number = _get(fulfillment_data, "tracking_number")
     tracking_url = _get(fulfillment_data, "tracking_url")
 
-    ti = _get(fulfillment_data, "tracking_info") or _get(fulfillment, "trackingInfo") or []
+    ti = _get(fulfillment_data, "tracking_info") or _get(fulfillment_data, "trackingInfo") or []
     if (not tracking_company or not tracking_number or not tracking_url) and isinstance(ti, list) and ti:
         first = ti[0] or {}
         tracking_company = tracking_company or _get(first, "company")
