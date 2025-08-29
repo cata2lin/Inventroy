@@ -18,7 +18,8 @@ from jobs.daily_snapshot import run_daily_inventory_snapshot
 # END OF ADDED IMPORTS
 
 # NEW IMPORTS FOR LOGIN MIDDLEWARE
-import jwt
+# FIX: Import encode and decode from jose.jwt, not the top-level 'jwt' module
+from jose import jwt, JOSEError
 from datetime import datetime, timedelta
 from typing import Optional
 from sqlalchemy.orm import Session
@@ -82,6 +83,7 @@ async def login(response: Response, username: str = Form(...), password: str = F
         "sub": user.username,
         "exp": datetime.utcnow() + timedelta(days=1)
     }
+    # FIX: Use jose.jwt.encode and jose.jwt.decode
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
     
     response.set_cookie(key="access_token", value=token, httponly=True, samesite="lax", max_age=86400, secure=True)
@@ -91,7 +93,7 @@ async def login(response: Response, username: str = Form(...), password: str = F
 @app.middleware("http")
 async def add_login_middleware(request: Request, call_next):
     # Public paths that don't require authentication
-    public_paths = ["/login", "/static/", "/api/webhooks/"]
+    public_paths = ["/login", "/static/", "/api/webhooks/", "/login_page"]
     
     # Check if the request path starts with any public path
     is_public = any(request.url.path.startswith(path) for path in public_paths)
@@ -101,11 +103,11 @@ async def add_login_middleware(request: Request, call_next):
         if not token:
             return RedirectResponse(url="/login_page")
         try:
+            # FIX: Use jose.jwt.decode and handle the correct exception type
             payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
             request.state.user = payload.get("sub")
-        except jwt.ExpiredSignatureError:
-            return RedirectResponse(url="/login_page")
-        except jwt.InvalidTokenError:
+        except JOSEError:
+            # Catch all JWT-related errors (including ExpiredSignatureError)
             return RedirectResponse(url="/login_page")
 
     response = await call_next(request)
