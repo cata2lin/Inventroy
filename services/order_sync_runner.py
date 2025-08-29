@@ -61,7 +61,6 @@ def _ensure_attrs_compat(order_obj: schemas.ShopifyOrder, store_currency: Option
     _set_if_missing(order_obj, "financial_status", ["displayFinancialStatus", "financialStatus"])
     _set_if_missing(order_obj, "fulfillment_status", ["displayFulfillmentStatus", "fulfillmentStatus"])
 
-
     if not hasattr(order_obj, "currency"):
         fallback = None
         if hasattr(order_obj, "currencyCode"):
@@ -71,7 +70,7 @@ def _ensure_attrs_compat(order_obj: schemas.ShopifyOrder, store_currency: Option
         elif store_currency:
             fallback = store_currency
         try:
-            setattr(order_obj, "currency", fallback)
+            setattr(obj, target, fallback)
         except Exception:
             pass
 
