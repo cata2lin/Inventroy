@@ -4,16 +4,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const elements = {
         syncAllOrdersBtn: document.getElementById('sync-all-orders-btn'),
         syncAllProductsBtn: document.getElementById('sync-all-products-btn'),
+        reconcileStockBtn: document.getElementById('reconcile-stock-btn'),
         storeSelect: document.getElementById('store-select'),
         syncSingleStoreBtn: document.getElementById('sync-single-store-btn'),
         startDate: document.getElementById('start-date'),
         endDate: document.getElementById('end-date'),
         syncDateRangeBtn: document.getElementById('sync-date-range-btn'),
+        syncAllInventoryMaxBtn: document.getElementById('sync-all-inventory-max-btn'), // FIX: Added new button
         progressBarsContainer: document.getElementById('progress-bars'),
     };
 
     let pollingInterval = null;
-    let activeButtons = new Set([elements.syncAllOrdersBtn, elements.syncAllProductsBtn, elements.syncSingleStoreBtn, elements.syncDateRangeBtn]);
+    let activeButtons = new Set([elements.syncAllOrdersBtn, elements.syncAllProductsBtn, elements.syncSingleStoreBtn, elements.syncDateRangeBtn, elements.reconcileStockBtn, elements.syncAllInventoryMaxBtn]); // FIX: Added the new button here too
 
     const renderProgressBar = (task) => { /* ... same as before ... */ };
 
@@ -58,6 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     elements.syncAllOrdersBtn.addEventListener('click', () => startSync(API_ENDPOINTS.syncOrders));
     elements.syncAllProductsBtn.addEventListener('click', () => startSync(API_ENDPOINTS.syncProducts));
+    elements.reconcileStockBtn.addEventListener('click', () => startSync(API_ENDPOINTS.reconcileStock));
     
     elements.storeSelect.addEventListener('change', () => {
         elements.syncSingleStoreBtn.disabled = !elements.storeSelect.value;
@@ -78,6 +81,11 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         startSync(API_ENDPOINTS.syncOrders, { start_date: startDate, end_date: endDate });
+    });
+
+    // FIX: Add event listener for the new button
+    elements.syncAllInventoryMaxBtn.addEventListener('click', () => {
+        startSync(API_ENDPOINTS.syncAllInventoryMax);
     });
 
     loadStores();

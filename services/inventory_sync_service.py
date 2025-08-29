@@ -13,9 +13,13 @@ import models
 try:
     from services.shopify_service import ShopifyService
     from services.product_service import ProductService
+    from services import sync_tracker
+    from crud import store as crud_store
 except Exception:
     from shopify_service import ShopifyService  # type: ignore
     from product_service import ProductService # type: ignore
+    from services import sync_tracker # type: ignore
+    from crud import store as crud_store # type: ignore
 
 # ---------------- config-ish constants ----------------
 ECHO_WINDOW_SECONDS = 60
@@ -342,4 +346,130 @@ def process_inventory_update_event(
 
     finally:
         if owns_session and db is not None:
+            db.close()
+
+# FIX: Add the new function to perform a sync based on the maximum available stock
+def run_sync_all_stores_with_max(db_factory, task_id: Optional[str] = None):
+    """
+    Background task to sync all barcode groups to the maximum available stock
+    across all member stores.
+    """
+    db: Session = db_factory()
+    try:
+        if task_id:
+            sync_tracker.step(task_id, 0, "Fetching all active barcode groups...")
+
+        groups = db.query(models.BarcodeGroup).filter(models.BarcodeGroup.status == 'active').all()
+        total_groups = len(groups)
+        processed_groups = 0
+
+        if task_id:
+            sync_tracker.step(task_id, 0, f"Found {total_groups} groups to sync.")
+
+        for group in groups:
+            planned = []  # [(member_variant, target)]
+            try:
+                with db.begin_nested():
+                    if not _acquire_lock(db, group.id):
+                        continue
+
+                    # Fetch all member variants for this group
+                    members = (
+                        db.query(models.ProductVariant)
+                        .options(
+                            joinedload(models.ProductVariant.product).joinedload(models.Product.store),
+                            joinedload(models.ProductVariant.inventory_levels),
+                        )
+                        .join(models.GroupMembership)
+                        .filter(models.GroupMembership.group_id == group.id)
+                        .all()
+                    )
+
+                    # Determine the maximum available stock across all members
+                    max_available = 0
+                    member_snaps: List[models.InventoryLevel] = []
+                    for m in members:
+                        if not m.product.store.enabled or not m.product.store.sync_location_id:
+                            continue
+                        snap = _get_fresh_snap(db, m)
+                        if snap and (snap.available or 0) > max_available:
+                            max_available = snap.available
+                        if snap:
+                            member_snaps.append(snap)
+                    
+                    if not member_snaps:
+                        continue # Skip groups with no valid inventory data
+
+                    # The new pool is the maximum value found
+                    new_pool = max_available
+                    
+                    if int(group.pool_available) != int(new_pool):
+                        group.pool_available = int(new_pool)
+                    group.last_reconciled_at = _utcnow()
+
+                    # Plan a write for every member to bring it up to the max pool
+                    for m in members:
+                        m_store = m.product.store
+                        if not m_store.enabled or not m_store.sync_location_id or getattr(m, "tracked", True) is False:
+                            continue
+                        
+                        m_snap = next(
+                            (s for s in member_snaps if int(s.inventory_item_id) == int(m.inventory_item_id)),
+                            None,
+                        )
+                        if not m_snap:
+                            continue
+
+                        current_available = int(m_snap.available or 0)
+                        
+                        # Only plan a write if the current available is less than the new max pool
+                        if current_available < new_pool:
+                            planned.append((m, m_store, new_pool))
+                
+                # Commit the nested transaction for this group
+                db.commit()
+
+                # Outside lock: write & push_log
+                corr = uuid.uuid4()
+                for m, s, target in planned:
+                    ps = ProductService(store_url=s.shopify_url, token=s.api_token)
+                    inv_gid = f"gid://shopify/InventoryItem/{m.inventory_item_id}"
+                    loc_gid = f"gid://shopify/Location/{s.sync_location_id}"
+                    try:
+                        # FIX: Calculate the delta and use the correct adjustment method
+                        current_snap = _get_fresh_snap(db, m)
+                        current_available = current_snap.available or 0 if current_snap else 0
+                        delta = target - current_available
+                        
+                        ps.inventory_adjust_quantities(inv_gid, loc_gid, int(delta))
+                        
+                        with db.begin_nested():
+                            db.add(models.PushLog(
+                                variant_id=m.id,
+                                target_available=int(target),
+                                correlation_id=str(corr),
+                                write_source='max-sync',
+                                written_at=_utcnow(),
+                            ))
+                        db.commit()
+                    except Exception as e:
+                        print(f"[max-sync write-fail] store={s.name} variant={m.id} target={target}: {e}")
+                        db.rollback()
+
+            except Exception as e:
+                print(f"Error processing group {group.id}: {e}")
+                db.rollback() # Rollback this group's transaction
+            finally:
+                processed_groups += 1
+                if task_id:
+                    sync_tracker.step(task_id, processed_groups, f"Processed {processed_groups}/{total_groups} groups...")
+        
+        if task_id:
+            sync_tracker.finish_task(task_id, True, f"Optimistic sync complete. Processed {total_groups} groups.")
+
+    except Exception as e:
+        if task_id:
+            sync_tracker.finish_task(task_id, False, f"Optimistic sync failed: {e}")
+    finally:
+        if db is not None:
             db.close()

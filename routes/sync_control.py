@@ -12,7 +12,7 @@ except Exception:
     from database import get_db, SessionLocal  # fallback
 
 from crud import store as crud_store
-from services import product_sync_runner, order_sync_runner, sync_tracker
+from services import product_sync_runner, order_sync_runner, sync_tracker, inventory_sync_service
 from jobs import reconciliation
 
 router = APIRouter(prefix="/api/sync-control", tags=["Sync Control"])
@@ -193,3 +193,20 @@ def trigger_stock_reconciliation(
         task_id=task_id
     )
     return {"status": "ok", "message": "Full stock reconciliation started.", "tasks": [{"task_id": task_id}]}
+
+# FIX: Add a new endpoint for the optimistic sync logic
+@router.post("/sync-all-inventory-max")
+def trigger_sync_all_inventory_max(
+    background_tasks: BackgroundTasks,
+) -> Dict[str, Any]:
+    """
+    Triggers a sync of all grouped products to their maximum available stock level.
+    This is an optimistic sync, useful for ensuring all stores can sell as much as possible.
+    """
+    task_id = sync_tracker.add_task("Optimistic Inventory Sync (Max)")
+    background_tasks.add_task(
+        inventory_sync_service.run_sync_all_stores_with_max,
+        db_factory=SessionLocal,
+        task_id=task_id
+    )
+    return {"status": "ok", "message": "Optimistic sync started.", "tasks": [{"task_id": task_id}]}
