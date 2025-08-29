@@ -18,6 +18,9 @@ from services import sync_tracker
 from shopify_service import ShopifyService
 import schemas
 
+# FIX: Import the product crud functions needed by crud_order.py
+from crud import product as crud_product
+
 
 # --------- helpers to normalize / harden payloads ---------
 
