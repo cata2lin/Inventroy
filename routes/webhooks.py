@@ -93,38 +93,64 @@ async def receive_webhook(
             print(f"[app/uninstalled][error] store={store_id}: {e}")
         return response
 
-    # --- Persist data and update committed stock (new unified logic) ---
-    order_id = payload.get("order_id") or payload.get("id")
-
+    # --- committed projector (orders/fulfillments/refunds drive committed stock) ---
     try:
-        if topic in {"orders/create", "orders/updated", "orders/edited"}:
-            crud_order.create_or_update_order_from_webhook(db, store.id, payload)
-        elif topic == "orders/delete":
-            # Deleting an order also changes committed stock
-            crud_webhook.delete_order_by_id(db, order_id)
-        elif topic in {"products/create", "products/update", "products/delete"}:
-            crud_product.create_or_update_product_from_webhook(db, store.id, payload)
+        if topic in {"orders/create", "orders/updated", "orders/edited", "orders/cancelled", "orders/delete"}:
+            print("Processing committed stock for topic:", topic)
+            committed_projector.process_order_event(db, store_id, topic, payload)
         elif topic in {"fulfillments/create", "fulfillments/update"}:
-            crud_order.create_or_update_fulfillment_from_webhook(db, store.id, payload)
+            committed_projector.process_fulfillment_event(db, store_id, topic, payload)
         elif topic == "refunds/create":
-            crud_order.create_refund_from_webhook(db, store.id, payload)
-        elif topic == "inventory_levels/update":
-            # This is handled separately below to trigger the sync loop
+            # projector may consider restock adjustments if you do that there
             pass
-        
-        # FIX: The dedicated hold/release logic is now called from here
-        elif topic in {"fulfillment_orders/placed_on_hold", "fulfillment_orders/hold_released"}:
-            fulfillment_order_data = payload.get("fulfillment_order", {})
-            fulfillment_order_gid = fulfillment_order_data.get("id")
+    except Exception as e:
+        db.rollback()
+        print(f"[committed_projector][error] store={store_id} topic={topic}: {e}")
+
+    # --- persist ORDERS to DB (dict OR Pydantic safe) ---
+    try:
+        if topic in {"orders/create", "orders/updated"}:
+            crud_order.create_or_update_order_from_webhook(db, store.id, payload)
+    except Exception as e:
+        db.rollback()
+        print(f"[orders][error] store={store_id} topic={topic}: {e}")
+
+    # --- persist FULFILLMENTS to DB (dict OR Pydantic safe) ---
+    try:
+        if topic in {"fulfillments/create", "fulfillments/update"}:
+            crud_order.create_or_update_fulfillment_from_webhook(db, store.id, payload)
+    except Exception as e:
+        db.rollback()
+        print(f"[fulfillments][error] store={store_id} topic={topic}: {e}")
+
+    # --- process/record REFUNDS to DB (dict OR Pydantic safe) ---
+    try:
+        if topic == "refunds/create":
+            crud_order.create_refund_from_webhook(db, store.id, payload)
+    except Exception as e:
+        db.rollback()
+        print(f"[refunds][error] store={store_id} topic={topic}: {e}")
+
+    # --- handle HOLDS (order or fulfillment order hold/release) ---
+    # FIX: This block is rewritten to correctly parse the hold webhook payload
+    try:
+        if topic in {"fulfillment_orders/placed_on_hold", "fulfillment_orders/hold_released"}:
+            is_on_hold = topic == "fulfillment_orders/placed_on_hold"
+            status = "ON_HOLD" if is_on_hold else "RELEASED"
             
+            fulfillment_order_data = payload.get('fulfillment_order', {})
+            fulfillment_order_gid = fulfillment_order_data.get('id')
+            
+            reason = None
+            if is_on_hold and 'created_fulfillment_hold' in payload:
+                reason = payload['created_fulfillment_hold'].get('reason')
+
             if fulfillment_order_gid:
                 # Use ShopifyService to get the order_id from the fulfillment_order_gid
                 service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
                 order_id = service.get_order_id_from_fulfillment_order_gid(fulfillment_order_gid)
-                
+
                 if order_id:
-                    status = "ON_HOLD" if topic == "fulfillment_orders/placed_on_hold" else "RELEASED"
-                    reason = payload.get("reason") # Use the top-level reason from the payload
                     crud_webhook.update_order_fulfillment_status_from_hold(
                         db,
                         order_id=order_id,
@@ -132,12 +158,15 @@ async def receive_webhook(
                         status=status,
                         reason=reason
                     )
+                else:
+                    print(f"[holds][error] Could not resolve order_id for fulfillment_order_gid: {fulfillment_order_gid}")
             else:
                 print(f"[holds][error] Could not extract fulfillment_order_gid from payload for topic: {topic}")
 
     except Exception as e:
         db.rollback()
-        print(f"[webhook-handler][error] store={store_id} topic={topic}: {e}")
+        print(f"[holds][error] store={store_id} topic={topic}: {e}")
+
 
     # --- inventory_levels/update -> enqueue Golden Sync Loop ---
     if topic == "inventory_levels/update":
@@ -145,15 +174,13 @@ async def receive_webhook(
             inventory_item_id = (payload or {}).get("inventory_item_id")
             location_id = (payload or {}).get("location_id")
             if inventory_item_id and location_id and event_id:
-                # Pass the session factory to the background task
                 background_tasks.add_task(
                     inventory_sync_service.process_inventory_update_event,
+                    db_factory=SessionLocal,       # pass factory, not live session
                     shop_domain=store.shopify_url,
                     event_id=event_id,
                     inventory_item_id=int(inventory_item_id),
                     location_id=int(location_id),
-                    db_factory=SessionLocal,
-                    # No need to pass a session here, the factory will create one
                 )
         except Exception as e:
             print(f"[inventory-levels/update][enqueue-error] store={store_id}: {e}")
