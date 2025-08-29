@@ -13,6 +13,9 @@ from sqlalchemy.dialects.postgresql import insert
 # FIX: Import the advisory lock helper from the inventory sync service
 from services.inventory_sync_service import _acquire_lock
 
+# FIX: Import the product crud functions
+from crud import product as crud_product
+
 
 # ---------------- helpers (dict/attr-safe) ----------------
 
@@ -61,8 +64,8 @@ def update_committed_stock_for_order(db: Session, order: models.Order):
         gid for (gid,) in (
             db.query(models.GroupMembership.group_id)
             .join(models.ProductVariant, models.ProductVariant.id == models.GroupMembership.variant_id)
-            .join(models.LineItem, models.LineItem.variant_id == models.ProductVariant.id)
-            .filter(models.LineItem.order_id == order.id)
+            .join(models.LineItem, models.LineItem.order_id == models.Order.id)
+            .filter(models.Order.id == order.id)
             .distinct()
             .all()
         )
@@ -485,14 +488,14 @@ def apply_order_hold_from_webhook(db: Session, store_id: int, payload: Any, on_h
     update_committed_stock_for_order(db, order)
     db.commit()
 
-
+# FIX: Refactor this function to use the more robust create_or_update_products from crud/product.py
 def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder], store_id: int):
     if not orders_data:
         return
 
-    all_products, all_variants, all_inventory_levels, all_locations = [], [], [], []
+    all_products_variants: List[Dict[str, Any]] = []
     all_orders, all_line_items, all_fulfillments, all_fulfillment_events = [], [], [], []
-    processed_product_ids, processed_variant_ids, processed_location_ids, processed_line_item_ids = set(), set(), set(), set()
+    processed_line_item_ids = set()
     order_ids_to_process: List[int] = []
 
     for order in orders_data:
@@ -518,61 +521,14 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
             if not line_item_id or line_item_id in processed_line_item_ids:
                 continue
             processed_line_item_ids.add(line_item_id)
-
-            if item.variant:
-                variant = item.variant
-                product = variant.product
-
-                if product and product.legacy_resource_id not in processed_product_ids:
-                    processed_product_ids.add(product.legacy_resource_id)
-
-                    category_name = None
-                    if product.category and isinstance(product.category, dict):
-                        category_name = product.category.get('name')
-                    elif product.category:
-                        category_name = getattr(product.category, 'name', None)
-
-                    image_url = None
-                    if product.featured_image and isinstance(product.featured_image, dict):
-                        image_url = product.featured_image.get('url')
-                    elif product.featured_image:
-                        image_url = getattr(product.featured_image, 'url', None)
-
-                    all_products.append({
-                        "id": product.legacy_resource_id, "shopify_gid": product.id, "store_id": store_id, "title": product.title,
-                        "body_html": product.body_html, "vendor": product.vendor, "product_type": product.product_type,
-                        "product_category": category_name, "created_at": product.created_at, "handle": product.handle,
-                        "updated_at": product.updated_at, "published_at": product.published_at, "status": product.status,
-                        "tags": ", ".join(product.tags) if product.tags else None, "image_url": image_url,
-                    })
-
-                if variant.legacy_resource_id not in processed_variant_ids:
-                    processed_variant_ids.add(variant.legacy_resource_id)
-                    inv_item = variant.inventory_item
-                    all_variants.append({
-                        "id": variant.legacy_resource_id, "shopify_gid": variant.id, "product_id": product.legacy_resource_id if product else None,
-                        "store_id": store_id, "title": variant.title, "price": variant.price, "sku": (variant.sku or None),
-                        "position": variant.position, "inventory_policy": variant.inventory_policy,
-                        "compare_at_price": variant.compare_at_price, "barcode": variant.barcode,
-                        "inventory_item_id": (inv_item.legacy_resource_id if inv_item else None),
-                        "inventory_quantity": variant.inventory_quantity, "created_at": variant.created_at,
-                        "updated_at": variant.updated_at, "cost": (inv_item.unit_cost.amount if (inv_item and inv_item.unit_cost) else None),
-                        "inventory_management": "shopify" if (inv_item and getattr(inv_item, "tracked", False)) else "not_tracked",
-                    })
-
-                    if inv_item:
-                        for level in inv_item.inventory_levels:
-                            loc = level.location
-                            if loc.legacy_resource_id not in processed_location_ids:
-                                processed_location_ids.add(loc.legacy_resource_id)
-                                all_locations.append({"id": loc.legacy_resource_id, "name": loc.name, "store_id": store_id})
-
-                            available_qty = next((q['quantity'] for q in level.quantities if q['name'] == 'available'), None)
-                            on_hand_qty = next((q['quantity'] for q in level.quantities if q['name'] == 'on_hand'), None)
-                            all_inventory_levels.append({
-                                "inventory_item_id": inv_item.legacy_resource_id, "location_id": loc.legacy_resource_id,
-                                "available": available_qty, "on_hand": on_hand_qty, "updated_at": level.updated_at,
-                            })
+            
+            # This is the new part: prepare the data for the robust product sync function
+            if item.variant and item.variant.product:
+                product_data = {
+                    "product": item.variant.product.model_dump(by_alias=True),
+                    "variants": [item.variant.model_dump(by_alias=True)]
+                }
+                all_products_variants.append(product_data)
 
             all_line_items.append({
                 "id": line_item_id, "shopify_gid": item.id, "order_id": order.legacy_resource_id,
@@ -584,7 +540,6 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
             })
 
         for fulfillment in order.fulfillments:
-            # Extract tracking from tracking_info list first; fallback to top-level fields
             ti = _get(fulfillment, "tracking_info") or _get(fulfillment, "trackingInfo") or []
             company = number = url = None
             if isinstance(ti, list) and ti:
@@ -610,19 +565,18 @@ def create_or_update_orders(db: Session, orders_data: List[schemas.ShopifyOrder]
                         "status": event.status, "happened_at": event.happened_at,
                         "description": getattr(event, "message", None) or getattr(event, "description", None),
                     })
+    
+    # NEW: Call the robust product sync function once for all products and variants from all orders
+    if all_products_variants:
+        crud_product.create_or_update_products(db, store_id, all_products_variants)
 
-    # STORE-SCOPED upserts where possible
-    upsert_batch(db, models.Location, all_locations, ['store_id', 'id'])
-    upsert_batch(db, models.Product, all_products, ['store_id', 'id'])
-    upsert_batch(db, models.ProductVariant, all_variants, ['store_id', 'id'])
-    upsert_batch(db, models.InventoryLevel, all_inventory_levels, ['inventory_item_id', 'location_id'])
+    # Now that all products and variants exist, it's safe to upsert the rest
     upsert_batch(db, models.Order, all_orders, ['store_id', 'id'])
     upsert_batch(db, models.LineItem, all_line_items, ['id'])
     upsert_batch(db, models.Fulfillment, all_fulfillments, ['id'])
     upsert_batch(db, models.FulfillmentEvent, all_fulfillment_events, ['id'])
 
     db.flush()
-    # Project committed stock for affected orders (idempotent)
     print(f"Updating committed stock for {len(order_ids_to_process)} orders...")
     orders_to_update = db.query(models.Order).filter(models.Order.id.in_(order_ids_to_process)).all()
     for order_obj in orders_to_update:
