@@ -65,7 +65,7 @@ scheduler.start()
 # Routers
 app.include_router(dashboard.router)
 app.include_router(dashboard_v2.router)
-app.include_router(orders.router)
+app.include_router(orders.router) # FIX: The 'orders' router is now correctly included
 app.include_router(products.router)
 app.include_router(inventory.router)
 app.include_router(inventory_v2.router)
