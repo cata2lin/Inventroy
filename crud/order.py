@@ -71,60 +71,62 @@ def update_committed_stock_for_order(db: Session, order: models.Order):
     if not impacted_group_ids:
         return
 
-    # FIX: Sort the impacted groups to ensure deterministic lock acquisition order.
+    # Stable, deterministic order to reduce lock contention between concurrent workers
     impacted_group_ids.sort()
 
-    # 2) Iterate over each impacted group and update its committed stock in a locked transaction.
-    for group_id in impacted_group_ids:
-        try:
-            with db.begin_nested():
-                # Acquire advisory lock for this specific group to prevent deadlocks
-                if not _acquire_lock(db, group_id):
-                    # Skip if lock cannot be acquired immediately
-                    continue
-                
-                OPEN_EXCLUDE = ['fulfilled', 'restocked', 'cancelled']
-                
-                # Recalculate total committed units for this group across all open orders for the store
-                total = (
-                    db.query(
-                        func.coalesce(func.sum(models.LineItem.quantity), 0).label("committed_units"),
-                        func.count(func.distinct(models.LineItem.order_id)).label("open_orders_count"),
-                    )
-                    .join(models.ProductVariant, models.ProductVariant.id == models.GroupMembership.variant_id)
-                    .join(models.LineItem, models.LineItem.variant_id == models.ProductVariant.id)
-                    .join(models.Order, models.Order.id == models.LineItem.order_id)
-                    .filter(
-                        models.Order.store_id == order.store_id,
-                        models.Order.cancelled_at.is_(None),
-                        ~models.Order.fulfillment_status.in_(OPEN_EXCLUDE),
-                        models.GroupMembership.group_id == group_id,
-                    )
-                    .one()
-                )
+    # 2) Compute totals for those groups across ALL open orders of this store
+    OPEN_EXCLUDE = ['fulfilled', 'restocked', 'cancelled']
 
-                # UPSERT the exact values for this single group
-                upsert_row = {
-                    "group_id": group_id,
-                    "store_id": order.store_id,
-                    "committed_units": int(total.committed_units or 0),
-                    "open_orders_count": int(total.open_orders_count or 0),
-                }
-
-                stmt = insert(models.CommittedStock).values([upsert_row])
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=['group_id', 'store_id'],
-                    set_={
-                        'committed_units': stmt.excluded.committed_units,
-                        'open_orders_count': stmt.excluded.open_orders_count,
-                    },
-                )
-                db.execute(stmt)
-        except Exception as e:
-            db.rollback()
-            print(f"[committed_projector][error] Failed to update group {group_id}: {e}")
+    # FIX: Correct the query to explicitly join all necessary tables
+    totals = (
+        db.query(
+            models.GroupMembership.group_id.label("group_id"),
+            func.coalesce(func.sum(models.LineItem.quantity), 0).label("committed_units"),
+            func.count(func.distinct(models.LineItem.order_id)).label("open_orders_count"),
+        )
+        .select_from(models.Order)  # Start FROM the orders table
+        .join(models.LineItem, models.LineItem.order_id == models.Order.id)
+        .join(models.ProductVariant, models.ProductVariant.id == models.LineItem.variant_id)
+        .join(models.GroupMembership, models.GroupMembership.variant_id == models.ProductVariant.id)
+        .filter(
+            models.Order.store_id == order.store_id,
+            models.Order.cancelled_at.is_(None),
+            ~models.Order.fulfillment_status.in_(OPEN_EXCLUDE),
+            models.GroupMembership.group_id.in_(impacted_group_ids),
+        )
+        .group_by(models.GroupMembership.group_id)
+        .all()
+    )
     
-    db.commit()
+    totals_map: Dict[str, Dict[str, int]] = {
+        row.group_id: {
+            "committed_units": int(row.committed_units or 0),
+            "open_orders_count": int(row.open_orders_count or 0),
+        }
+        for row in totals
+    }
+
+    # 3) UPSERT exact values (replace, not add) in sorted order
+    upsert_rows: List[Dict[str, Any]] = []
+    for gid in impacted_group_ids:
+        vals = totals_map.get(gid, {"committed_units": 0, "open_orders_count": 0})
+        upsert_rows.append({
+            "group_id": gid,
+            "store_id": order.store_id,
+            "committed_units": vals["committed_units"],
+            "open_orders_count": vals["open_orders_count"],
+        })
+
+    if upsert_rows:
+        stmt = insert(models.CommittedStock).values(upsert_rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['group_id', 'store_id'],
+            set_={
+                'committed_units': stmt.excluded.committed_units,
+                'open_orders_count': stmt.excluded.open_orders_count,
+            },
+        )
+        db.execute(stmt)
 
 
 # ---------------- webhook upserts (orders/fulfillments/refunds) ----------------
