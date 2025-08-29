@@ -409,8 +409,8 @@ def create_or_update_products(
     )
     
     # =================================================================
-    # THIS IS THE FIX: Commit the transaction to save the variants
-    # before attempting to insert inventory levels that depend on them.
+    # FIX: Commit the transaction to save the variants before attempting
+    # to insert inventory levels that depend on them.
     # =================================================================
     db.commit()
 
