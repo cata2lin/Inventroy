@@ -86,7 +86,7 @@ async def login(response: Response, username: str = Form(...), password: str = F
     # FIX: Use jose.jwt.encode and jose.jwt.decode
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
     
-    response.set_cookie(key="access_token", value=token, httponly=True, samesite="lax", max_age=86400, secure=True)
+    response.set_cookie(key="access_token_8002", value=token, httponly=True, samesite="lax", max_age=86400, secure=True)
     return {"message": "Login successful", "access_token": token}
 
 # NEW: Middleware logic
@@ -99,7 +99,7 @@ async def add_login_middleware(request: Request, call_next):
     is_public = any(request.url.path.startswith(path) for path in public_paths)
 
     if not is_public:
-        token = request.cookies.get("access_token")
+        token = request.cookies.get("access_token_8002")
         if not token:
             return RedirectResponse(url="/login_page")
         try:
@@ -135,7 +135,7 @@ app.include_router(sales_analytics.router)
 # Existing HTML page routes
 @app.get("/", response_class=RedirectResponse, include_in_schema=False)
 async def read_root(request: Request):
-    if not request.cookies.get("access_token"):
+    if not request.cookies.get("access_token_8002"):
         return RedirectResponse(url="/login_page")
     return RedirectResponse(url="/dashboard-v2")
 

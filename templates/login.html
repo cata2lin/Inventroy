@@ -43,7 +43,7 @@
 
             if (response.ok) {
                 const data = await response.json();
-                document.cookie = `access_token=${data.access_token}; path=/; max-age=86400; secure; samesite=Lax`;
+                document.cookie = `access_token_8002=${data.access_token}; path=/; max-age=86400; secure; samesite=Lax`;
                 window.location.href = '/dashboard-v2';
             } else {
                 const error = await response.json();
