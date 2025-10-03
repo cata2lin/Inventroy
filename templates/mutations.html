@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <hgroup>
+        <h1>Product Mutations</h1>
+        <h2>Execute GraphQL mutations to update product data.</h2>
+    </hgroup>
+
+    <div class="grid">
+        <article>
+            <label for="store-select">Select Store</label>
+            <select id="store-select" required>
+                <option value="">-- Select a Store --</option>
+            </select>
+        </article>
+        <article>
+            <label for="mutation-select">Select Mutation</label>
+            <select id="mutation-select" required>
+                <option value="">-- Select a Mutation --</option>
+                <option value="setProductCategory">Set Product Category</option>
+                <option value="updateProductType">Update Product Type</option>
+                <option value="updateVariantPrices">Update Variant Prices</option>
+                <option value="updateVariantCompareAt">Update Variant Compare-At Price</option>
+                <option value="updateVariantBarcode">Update Variant Barcode</option>
+                <option value="updateVariantCosts">Update Variant Costs (Bulk)</option>
+                <option value="updateInventoryCost">Update Inventory Cost (Direct)</option>
+                <option value="inventorySetQuantities">Set Absolute Quantity</option>
+            </select>
+        </article>
+    </div>
+
+    <article>
+        <div id="mutation-form-container"></div>
+    </article>
+
+    <article>
+        <header><strong>API Response</strong></header>
+        <pre><code id="api-response"></code></pre>
+    </article>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/config.js"></script>
+<script src="/static/js/mutations.js"></script>
+{% endblock %}

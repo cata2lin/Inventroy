@@ -125,6 +125,82 @@ query GetAllProducts($cursor: String) {{
 }}
 """
 
+# --- GraphQL Mutations ---
+MUTATIONS = {
+    "setProductCategory": """
+        mutation SetProductCategory($product: ProductUpdateInput!) {
+          productUpdate(product: $product) {
+            product { id category { id fullName } }
+            userErrors { field message }
+          }
+        }
+    """,
+    "updateProductType": """
+        mutation UpdateProductType($product: ProductUpdateInput!) {
+          productUpdate(product: $product) {
+            product { id productType }
+            userErrors { field message }
+          }
+        }
+    """,
+    "updateVariantPrices": """
+        mutation UpdateVariantPrices($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            productVariants { id price }
+            userErrors { field message }
+          }
+        }
+    """,
+    "updateVariantCompareAt": """
+        mutation UpdateVariantCompareAt($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            productVariants { id compareAtPrice }
+            userErrors { field message }
+          }
+        }
+    """,
+    "updateVariantBarcode": """
+        mutation UpdateVariantBarcode($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            productVariants { id barcode }
+            userErrors { field message }
+          }
+        }
+    """,
+    "updateVariantCosts": """
+        mutation UpdateVariantCosts($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            productVariants { id inventoryItem { id unitCost { amount currencyCode } } }
+            userErrors { field message }
+          }
+        }
+    """,
+    "updateInventoryCost": """
+        mutation UpdateInventoryCost($id: ID!, $input: InventoryItemInput!) {
+          inventoryItemUpdate(id: $id, input: $input) {
+            inventoryItem { id unitCost { amount currencyCode } }
+            userErrors { field message }
+          }
+        }
+    """,
+    "inventorySetQuantities": """
+        mutation SetAbsQty($input: InventorySetQuantitiesInput!) {
+          inventorySetQuantities(input: $input) {
+            inventoryAdjustmentGroup { changes { name delta quantityAfterChange } }
+            userErrors { field message }
+          }
+        }
+    """,
+}
+
+FIND_CATEGORIES_QUERY = """
+    query FindCategories($q: String!) {
+      taxonomy {
+        categories(search: $q, first: 10) { nodes { id fullName } }
+      }
+    }
+"""
+
 class ShopifyService:
     def __init__(self, store_url: str, token: str, api_version: str = "2025-10"):
         if not all([store_url, token]):
@@ -195,3 +271,13 @@ class ShopifyService:
                 print(f"An error occurred during product page fetch: {e}. Stopping.")
                 yield {"products": [], "pageInfo": {"hasNextPage": False}, "error": str(e)}
                 return
+
+    def execute_mutation(self, mutation_name: str, variables: Dict[str, Any]) -> Dict[str, Any]:
+        mutation = MUTATIONS.get(mutation_name)
+        if not mutation:
+            raise ValueError(f"Mutation '{mutation_name}' not found.")
+        return self._execute_query(mutation, variables)
+
+    def find_categories(self, query: str) -> Dict[str, Any]:
+        variables = {"q": query}
+        return self._execute_query(FIND_CATEGORIES_QUERY, variables)

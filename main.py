@@ -18,8 +18,8 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
 from database import engine, Base, get_db
-# Add the new products router
-from routes import sync_control, config, products
+# Add the new products and mutations router
+from routes import sync_control, config, products, mutations
 
 # Load environment variables from .env file
 load_dotenv()
@@ -91,8 +91,14 @@ async def get_config_page(request: Request):
 async def get_products_page(request: Request):
     return templates.TemplateResponse("products.html", {"request": request, "title": "Products"})
 
+# NEW: Mutations page route
+@app.get("/mutations", response_class=HTMLResponse, include_in_schema=False)
+async def get_mutations_page(request: Request):
+    return templates.TemplateResponse("mutations.html", {"request": request, "title": "Mutations"})
+
 # --- API Routers ---
 app.include_router(sync_control.router)
 app.include_router(config.router)
-# NEW: Include the products router
+# NEW: Include the products and mutations router
 app.include_router(products.router)
+app.include_router(mutations.router)

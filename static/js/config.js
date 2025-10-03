@@ -15,6 +15,10 @@ const API_ENDPOINTS = {
     syncProducts: '/api/sync-control/products',
     getSyncStatus: '/api/sync-control/status',
 
-    // NEW: Products Endpoint
+    // Products Endpoint
     getProducts: '/api/products/',
+
+    // NEW: Mutations Endpoints
+    executeMutation: (storeId) => `/api/mutations/execute/${storeId}`,
+    findCategories: (storeId) => `/api/mutations/find-categories/${storeId}`,
 };
