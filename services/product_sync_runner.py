@@ -13,7 +13,7 @@ except Exception:
 
 from crud import store as crud_store
 from crud import product as crud_product
-from . import sync_tracker  # <-- CORRECTED LINE
+from . import sync_tracker  # <-- THE CRITICAL FIX IS HERE
 from shopify_service import ShopifyService
 
 
