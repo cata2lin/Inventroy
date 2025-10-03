@@ -55,7 +55,7 @@ class Product(Base):
     tags = Column(Text)
     image_url = Column(String(2048))
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
-    last_seen_at = Column(DateTime(timezone=True)) 
+    last_seen_at = Column(DateTime(timezone=True))
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
 
 class ProductVariant(Base):
@@ -89,7 +89,6 @@ class ProductVariant(Base):
     inventory_snapshots = relationship("InventorySnapshot", back_populates="product_variant", cascade="all, delete-orphan")
 
     __table_args__ = (
-        # Reflects the actual unique constraint from the ERD
         UniqueConstraint('sku', 'store_id', name='product_variants_sku_store_id_key'),
     )
 

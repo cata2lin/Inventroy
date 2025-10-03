@@ -102,7 +102,7 @@ def _extract_product_fields(p_data: Any, store_id: int, last_seen_at: datetime) 
         "title": p_data.get("title"), "body_html": p_data.get("bodyHtml"),
         "vendor": p_data.get("vendor"), "product_type": p_data.get("productType"),
         "status": p_data.get("status"), "handle": p_data.get("handle"),
-        "tags": ",".join(p_data.get("tags", []) if p_data.get("tags") is not None else []), 
+        "tags": ",".join(p_data.get("tags", []) if p_data.get("tags") is not None else []),
         "image_url": _first_image_url(p_data),
         "created_at": _to_dt(p_data.get("createdAt")), "updated_at": _to_dt(p_data.get("updatedAt")),
         "published_at": _to_dt(p_data.get("publishedAt")), "last_seen_at": last_seen_at,
@@ -138,7 +138,7 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
             v_data_list = p_data.get("variants", [])
 
             p_row = _extract_product_fields(p_data, store_id, last_seen_at)
-            
+
             # Upsert pentru produs
             product_stmt = pg_insert(models.Product).values(p_row)
             product_update_stmt = product_stmt.on_conflict_do_update(
@@ -155,10 +155,20 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
 
             # Procesăm și facem upsert pentru fiecare variantă individual
             if v_data_list:
-                loc_rows, inv_level_rows = [], []
+                loc_rows_map = {}
+                inv_level_rows = []
+                unique_skus_in_bundle = set()
+
                 for v_data in v_data_list:
+                    # De-duplicare SKU în cadrul aceluiași produs
+                    sku = v_data.get("sku")
+                    if sku is not None and sku in unique_skus_in_bundle:
+                        continue # Sarim peste SKU-urile duplicate din același produs
+                    if sku is not None:
+                        unique_skus_in_bundle.add(sku)
+
                     v_row = _extract_variant_fields(v_data, p_row["id"], store_id, last_seen_at)
-                    
+
                     variant_stmt = pg_insert(models.ProductVariant).values(v_row)
                     variant_update_stmt = variant_stmt.on_conflict_do_update(
                         index_elements=['id'],
@@ -171,13 +181,28 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
                             "last_seen_at": variant_stmt.excluded.last_seen_at
                         }
                     )
+                    # Adăugăm o clauză de conflict secundară pentru constrângerea (sku, store_id)
+                    variant_update_stmt = variant_update_stmt.on_conflict_do_update(
+                        constraint='product_variants_sku_store_id_key',
+                        set_={
+                             "price": variant_stmt.excluded.price,
+                             "barcode": variant_stmt.excluded.barcode,
+                             "inventory_quantity": variant_stmt.excluded.inventory_quantity,
+                             "updated_at": variant_stmt.excluded.updated_at,
+                             "last_seen_at": variant_stmt.excluded.last_seen_at
+                        }
+                    )
                     db.execute(variant_update_stmt)
 
-                    # Colectăm nivelurile de inventar și locațiile
+                    # Colectăm nivelurile de inventar și locațiile unice
                     for lvl in _get(v_data, "inventoryItem", "inventoryLevels", default=[]):
                         loc_id = gid_to_id(_get(lvl, "location", "id"))
                         if not loc_id: continue
-                        loc_rows.append({"id": loc_id, "store_id": store_id, "name": _get(lvl, "location", "name")})
+                        
+                        # Folosim un dicționar pentru a asigura unicitatea locațiilor
+                        if loc_id not in loc_rows_map:
+                            loc_rows_map[loc_id] = {"id": loc_id, "store_id": store_id, "name": _get(lvl, "location", "name")}
+
                         qmap = {q["name"]: q["quantity"] for q in _get(lvl, "quantities", default=[])}
                         inv_level_rows.append({
                             "variant_id": v_row["id"], "location_id": loc_id,
@@ -187,7 +212,8 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
                             "last_fetched_at": now,
                         })
 
-                # Upsert pentru locații (în lot, deoarece ID-urile sunt unice)
+                # Upsert pentru locații (în lot, acum sunt unice)
+                loc_rows = list(loc_rows_map.values())
                 if loc_rows:
                     loc_stmt = pg_insert(models.Location).values(loc_rows)
                     loc_update_stmt = loc_stmt.on_conflict_do_update(
