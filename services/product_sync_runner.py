@@ -2,6 +2,7 @@
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 import traceback
+from typing import Optional
 
 from database import SessionLocal
 from crud import store as crud_store, product as crud_product
@@ -9,9 +10,9 @@ from shopify_service import ShopifyService
 import models
 from . import sync_tracker # Use relative import
 
-def run_product_sync_for_store(store_id: int, task_id: str):
+def run_product_sync_for_store(store_id: int, task_id: Optional[str] = None):
     """
-    Background task to sync all products & variants for ONE store.
+    Background task that syncs all products & variants for ONE store.
     Now accepts task_id to report progress.
     """
     db: Session = SessionLocal()
@@ -25,7 +26,8 @@ def run_product_sync_for_store(store_id: int, task_id: str):
 
         if active_run and active_run.started_at > datetime.now(timezone.utc) - timedelta(hours=1):
             print(f"Sync for store {store_id} is already running or recently failed. Skipping.")
-            sync_tracker.finish_task(task_id, ok=True, note="Skipped; another sync is active or recently failed.")
+            if task_id:
+                sync_tracker.finish_task(task_id, ok=True, note="Skipped; another sync is active or recently failed.")
             return
 
         # --- 2. Initialize Sync Run ---
@@ -34,7 +36,8 @@ def run_product_sync_for_store(store_id: int, task_id: str):
         db.add(run)
         db.commit()
         
-        sync_tracker.step(task_id, 0, note="Starting product fetch...")
+        if task_id:
+            sync_tracker.step(task_id, 0, note="Starting product fetch...")
 
         store = crud_store.get_store(db, store_id)
         if not store: raise RuntimeError("Store not found")
@@ -55,12 +58,14 @@ def run_product_sync_for_store(store_id: int, task_id: str):
             page_info = page_data.get("pageInfo", {})
             
             try:
+                # Pass the run.id to the crud function for dead-letter logging
                 crud_product.create_or_update_products(db, store_id, run.id, page_products, last_seen_at=t0)
                 run.pages_ok += 1
                 processed_count += len(page_products)
-                sync_tracker.step(task_id, processed_count, note=f"Processed {processed_count} products...")
+                if task_id:
+                    sync_tracker.step(task_id, processed_count, note=f"Processed {processed_count} products...")
                 run.last_cursor = page_info.get("endCursor")
-                db.commit()
+                db.commit() # Commit after each successful page
             except Exception as e:
                 db.rollback()
                 run.pages_failed += 1
@@ -74,8 +79,9 @@ def run_product_sync_for_store(store_id: int, task_id: str):
         # --- 4. Finalize and Clean Up ---
         if snapshot_finished:
             run.status = 'ok'
-            run.last_cursor = None
+            run.last_cursor = None # Clear cursor on successful completion
             
+            # Soft-delete products not seen in this run
             db.query(models.Product).filter(
                 models.Product.store_id == store_id,
                 models.Product.last_seen_at < run.started_at
@@ -84,14 +90,15 @@ def run_product_sync_for_store(store_id: int, task_id: str):
             db.query(models.ProductVariant).filter(
                 models.ProductVariant.store_id == store_id,
                 models.ProductVariant.last_seen_at < run.started_at
-            ).update({"is_primary_variant": False})
+            ).update({"is_primary_variant": False}) # Or use another status flag
 
         else:
              if run.status == 'running': run.status = 'partial'
 
         run.finished_at = datetime.now(timezone.utc)
         db.commit()
-        sync_tracker.finish_task(task_id, ok=True, note=f"Completed. Synced {processed_count} products.")
+        if task_id:
+            sync_tracker.finish_task(task_id, ok=True, note=f"Completed. Synced {processed_count} products.")
 
     except Exception as e:
         print(f"[product-sync][store={store_id}] FATAL ERROR: {e}\n{traceback.format_exc()}")
