@@ -10,34 +10,29 @@ load_dotenv()
 
 # --- Database Configuration ---
 DB_USER = os.getenv("DB_USER", "scraper")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "Scraper123#") # Raw password with special characters
+DB_PASSWORD = os.getenv("DB_PASSWORD", "Scraper123#")
 DB_HOST = os.getenv("DB_HOST", "38.242.226.83")
 DB_NAME = os.getenv("DB_NAME", "InventorySync")
 
-# URL-encode the password to handle special characters like '#' safely
+# URL-encode the password to handle special characters
 encoded_password = quote_plus(DB_PASSWORD)
 
 # Construct the final, safe database URL
 DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}/{DB_NAME}"
 
-# Create the SQLAlchemy engine with an increased connection pool size.
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=15,
-    max_overflow=20
-)
+# Create the SQLAlchemy engine
+engine = create_engine(DATABASE_URL)
 
-# Create a SessionLocal class, which will be a factory for new Session objects
+# Create a SessionLocal class for creating new Session objects
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Create a Base class. Our ORM models will inherit from this class.
+# Create a Base class for declarative models
 Base = declarative_base()
 
 # --- Dependency for FastAPI ---
 def get_db():
     """
-    FastAPI dependency that creates and yields a new database session
-    for each request, and ensures it's closed afterward.
+    FastAPI dependency that provides a database session per request.
     """
     db = SessionLocal()
     try:

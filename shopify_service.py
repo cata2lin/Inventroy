@@ -1,9 +1,7 @@
-import os
 import time
 import requests
 import random
 from typing import List, Optional, Dict, Any, Generator
-from datetime import datetime
 
 # --- GraphQL Queries ---
 GET_ALL_PRODUCTS_QUERY = """
@@ -23,7 +21,6 @@ query GetAllProducts($cursor: String) {
         handle
         updatedAt
         publishedAt
-        status
         tags
         featuredImage { url }
         category { name }
@@ -108,39 +105,29 @@ class ShopifyService:
     def get_all_products_and_variants(self) -> Generator[List[Dict[str, Any]], None, None]:
         has_next_page = True
         cursor = None
-        print(f"Starting product data fetch from {self.api_endpoint}...")
         while has_next_page:
             try:
                 data = self._execute_query(GET_ALL_PRODUCTS_QUERY, {"cursor": cursor})
                 if not data or "products" not in data:
-                    print("Received no data or malformed products data from API. Stopping.")
                     return
                 product_connection = data["products"]
                 page_info = product_connection.get("pageInfo", {})
                 has_next_page = page_info.get("hasNextPage", False)
                 cursor = page_info.get("endCursor")
                 products_on_page: List[Dict[str, Any]] = []
-
                 for product_node in self._flatten_edges(product_connection):
                     variants = self._flatten_edges(product_node.pop("variants", {}))
                     for variant_node in variants:
                         inv = variant_node.get("inventoryItem")
                         if inv and isinstance(inv, dict):
                             inv["inventoryLevels"] = self._flatten_edges(inv.get("inventoryLevels"))
-                    products_on_page.append({
-                        "product": product_node,
-                        "variants": variants
-                    })
+                    products_on_page.append({"product": product_node, "variants": variants})
                 yield products_on_page
             except (ValueError, requests.exceptions.RequestException) as e:
                 print(f"An error occurred during product fetch: {e}. Stopping.")
                 return
-        print("Finished fetching all product pages from Shopify.")
 
 def gid_to_id(gid: Optional[str]) -> Optional[int]:
-    if not gid:
-        return None
-    try:
-        return int(str(gid).split('/')[-1])
-    except (IndexError, ValueError):
-        return None
+    if not gid: return None
+    try: return int(str(gid).split('/')[-1])
+    except (IndexError, ValueError): return None

@@ -9,27 +9,17 @@
 </head>
 <body>
     <main class="container">
-        <hgroup>
-            <h1>Synchronization Control</h1>
-            <h2>Trigger and monitor data syncs.</h2>
-        </hgroup>
-
+        <hgroup><h1>Synchronization Control</h1><h2>Trigger and monitor data syncs.</h2></hgroup>
         <article class="card">
             <header><strong>Full Sync Actions</strong></header>
-            <p>These actions will sync data for ALL stores.</p>
-            <div class="grid">
-                <button id="sync-all-products-btn">Sync All Products</button>
-            </div>
+            <p>This action will sync products for ALL enabled stores.</p>
+            <button id="sync-all-products-btn">Sync All Products</button>
         </article>
-
         <article id="progress-container" class="card">
             <header><strong>Sync Progress</strong></header>
-            <div id="progress-bars" class="progress-area">
-                <p>No sync jobs running.</p>
-            </div>
+            <div id="progress-bars"><p>No sync jobs running.</p></div>
         </article>
     </main>
-    <script src="/static/js/config.js"></script>
     <script src="/static/js/sync_control.js"></script>
 </body>
 </html>
