@@ -34,7 +34,6 @@ class Store(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
     
-    # Relationships
     inventory_snapshots = relationship("InventorySnapshot", back_populates="store")
 
 class Product(Base):
@@ -95,8 +94,7 @@ class ProductVariant(Base):
 class Location(Base):
     __tablename__ = "locations"
     id = Column(BIGINT, primary_key=True, index=False)
-    # --- NEW COLUMN ---
-    shopify_gid = Column(String(255), unique=True, nullable=False) 
+    shopify_gid = Column(String(255)) # This is the critical field
     store_id = Column(Integer, ForeignKey("stores.id"), nullable=False)
     name = Column(String(255))
     inventory_levels = relationship("InventoryLevel", back_populates="location")
