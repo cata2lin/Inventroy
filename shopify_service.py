@@ -18,111 +18,64 @@ def gid_to_id(gid: Optional[str]) -> Optional[int]:
     except (IndexError, ValueError):
         return None
 
-# --- GraphQL Fragments & Queries (neschimbate) ---
-MONEY_FRAGMENT = "fragment MoneyFragment on MoneyV2 { amount currencyCode }"
-LOCATION_FRAGMENT = "fragment LocationFragment on Location { id legacyResourceId name }"
-INVENTORY_LEVEL_FRAGMENT = \"\"\"
-fragment InventoryLevelFragment on InventoryLevel {
-  quantities(names: ["available", "on_hand"]) { name quantity }
-  updatedAt
-  location { ...LocationFragment }
+# --- GraphQL Queries ---
+GET_ALL_PRODUCTS_QUERY = """
+query GetAllProducts($cursor: String, $query: String) {
+  products(first: 50, after: $cursor, sortKey: UPDATED_AT, query: $query) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        id
+        legacyResourceId
+        title
+        bodyHtml
+        vendor
+        productType
+        status
+        createdAt
+        handle
+        updatedAt
+        publishedAt
+        tags
+        featuredImage { url }
+        category { name }
+        variants(first: 50) {
+          edges {
+            node {
+              id
+              legacyResourceId
+              title
+              price
+              sku
+              position
+              inventoryPolicy
+              compareAtPrice
+              barcode
+              inventoryQuantity
+              createdAt
+              updatedAt
+              inventoryItem {
+                id
+                legacyResourceId
+                unitCost { amount }
+                inventoryLevels(first: 20) {
+                  edges {
+                    node {
+                      quantities(names: ["available", "on_hand"]) { name quantity }
+                      updatedAt
+                      location { id legacyResourceId name }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }
-\"\"\"
-INVENTORY_ITEM_FRAGMENT = \"\"\"
-fragment InventoryItemFragment on InventoryItem {
-  id legacyResourceId sku
-  unitCost { amount }
-  inventoryLevels(first: 10) { edges { node { ...InventoryLevelFragment } } }
-}
-\"\"\"
-PRODUCT_FRAGMENT = \"\"\"
-fragment ProductFragment on Product {
-  id legacyResourceId title bodyHtml vendor productType status createdAt handle updatedAt publishedAt status tags
-  featuredImage { url }
-  category { name }
-}
-\"\"\"
-VARIANT_FRAGMENT = \"\"\"
-fragment VariantFragment on ProductVariant {
-  id legacyResourceId title price sku position inventoryPolicy compareAtPrice
-  barcode inventoryQuantity createdAt updatedAt
-  inventoryItem { ...InventoryItemFragment }
-  product { ...ProductFragment }
-}
-\"\"\"
-LINE_ITEM_FRAGMENT = \"\"\"
-fragment LineItemFragment on LineItem {
-  id title quantity sku vendor taxable
-  originalUnitPriceSet { shopMoney { ...MoneyFragment } }
-  totalDiscountSet { shopMoney { ...MoneyFragment } }
-  variant { ...VariantFragment }
-}
-\"\"\"
-FULFILLMENT_EVENT_FRAGMENT = "fragment FulfillmentEventFragment on FulfillmentEvent { id message status happenedAt }"
-FULFILLMENT_FRAGMENT = \"\"\"
-fragment FulfillmentFragment on Fulfillment {
-  id legacyResourceId status createdAt updatedAt
-  trackingInfo { company number url }
-  events(first: 20) { edges { node { ...FulfillmentEventFragment } } }
-}
-\"\"\"
-
-GET_ALL_ORDERS_QUERY = f\"\"\"
-{MONEY_FRAGMENT}
-{LOCATION_FRAGMENT}
-{INVENTORY_LEVEL_FRAGMENT}
-{INVENTORY_ITEM_FRAGMENT}
-{PRODUCT_FRAGMENT}
-{VARIANT_FRAGMENT}
-{LINE_ITEM_FRAGMENT}
-{FULFILLMENT_EVENT_FRAGMENT}
-{FULFILLMENT_FRAGMENT}
-query GetAllData($cursor: String, $query: String) {{
-  orders(first: 5, after: $cursor, sortKey: CREATED_AT, reverse: true, query: $query) {{
-    pageInfo {{ hasNextPage endCursor }}
-    edges {{
-      node {{
-        id legacyResourceId name createdAt updatedAt cancelledAt cancelReason closedAt processedAt
-        displayFinancialStatus displayFulfillmentStatus currencyCode note tags
-        paymentGatewayNames
-        totalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
-        subtotalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
-        totalTaxSet {{ shopMoney {{ ...MoneyFragment }} }}
-        totalDiscountsSet {{ shopMoney {{ ...MoneyFragment }} }}
-        totalShippingPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
-        lineItems(first: 50) {{ edges {{ node {{ ...LineItemFragment }} }} }}
-        fulfillments(first: 10) {{ ...FulfillmentFragment }}
-      }}
-    }}
-  }}
-}}
-\"\"\"
-
-GET_ALL_PRODUCTS_QUERY = f\"\"\"
-{LOCATION_FRAGMENT}
-{INVENTORY_LEVEL_FRAGMENT}
-{INVENTORY_ITEM_FRAGMENT}
-{PRODUCT_FRAGMENT}
-query GetAllProducts($cursor: String) {{
-  products(first: 20, after: $cursor, sortKey: UPDATED_AT) {{
-    pageInfo {{ hasNextPage endCursor }}
-    edges {{
-      node {{
-        ...ProductFragment
-        variants(first: 50) {{
-          edges {{
-            node {{
-              id legacyResourceId title price sku position inventoryPolicy compareAtPrice
-              barcode inventoryQuantity createdAt updatedAt
-              inventoryItem {{ ...InventoryItemFragment }}
-            }}
-          }}
-        }}
-      }}
-    }}
-  }}
-}}
-\"\"\"
+"""
 
 class ShopifyService:
     def __init__(self, store_url: str, token: str, api_version: str = "2025-10"):
@@ -130,29 +83,29 @@ class ShopifyService:
             raise ValueError("Store URL and Access Token are required.")
         self.api_endpoint = f"https://{store_url}/admin/api/{api_version}/graphql.json"
         self.rest_api_endpoint = f"https://{store_url}/admin/api/{api_version}"
-        
-        # CORECTAT: Folosiți acolade simple pentru dicționare
+
+        # CORRECTED: Use single curly braces for dictionaries
         self.headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": token}
         self.rest_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
 
     def _execute_query(self, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = {"query": query, "variables": variables or {}}
         max_retries = 7
-        base_delay = 1
+        base_delay = 1.0
         for attempt in range(max_retries):
             try:
-                response = requests.post(self.api_endpoint, headers=self.headers, json=payload, timeout=20)
+                response = requests.post(self.api_endpoint, headers=self.headers, json=payload, timeout=30)
                 response.raise_for_status()
                 json_response = response.json()
-                if "errors" in json_response:
-                    is_throttled = any(err.get("extensions", {}).get("code") == "THROTTLED" for err in json_response.get("errors", []))
+                if "errors" in json_response and json_response.get("errors"):
+                    is_throttled = any(err.get("extensions", {}).get("code") == "THROTTLED" for err in json_response["errors"])
                     if is_throttled and attempt < max_retries - 1:
                         wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
                         print(f"API throttled. Retrying in {wait_time:.2f} seconds...")
                         time.sleep(wait_time)
                         continue
                     raise ValueError(f"GraphQL API Error: {json_response['errors']}")
-                return json_response.get("data")
+                return json_response.get("data", {})
             except requests.exceptions.RequestException as e:
                 if attempt < max_retries - 1:
                     wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
@@ -165,7 +118,7 @@ class ShopifyService:
     def _flatten_edges(self, data: Optional[Dict]) -> List:
         if not data or "edges" not in data:
             return []
-        return [edge["node"] for edge in data["edges"]]
+        return [edge["node"] for edge in data.get("edges", [])]
 
     def get_all_products_and_variants(self, cursor: Optional[str] = None, updated_at_max: Optional[str] = None) -> Generator[Dict[str, Any], None, None]:
         has_next_page = True
