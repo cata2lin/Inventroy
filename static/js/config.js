@@ -9,9 +9,12 @@ const API_ENDPOINTS = {
     getWebhooks: (storeId) => `/api/config/stores/${storeId}/webhooks`,
     createAllWebhooks: (storeId) => `/api/config/stores/${storeId}/webhooks/create-all`,
     deleteWebhook: (storeId, webhookId) => `/api/config/stores/${storeId}/webhooks/${webhookId}`,
-    deleteAllWebhooks: '/api/config/webhooks/delete-all', // NEW ENDPOINT
+    deleteAllWebhooks: '/api/config/webhooks/delete-all',
 
     // Sync Control
     syncProducts: '/api/sync-control/products',
     getSyncStatus: '/api/sync-control/status',
+
+    // NEW: Products Endpoint
+    getProducts: '/api/products/',
 };

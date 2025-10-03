@@ -2,10 +2,9 @@
 
 from typing import Any, Dict, List, Optional, Iterable, Tuple
 from datetime import datetime, timezone
-from sqlalchemy.orm import Session
-from sqlalchemy import select, func, delete
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, or_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-
 import models
 
 try:
@@ -16,7 +15,34 @@ except Exception:
         try: return int(str(gid).split("/")[-1])
         except Exception: return None
 
-# --- (Helper functions _get, _to_dt, _first_image_url remain the same) ---
+# --- NEW FUNCTION ---
+def get_products(
+    db: Session, skip: int = 0, limit: int = 100, store_id: Optional[int] = None, search: Optional[str] = None
+) -> Tuple[List[models.Product], int]:
+    """
+    Fetches a paginated list of products with optional filtering.
+    """
+    query = db.query(models.Product).options(joinedload(models.Product.variants))
+
+    if store_id:
+        query = query.filter(models.Product.store_id == store_id)
+
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(
+            or_(
+                models.Product.title.ilike(search_term),
+                models.Product.variants.any(models.ProductVariant.sku.ilike(search_term)),
+                models.Product.variants.any(models.ProductVariant.barcode.ilike(search_term)),
+            )
+        )
+
+    total_count = query.count()
+    products = query.order_by(models.Product.title).offset(skip).limit(limit).all()
+
+    return products, total_count
+
+# --- (Existing functions remain the same) ---
 def _get(obj: Any, *path: str, default=None):
     cur = obj
     for key in path:
@@ -36,7 +62,6 @@ def _to_dt(val) -> Optional[datetime]:
 
 def _first_image_url(prod: Any) -> Optional[str]:
     return _get(prod, "featuredImage", "url") or _get(prod, "image", "src")
-
 
 def _extract_product_fields(prod: Any) -> Dict[str, Any]:
     pid = _get(prod, "legacyResourceId") or gid_to_id(_get(prod, "id"))
@@ -69,10 +94,8 @@ def _extract_variant_fields(variant: Any, product_id: int) -> Dict[str, Any]:
 
 def _pg_upsert(db: Session, table, rows: List[Dict[str, Any]], conflict_cols: Iterable[str]):
     if not rows: return
-    # Deduplicate rows based on the conflict key before inserting
     unique_rows_map = {tuple(row.get(col) for col in conflict_cols): row for row in rows}
     unique_rows = list(unique_rows_map.values())
-    
     stmt = pg_insert(table).values(unique_rows)
     update_cols = {c.name: getattr(stmt.excluded, c.name) for c in stmt.excluded if c.name not in conflict_cols}
     stmt = stmt.on_conflict_do_update(index_elements=list(conflict_cols), set_=update_cols)
@@ -81,8 +104,6 @@ def _pg_upsert(db: Session, table, rows: List[Dict[str, Any]], conflict_cols: It
 def create_or_update_products(db: Session, store_id: int, items: List[Any]):
     now = datetime.now(timezone.utc)
     prod_rows, var_rows, loc_rows, inv_level_rows = [], [], [], []
-
-    # --- Data Extraction ---
     for bundle in items or []:
         p, vs = bundle.get("product", {}), bundle.get("variants", [])
         try:
@@ -108,53 +129,24 @@ def create_or_update_products(db: Session, store_id: int, items: List[Any]):
         except Exception as e:
             print(f"Skipping product due to extraction error: {e}")
 
-    # --- Database Operations ---
-    if prod_rows:
-        _pg_upsert(db, models.Product.__table__, prod_rows, conflict_cols=("id",))
-    
-    # *** START OF THE FIX for UniqueViolation ***
+    if prod_rows: _pg_upsert(db, models.Product.__table__, prod_rows, conflict_cols=("id",))
     if var_rows:
-        # Separate variants with and without SKUs
         sku_variants = [v for v in var_rows if v.get('sku')]
         no_sku_variants = [v for v in var_rows if not v.get('sku')]
-
-        # Upsert variants without SKUs by their unique ID
-        if no_sku_variants:
-            _pg_upsert(db, models.ProductVariant.__table__, no_sku_variants, conflict_cols=("id",))
-
-        # Handle variants with SKUs more carefully
+        if no_sku_variants: _pg_upsert(db, models.ProductVariant.__table__, no_sku_variants, conflict_cols=("id",))
         if sku_variants:
-            # Find which (sku, store_id) pairs already exist
-            existing_sku_tuples = db.query(models.ProductVariant.sku, models.ProductVariant.store_id).filter(
+            existing_skus = {s for s, in db.query(models.ProductVariant.sku).filter(
                 models.ProductVariant.store_id == store_id,
                 models.ProductVariant.sku.in_([v['sku'] for v in sku_variants])
-            ).all()
-            existing_skus = set(existing_sku_tuples)
-
-            new_variants = []
-            update_variants = []
-
-            for v in sku_variants:
-                if (v['sku'], v['store_id']) in existing_skus:
-                    update_variants.append(v)
-                else:
-                    new_variants.append(v)
-            
-            # Insert new variants
-            if new_variants:
-                _pg_upsert(db, models.ProductVariant.__table__, new_variants, conflict_cols=("id",))
-
-            # Update existing variants one by one to avoid conflicts
+            ).all()}
+            new_variants = [v for v in sku_variants if v['sku'] not in existing_skus]
+            update_variants = [v for v in sku_variants if v['sku'] in existing_skus]
+            if new_variants: _pg_upsert(db, models.ProductVariant.__table__, new_variants, conflict_cols=("id",))
             for v_data in update_variants:
                 db.query(models.ProductVariant).filter(
                     models.ProductVariant.sku == v_data['sku'],
                     models.ProductVariant.store_id == v_data['store_id']
                 ).update(v_data)
-    # *** END OF THE FIX ***
-
-    if loc_rows:
-        _pg_upsert(db, models.Location.__table__, loc_rows, conflict_cols=("id",))
-    if inv_level_rows:
-        _pg_upsert(db, models.InventoryLevel.__table__, inv_level_rows, conflict_cols=("inventory_item_id", "location_id"))
-        
+    if loc_rows: _pg_upsert(db, models.Location.__table__, loc_rows, conflict_cols=("id",))
+    if inv_level_rows: _pg_upsert(db, models.InventoryLevel.__table__, inv_level_rows, conflict_cols=("inventory_item_id", "location_id"))
     db.commit()

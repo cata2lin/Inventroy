@@ -1,7 +1,7 @@
 # schemas.py
 
 from pydantic import BaseModel, ConfigDict
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 class StoreBase(BaseModel):
@@ -16,12 +16,8 @@ class StoreCreate(StoreBase):
 
 class Store(StoreBase):
     id: int
-    
-    # Updated to Pydantic v2 style
     model_config = ConfigDict(from_attributes=True)
 
-
-# --- ADD THIS NEW CLASS ---
 class Webhook(BaseModel):
     id: int
     shopify_webhook_id: int
@@ -29,6 +25,26 @@ class Webhook(BaseModel):
     topic: str
     address: str
     created_at: Optional[datetime] = None
-
-    # This allows the model to be created from a database object
     model_config = ConfigDict(from_attributes=True)
+
+# --- NEW SCHEMAS ---
+class ProductVariant(BaseModel):
+    id: int
+    title: str
+    sku: Optional[str]
+    barcode: Optional[str]
+    price: Optional[float]
+    inventory_quantity: Optional[int]
+    model_config = ConfigDict(from_attributes=True)
+
+class Product(BaseModel):
+    id: int
+    title: str
+    image_url: Optional[str]
+    status: Optional[str]
+    variants: List[ProductVariant] = []
+    model_config = ConfigDict(from_attributes=True)
+
+class ProductResponse(BaseModel):
+    total_count: int
+    products: List[Product]
