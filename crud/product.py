@@ -91,6 +91,7 @@ def log_dead_letter(db: Session, store_id: int, run_id: int, payload: Dict, reas
         db.rollback()
         print(f"FATAL: Nu s-a putut înregistra în tabela dead letter. Motiv: {e}")
 
+
 # --- Extragerea datelor ---
 def _extract_product_fields(p_data: Any, store_id: int, last_seen_at: datetime) -> Dict:
     pid = gid_to_id(p_data.get("id"))
@@ -110,9 +111,15 @@ def _extract_product_fields(p_data: Any, store_id: int, last_seen_at: datetime) 
 def _extract_variant_fields(v_data: Any, product_id: int, store_id: int, last_seen_at: datetime) -> Dict:
     vid = gid_to_id(v_data.get("id"))
     if not vid: raise ValueError("ID variantă lipsă")
+    
+    # Transformăm SKU-urile goale în None (NULL) pentru a evita conflictele de unicitate
+    sku = v_data.get("sku")
+    if sku is not None and not sku.strip():
+        sku = None
+
     return {
         "id": vid, "product_id": product_id, "store_id": store_id, "shopify_gid": v_data.get("id"),
-        "title": v_data.get("title"), "sku": v_data.get("sku"), "barcode": v_data.get("barcode"),
+        "title": v_data.get("title"), "sku": sku, "barcode": v_data.get("barcode"),
         "price": v_data.get("price"), "compare_at_price": v_data.get("compareAtPrice"),
         "inventory_item_id": gid_to_id(_get(v_data, "inventoryItem", "id")),
         "inventory_quantity": _get(v_data, "inventoryQuantity"),
@@ -137,19 +144,20 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
             product_stmt = pg_insert(models.Product).values(p_row)
             product_stmt = product_stmt.on_conflict_do_update(
                 index_elements=['id'],
-                set_={k: getattr(product_stmt.excluded, k) for k in p_row if k != 'id'}
+                set_={k: getattr(product_stmt.excluded, k) for k in p_row if k not in ['id', 'store_id']}
             )
             db.execute(product_stmt)
             
-            # Procesare variante și locații
+            # Procesare variante
             v_data_list = p_data.get("variants", [])
-            loc_rows_map = {}
-            inv_level_rows = []
-
             if v_data_list:
+                loc_rows_map = {}
+                inv_level_rows = []
+                
                 for v_data in v_data_list:
                     v_row = _extract_variant_fields(v_data, p_row["id"], store_id, last_seen_at)
                     
+                    # Încercăm să facem upsert pe baza ID-ului unic
                     variant_stmt = pg_insert(models.ProductVariant).values(v_row)
                     variant_stmt = variant_stmt.on_conflict_do_update(
                         index_elements=['id'],
@@ -157,52 +165,49 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
                     )
                     db.execute(variant_stmt)
                     
+                    # Colectăm locații și inventar
                     for lvl in _get(v_data, "inventoryItem", "inventoryLevels", default=[]):
                         loc_id = gid_to_id(_get(lvl, "location", "id"))
                         if not loc_id: continue
                         loc_rows_map[loc_id] = {"id": loc_id, "store_id": store_id, "name": _get(lvl, "location", "name")}
-                        
                         qmap = {q["name"]: q["quantity"] for q in _get(lvl, "quantities", default=[])}
                         inv_level_rows.append({
                             "variant_id": v_row["id"], "location_id": loc_id,
                             "inventory_item_id": v_row["inventory_item_id"],
-                            "available": qmap.get("available", 0),
-                            "on_hand": qmap.get("on_hand", qmap.get("available", 0)),
+                            "available": qmap.get("available", 0), "on_hand": qmap.get("on_hand", qmap.get("available", 0)),
                             "last_fetched_at": now,
                         })
 
-            # Upsert locații unice
-            if loc_rows_map:
-                loc_rows = list(loc_rows_map.values())
-                loc_stmt = pg_insert(models.Location).values(loc_rows)
-                loc_stmt = loc_stmt.on_conflict_do_update(
-                    index_elements=['id'],
-                    set_={"name": loc_stmt.excluded.name}
-                )
-                db.execute(loc_stmt)
-
-            # Upsert niveluri de inventar
-            if inv_level_rows:
-                inv_stmt = pg_insert(models.InventoryLevel).values(inv_level_rows)
-                inv_stmt = inv_stmt.on_conflict_do_update(
-                    index_elements=['variant_id', 'location_id'],
-                    set_={
-                        "available": inv_stmt.excluded.available,
-                        "on_hand": inv_stmt.excluded.on_hand,
-                        "last_fetched_at": inv_stmt.excluded.last_fetched_at
-                    }
-                )
-                db.execute(inv_stmt)
+                # Upsert locații și inventar
+                if loc_rows_map:
+                    loc_rows = list(loc_rows_map.values())
+                    loc_stmt = pg_insert(models.Location).values(loc_rows).on_conflict_do_update(
+                        index_elements=['id'], set_={"name": pg_insert(models.Location).excluded.name}
+                    )
+                    db.execute(loc_stmt)
+                if inv_level_rows:
+                    inv_stmt = pg_insert(models.InventoryLevel).values(inv_level_rows).on_conflict_do_update(
+                        index_elements=['variant_id', 'location_id'],
+                        set_={
+                            "available": pg_insert(models.InventoryLevel).excluded.available,
+                            "on_hand": pg_insert(models.InventoryLevel).excluded.on_hand,
+                            "last_fetched_at": pg_insert(models.InventoryLevel).excluded.last_fetched_at
+                        }
+                    )
+                    db.execute(inv_stmt)
 
             db.commit()
 
         except IntegrityError as e:
             db.rollback()
-            # Prindem eroarea de integritate (SKU duplicat) și o înregistrăm
-            log_dead_letter(db, store_id, run_id, bundle, f"Data integrity error (likely duplicate SKU): {e}")
+            # Dacă inserarea eșuează din cauza constrângerii de SKU, o înregistrăm și continuăm
+            if "product_variants_sku_store_id_key" in str(e):
+                 log_dead_letter(db, store_id, run_id, bundle, f"Data integrity error (duplicate SKU): {e.orig}")
+            else:
+                 log_dead_letter(db, store_id, run_id, bundle, f"An unknown integrity error occurred: {e.orig}")
             continue
 
         except Exception as e:
             db.rollback()
-            log_dead_letter(db, store_id, run_id, bundle, f"Product processing failed: {e}")
+            log_dead_letter(db, store_id, run_id, bundle, f"A general error occurred: {e}")
             continue
