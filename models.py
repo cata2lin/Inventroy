@@ -1,11 +1,12 @@
-from sqlalchemy import (Column, Integer, String, DateTime, Text,
-                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, UniqueConstraint)
+# models.py
+
+from sqlalchemy import (Column, Integer, String, Float, DateTime, Text,
+                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index, UniqueConstraint, CheckConstraint)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from passlib.context import CryptContext
 from database import Base
 
-# Password hashing setup
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class User(Base):
@@ -14,6 +15,10 @@ class User(Base):
     username = Column(String(255), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, index=True, nullable=True)
+
+    @staticmethod
+    def hash_password(password: str):
+        return pwd_context.hash(password)
 
     def verify_password(self, password: str) -> bool:
         return pwd_context.verify(password, self.hashed_password)
@@ -25,13 +30,25 @@ class Store(Base):
     shopify_url = Column(String(255), unique=True, nullable=False)
     api_token = Column(String(255), nullable=False)
     api_secret = Column(String(255), nullable=True)
-    webhook_secret = Column(String(255), nullable=True)
     sync_location_id = Column(BIGINT, nullable=True)
     enabled = Column(BOOLEAN, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
+    webhook_secret = Column(String(255), nullable=True)
+    webhooks = relationship("Webhook", back_populates="store", cascade="all, delete-orphan")
+
+class Webhook(Base):
+    __tablename__ = "webhooks"
+    id = Column(Integer, primary_key=True, index=True)
+    shopify_webhook_id = Column(BIGINT, unique=True, nullable=False)
+    store_id = Column(Integer, ForeignKey("stores.id"), nullable=False)
+    topic = Column(String(255), nullable=False)
+    address = Column(String(2048), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    store = relationship("Store", back_populates="webhooks")
 
 class Product(Base):
+    # ... (rest of the file is unchanged)
     __tablename__ = "products"
     id = Column(BIGINT, primary_key=True, index=True)
     shopify_gid = Column(String(255), unique=True, nullable=False)
@@ -50,6 +67,7 @@ class Product(Base):
     image_url = Column(String(2048))
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
+
 
 class ProductVariant(Base):
     __tablename__ = "product_variants"
@@ -77,7 +95,7 @@ class ProductVariant(Base):
     cost = Column(NUMERIC(10, 2), nullable=True)
     product = relationship("Product", back_populates="variants")
     inventory_levels = relationship("InventoryLevel", back_populates="variant", cascade="all, delete-orphan")
-    __table_args__ = (UniqueConstraint('sku', 'store_id', name='uq_sku_store_id'),)
+    __table_args__ = (UniqueConstraint('sku', 'store_id', name='uq_product_variants_sku_store_id'),)
 
 class Location(Base):
     __tablename__ = "locations"
@@ -85,6 +103,7 @@ class Location(Base):
     store_id = Column(Integer, ForeignKey("stores.id"), nullable=False)
     name = Column(String(255), nullable=False)
     inventory_levels = relationship("InventoryLevel", back_populates="location")
+
 
 class InventoryLevel(Base):
     __tablename__ = "inventory_levels"
@@ -104,4 +123,6 @@ class InventorySnapshot(Base):
     product_variant_id = Column(BIGINT, ForeignKey("product_variants.id", ondelete="CASCADE"), nullable=False, index=True)
     store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     on_hand = Column(Integer, nullable=False)
-    __table_args__ = (UniqueConstraint('date', 'product_variant_id', 'store_id', name='uq_snapshot_date_variant_store'),)
+    __table_args__ = (
+        UniqueConstraint('date', 'product_variant_id', 'store_id', name='uq_snapshot_date_variant_store'),
+    )

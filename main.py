@@ -1,3 +1,5 @@
+# main.py
+
 import os
 import sys
 from pathlib import Path
@@ -11,38 +13,30 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 import models
 
-# Ensure the project root is in the Python path
+# Ensure project root is in Python path
 ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
 from database import engine, Base, get_db
-# Correctly import from the routes package
 from routes import sync_control, config
 
 load_dotenv()
 
 app = FastAPI(title="Inventory Suite")
-
-# Mount static files and templates
 app.mount("/static", StaticFiles(directory=str(ROOT_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(ROOT_DIR / "templates"))
-
-# Create database tables on startup
 Base.metadata.create_all(bind=engine)
 
-# Secret key for JWT
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-super-secret-key")
 
-# --- Authentication ---
+# --- Authentication (unchanged) ---
 @app.post("/login")
 async def login(response: Response, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     user = db.query(models.User).filter_by(username=username).first()
     if not user or not user.verify_password(password):
         return RedirectResponse(url="/login_page?error=1", status_code=303)
-
     payload = {"sub": user.username, "exp": datetime.utcnow() + timedelta(days=1)}
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
-
     response.set_cookie(key="access_token_8002", value=token, httponly=True, samesite="lax", max_age=86400, secure=True)
     return RedirectResponse(url="/", status_code=303)
 
@@ -51,20 +45,16 @@ async def add_login_middleware(request: Request, call_next):
     public_paths = ["/login", "/static/", "/login_page"]
     if any(request.url.path.startswith(path) for path in public_paths):
         return await call_next(request)
-
     token = request.cookies.get("access_token_8002")
     if not token:
         return RedirectResponse(url="/login_page")
-
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         request.state.user = payload.get("sub")
     except JOSEError:
-        # If token is invalid, redirect to login
         response = RedirectResponse(url="/login_page")
         response.delete_cookie("access_token_8002")
         return response
-
     return await call_next(request)
 
 # --- Page Routes ---
@@ -80,6 +70,10 @@ async def read_root():
 async def get_sync_control_page(request: Request):
     return templates.TemplateResponse("sync_control.html", {"request": request, "title": "Sync Control"})
 
+# NEW: Config page route
+@app.get("/config", response_class=HTMLResponse, include_in_schema=False)
+async def get_config_page(request: Request):
+    return templates.TemplateResponse("config.html", {"request": request, "title": "Configuration"})
 
 # --- API Routers ---
 app.include_router(sync_control.router)

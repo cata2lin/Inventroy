@@ -1,9 +1,11 @@
+# shopify_service.py
+
 import time
 import requests
 import random
 from typing import List, Optional, Dict, Any, Generator
 
-# --- GraphQL Queries ---
+# --- (GraphQL Queries remain the same) ---
 GET_ALL_PRODUCTS_QUERY = """
 query GetAllProducts($cursor: String) {
   products(first: 20, after: $cursor, sortKey: UPDATED_AT) {
@@ -21,6 +23,7 @@ query GetAllProducts($cursor: String) {
         handle
         updatedAt
         publishedAt
+        status
         tags
         featuredImage { url }
         category { name }
@@ -68,8 +71,31 @@ class ShopifyService:
         if not all([store_url, token]):
             raise ValueError("Store URL and Access Token are required.")
         self.api_endpoint = f"https://{store_url}/admin/api/{api_version}/graphql.json"
+        self.rest_api_endpoint = f"https://{store_url}/admin/api/{api_version}"
         self.headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": token}
+        self.rest_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
 
+    # --- NEW: Webhook Management Methods ---
+    def get_webhooks(self) -> List[Dict[str, Any]]:
+        url = f"{self.rest_api_endpoint}/webhooks.json"
+        response = requests.get(url, headers=self.rest_headers)
+        response.raise_for_status()
+        return response.json().get("webhooks", [])
+
+    def create_webhook(self, topic: str, address: str) -> Dict[str, Any]:
+        url = f"{self.rest_api_endpoint}/webhooks.json"
+        payload = {"webhook": {"topic": topic, "address": address, "format": "json"}}
+        response = requests.post(url, headers=self.rest_headers, json=payload)
+        response.raise_for_status()
+        return response.json().get("webhook")
+
+    def delete_webhook(self, webhook_id: int):
+        url = f"{self.rest_api_endpoint}/webhooks/{webhook_id}.json"
+        response = requests.delete(url, headers=self.rest_headers)
+        response.raise_for_status()
+        return response.status_code
+
+    # --- (Existing methods remain the same) ---
     def _execute_query(self, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = {"query": query, "variables": variables or {}}
         max_retries = 7
