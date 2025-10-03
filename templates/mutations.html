@@ -4,18 +4,25 @@
 <div class="container">
     <hgroup>
         <h1>Product Mutations</h1>
-        <h2>Execute GraphQL mutations to update product data.</h2>
+        <h2>Search for a product to easily execute GraphQL mutations.</h2>
     </hgroup>
 
-    <div class="grid">
-        <article>
-            <label for="store-select">Select Store</label>
+    <article>
+        <header><strong>1. Select a Product</strong></header>
+        <div class="grid">
             <select id="store-select" required>
                 <option value="">-- Select a Store --</option>
             </select>
-        </article>
-        <article>
-            <label for="mutation-select">Select Mutation</label>
+            <input type="search" id="product-search-input" placeholder="Search by name, SKU, or barcode..." disabled>
+        </div>
+        <select id="product-select" required disabled>
+            <option value="">-- Search for a product above --</option>
+        </select>
+    </article>
+
+    <div class="grid">
+        <article id="mutation-selection-container" style="display: none;">
+            <header><strong>2. Choose a Mutation</strong></header>
             <select id="mutation-select" required>
                 <option value="">-- Select a Mutation --</option>
                 <option value="setProductCategory">Set Product Category</option>
@@ -27,17 +34,15 @@
                 <option value="updateInventoryCost">Update Inventory Cost (Direct)</option>
                 <option value="inventorySetQuantities">Set Absolute Quantity</option>
             </select>
+            <div id="mutation-form-container">
+                </div>
+        </article>
+
+        <article id="api-response-container" style="display: none;">
+            <header><strong>API Response</strong></header>
+            <pre><code id="api-response"></code></pre>
         </article>
     </div>
-
-    <article>
-        <div id="mutation-form-container"></div>
-    </article>
-
-    <article>
-        <header><strong>API Response</strong></header>
-        <pre><code id="api-response"></code></pre>
-    </article>
 </div>
 {% endblock %}
 

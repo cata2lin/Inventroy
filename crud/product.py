@@ -44,6 +44,15 @@ def get_products(
 
     return products, total_count
 
+def get_product(db: Session, product_id: int) -> Optional[models.Product]:
+    """
+    Obține un singur produs după ID, cu variantele sale.
+    """
+    return db.query(models.Product).options(
+        joinedload(models.Product.variants)
+    ).filter(models.Product.id == product_id).first()
+
+
 # --- Funcții ajutătoare ---
 def _get(obj: Any, *path: str, default=None):
     cur = obj
@@ -111,7 +120,7 @@ def _extract_product_fields(p_data: Any, store_id: int, last_seen_at: datetime) 
 def _extract_variant_fields(v_data: Any, product_id: int, store_id: int, last_seen_at: datetime) -> Dict:
     vid = gid_to_id(v_data.get("id"))
     if not vid: raise ValueError("ID variantă lipsă")
-    
+
     # Transformăm SKU-urile goale în None (NULL) pentru a evita conflictele de unicitate
     sku = v_data.get("sku")
     if sku is not None and not sku.strip():
@@ -147,16 +156,16 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
                 set_={k: getattr(product_stmt.excluded, k) for k in p_row if k not in ['id', 'store_id']}
             )
             db.execute(product_stmt)
-            
+
             # Procesare variante
             v_data_list = p_data.get("variants", [])
             if v_data_list:
                 loc_rows_map = {}
                 inv_level_rows = []
-                
+
                 for v_data in v_data_list:
                     v_row = _extract_variant_fields(v_data, p_row["id"], store_id, last_seen_at)
-                    
+
                     # Încercăm să facem upsert pe baza ID-ului unic
                     variant_stmt = pg_insert(models.ProductVariant).values(v_row)
                     variant_stmt = variant_stmt.on_conflict_do_update(
@@ -164,7 +173,7 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
                         set_={k: getattr(variant_stmt.excluded, k) for k in v_row if k != 'id'}
                     )
                     db.execute(variant_stmt)
-                    
+
                     # Colectăm locații și inventar
                     for lvl in _get(v_data, "inventoryItem", "inventoryLevels", default=[]):
                         loc_id = gid_to_id(_get(lvl, "location", "id"))

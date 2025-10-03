@@ -17,8 +17,9 @@ const API_ENDPOINTS = {
 
     // Products Endpoint
     getProducts: '/api/products/',
+    getProduct: (productId) => `/api/products/${productId}`, // NEW
 
-    // NEW: Mutations Endpoints
+    // Mutations Endpoints
     executeMutation: (storeId) => `/api/mutations/execute/${storeId}`,
     findCategories: (storeId) => `/api/mutations/find-categories/${storeId}`,
 };
