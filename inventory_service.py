@@ -23,7 +23,7 @@ class InventoryService:
         product_group = self._get_product_group(barcode)
         if not product_group:
             raise ValueError(f"Product group with barcode '{barcode}' not found.")
-a
+
         # Assume on-hand is consistent for the group, take the first one.
         current_on_hand = product_group[0].inventory_quantity or 0
         new_on_hand = quantity if is_absolute_set else current_on_hand + quantity
