@@ -1,5 +1,8 @@
-from pydantic import BaseModel
+# schemas.py
+
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
+from datetime import datetime
 
 class StoreBase(BaseModel):
     name: str
@@ -13,6 +16,19 @@ class StoreCreate(StoreBase):
 
 class Store(StoreBase):
     id: int
+    
+    # Updated to Pydantic v2 style
+    model_config = ConfigDict(from_attributes=True)
 
-    class Config:
-        orm_mode = True
+
+# --- ADD THIS NEW CLASS ---
+class Webhook(BaseModel):
+    id: int
+    shopify_webhook_id: int
+    store_id: int
+    topic: str
+    address: str
+    created_at: Optional[datetime] = None
+
+    # This allows the model to be created from a database object
+    model_config = ConfigDict(from_attributes=True)
