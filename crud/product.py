@@ -1,48 +1,21 @@
 # crud/product.py
 
-from typing import Any, Dict, List, Optional, Iterable, Tuple
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, or_
+from sqlalchemy.orm import Session
+from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-import models
 
+import models
 try:
     from shopify_service import gid_to_id
-except Exception:
+except ImportError:
     def gid_to_id(gid: Optional[str]) -> Optional[int]:
         if not gid: return None
-        try: return int(str(gid).split("/")[-1])
-        except Exception: return None
+        try: return int(str(gid).split('/')[-1])
+        except (IndexError, ValueError): return None
 
-# --- NEW FUNCTION ---
-def get_products(
-    db: Session, skip: int = 0, limit: int = 100, store_id: Optional[int] = None, search: Optional[str] = None
-) -> Tuple[List[models.Product], int]:
-    """
-    Fetches a paginated list of products with optional filtering.
-    """
-    query = db.query(models.Product).options(joinedload(models.Product.variants))
-
-    if store_id:
-        query = query.filter(models.Product.store_id == store_id)
-
-    if search:
-        search_term = f"%{search}%"
-        query = query.filter(
-            or_(
-                models.Product.title.ilike(search_term),
-                models.Product.variants.any(models.ProductVariant.sku.ilike(search_term)),
-                models.Product.variants.any(models.ProductVariant.barcode.ilike(search_term)),
-            )
-        )
-
-    total_count = query.count()
-    products = query.order_by(models.Product.title).offset(skip).limit(limit).all()
-
-    return products, total_count
-
-# --- (Existing functions remain the same) ---
+# --- Helper Functions (mostly unchanged) ---
 def _get(obj: Any, *path: str, default=None):
     cur = obj
     for key in path:
@@ -55,14 +28,13 @@ def _to_dt(val) -> Optional[datetime]:
     if isinstance(val, datetime): return val.astimezone(timezone.utc) if val.tzinfo else val.replace(tzinfo=timezone.utc)
     s = str(val).strip().replace(" ", "T").replace("Z", "+00:00")
     try:
-        dt = datetime.fromisoformat(s)
-        return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
+        dt = datetime.fromisoformat(s); return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception: return None
 
 def _first_image_url(prod: Any) -> Optional[str]:
     return _get(prod, "featuredImage", "url") or _get(prod, "image", "src")
 
+# --- Data Extraction (with SKU normalization) ---
 def _extract_product_fields(prod: Any) -> Dict[str, Any]:
     pid = _get(prod, "legacyResourceId") or gid_to_id(_get(prod, "id"))
     if pid is None: raise ValueError("Unable to extract numeric product id.")
@@ -79,9 +51,16 @@ def _extract_product_fields(prod: Any) -> Dict[str, Any]:
 def _extract_variant_fields(variant: Any, product_id: int) -> Dict[str, Any]:
     vid = _get(variant, "legacyResourceId") or gid_to_id(_get(variant, "id"))
     if vid is None: raise ValueError("Unable to extract numeric variant id.")
+    
+    # *** FIX: Normalize blank SKUs to NULL ***
+    sku = _get(variant, "sku")
+    normalized_sku = sku.strip() if sku else None
+    if not normalized_sku:
+        sku = None
+
     return {
         "id": int(vid), "shopify_gid": _get(variant, "id"), "product_id": product_id,
-        "title": _get(variant, "title"), "sku": _get(variant, "sku"), "barcode": _get(variant, "barcode"),
+        "title": _get(variant, "title"), "sku": sku, "barcode": _get(variant, "barcode"),
         "price": _get(variant, "price"), "compare_at_price": _get(variant, "compareAtPrice"),
         "position": _get(variant, "position"),
         "inventory_item_id": gid_to_id(_get(variant, "inventoryItem", "id")),
@@ -92,18 +71,11 @@ def _extract_variant_fields(variant: Any, product_id: int) -> Dict[str, Any]:
         "inventory_levels": _get(variant, "inventoryItem", "inventoryLevels", default=[]),
     }
 
-def _pg_upsert(db: Session, table, rows: List[Dict[str, Any]], conflict_cols: Iterable[str]):
-    if not rows: return
-    unique_rows_map = {tuple(row.get(col) for col in conflict_cols): row for row in rows}
-    unique_rows = list(unique_rows_map.values())
-    stmt = pg_insert(table).values(unique_rows)
-    update_cols = {c.name: getattr(stmt.excluded, c.name) for c in stmt.excluded if c.name not in conflict_cols}
-    stmt = stmt.on_conflict_do_update(index_elements=list(conflict_cols), set_=update_cols)
-    db.execute(stmt)
-
+# --- Robust Upsert Logic ---
 def create_or_update_products(db: Session, store_id: int, items: List[Any]):
     now = datetime.now(timezone.utc)
     prod_rows, var_rows, loc_rows, inv_level_rows = [], [], [], []
+
     for bundle in items or []:
         p, vs = bundle.get("product", {}), bundle.get("variants", [])
         try:
@@ -122,31 +94,53 @@ def create_or_update_products(db: Session, store_id: int, items: List[Any]):
                     loc_rows.append({"id": loc_id, "store_id": store_id, "name": _get(loc, "name")})
                     qmap = {q["name"]: q["quantity"] for q in _get(lvl, "quantities", default=[])}
                     inv_level_rows.append({
-                        "inventory_item_id": vf["inventory_item_id"], "location_id": loc_id,
-                        "available": qmap.get("available", 0), "on_hand": qmap.get("on_hand", 0),
+                        "variant_id": vf["id"], # *** FIX: Use variant_id for the new FK ***
+                        "inventory_item_id": vf["inventory_item_id"], 
+                        "location_id": loc_id,
+                        "available": qmap.get("available", 0),
+                        "on_hand": qmap.get("on_hand", qmap.get("available", 0)),
                         "last_fetched_at": now,
                     })
         except Exception as e:
-            print(f"Skipping product due to extraction error: {e}")
+            print(f"SKIPPING product due to data extraction error: {e}")
 
-    if prod_rows: _pg_upsert(db, models.Product.__table__, prod_rows, conflict_cols=("id",))
+    # --- Database Operations ---
+    if not prod_rows: return
+
+    # Upsert products by their unique Shopify ID
+    stmt_products = pg_insert(models.Product).values(prod_rows)
+    stmt_products = stmt_products.on_conflict_do_update(
+        index_elements=['id'],
+        set_={c.name: getattr(stmt_products.excluded, c.name) for c in stmt_products.excluded if c.name != 'id'}
+    )
+    db.execute(stmt_products)
+
+    # Upsert variants by their unique Shopify ID
     if var_rows:
-        sku_variants = [v for v in var_rows if v.get('sku')]
-        no_sku_variants = [v for v in var_rows if not v.get('sku')]
-        if no_sku_variants: _pg_upsert(db, models.ProductVariant.__table__, no_sku_variants, conflict_cols=("id",))
-        if sku_variants:
-            existing_skus = {s for s, in db.query(models.ProductVariant.sku).filter(
-                models.ProductVariant.store_id == store_id,
-                models.ProductVariant.sku.in_([v['sku'] for v in sku_variants])
-            ).all()}
-            new_variants = [v for v in sku_variants if v['sku'] not in existing_skus]
-            update_variants = [v for v in sku_variants if v['sku'] in existing_skus]
-            if new_variants: _pg_upsert(db, models.ProductVariant.__table__, new_variants, conflict_cols=("id",))
-            for v_data in update_variants:
-                db.query(models.ProductVariant).filter(
-                    models.ProductVariant.sku == v_data['sku'],
-                    models.ProductVariant.store_id == v_data['store_id']
-                ).update(v_data)
-    if loc_rows: _pg_upsert(db, models.Location.__table__, loc_rows, conflict_cols=("id",))
-    if inv_level_rows: _pg_upsert(db, models.InventoryLevel.__table__, inv_level_rows, conflict_cols=("inventory_item_id", "location_id"))
+        stmt_variants = pg_insert(models.ProductVariant).values(var_rows)
+        stmt_variants = stmt_variants.on_conflict_do_update(
+            index_elements=['id'],
+            set_={c.name: getattr(stmt_variants.excluded, c.name) for c in stmt_variants.excluded if c.name != 'id'}
+        )
+        db.execute(stmt_variants)
+
+    # Upsert locations by their unique Shopify ID
+    if loc_rows:
+        stmt_locations = pg_insert(models.Location).values(list({v['id']:v for v in loc_rows}.values()))
+        stmt_locations = stmt_locations.on_conflict_do_nothing(index_elements=['id'])
+        db.execute(stmt_locations)
+
+    # Upsert inventory levels based on the new composite primary key
+    if inv_level_rows:
+        stmt_inv = pg_insert(models.InventoryLevel).values(inv_level_rows)
+        stmt_inv = stmt_inv.on_conflict_do_update(
+            index_elements=['variant_id', 'location_id'],
+            set_={
+                'available': stmt_inv.excluded.available,
+                'on_hand': stmt_inv.excluded.on_hand,
+                'last_fetched_at': stmt_inv.excluded.last_fetched_at
+            }
+        )
+        db.execute(stmt_inv)
+
     db.commit()

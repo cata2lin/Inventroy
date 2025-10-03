@@ -1,7 +1,7 @@
 # models.py
 
 from sqlalchemy import (Column, Integer, String, Float, DateTime, Text,
-                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index, UniqueConstraint, CheckConstraint)
+                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index, UniqueConstraint)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from passlib.context import CryptContext
@@ -15,10 +15,6 @@ class User(Base):
     username = Column(String(255), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, index=True, nullable=True)
-
-    @staticmethod
-    def hash_password(password: str):
-        return pwd_context.hash(password)
 
     def verify_password(self, password: str) -> bool:
         return pwd_context.verify(password, self.hashed_password)
@@ -48,7 +44,6 @@ class Webhook(Base):
     store = relationship("Store", back_populates="webhooks")
 
 class Product(Base):
-    # ... (rest of the file is unchanged)
     __tablename__ = "products"
     id = Column(BIGINT, primary_key=True, index=True)
     shopify_gid = Column(String(255), unique=True, nullable=False)
@@ -67,7 +62,6 @@ class Product(Base):
     image_url = Column(String(2048))
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
-
 
 class ProductVariant(Base):
     __tablename__ = "product_variants"
@@ -95,7 +89,10 @@ class ProductVariant(Base):
     cost = Column(NUMERIC(10, 2), nullable=True)
     product = relationship("Product", back_populates="variants")
     inventory_levels = relationship("InventoryLevel", back_populates="variant", cascade="all, delete-orphan")
-    __table_args__ = (UniqueConstraint('sku', 'store_id', name='uq_product_variants_sku_store_id'),)
+    # This unique constraint is now enforced by the index created in the SQL script
+    __table_args__ = (
+        Index('ix_product_variants_sku_store_id_unique_not_null', 'store_id', 'sku', unique=True, postgresql_where=sku.isnot(None)),
+    )
 
 class Location(Base):
     __tablename__ = "locations"
@@ -104,11 +101,12 @@ class Location(Base):
     name = Column(String(255), nullable=False)
     inventory_levels = relationship("InventoryLevel", back_populates="location")
 
-
 class InventoryLevel(Base):
     __tablename__ = "inventory_levels"
-    inventory_item_id = Column(BIGINT, ForeignKey("product_variants.inventory_item_id"), primary_key=True)
+    # The primary key is now composite on variant_id and location_id
+    variant_id = Column(BIGINT, ForeignKey("product_variants.id", ondelete="CASCADE"), primary_key=True)
     location_id = Column(BIGINT, ForeignKey("locations.id"), primary_key=True)
+    inventory_item_id = Column(BIGINT, index=True) # Kept for reference
     available = Column(Integer)
     on_hand = Column(Integer)
     updated_at = Column(DateTime(timezone=True))
@@ -123,6 +121,4 @@ class InventorySnapshot(Base):
     product_variant_id = Column(BIGINT, ForeignKey("product_variants.id", ondelete="CASCADE"), nullable=False, index=True)
     store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     on_hand = Column(Integer, nullable=False)
-    __table_args__ = (
-        UniqueConstraint('date', 'product_variant_id', 'store_id', name='uq_snapshot_date_variant_store'),
-    )
+    __table_args__ = (UniqueConstraint('date', 'product_variant_id', 'store_id', name='uq_snapshot_date_variant_store'),)
