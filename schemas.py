@@ -1,8 +1,25 @@
 # schemas.py
+from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
+from pydantic import BaseModel, Field, HttpUrl, ConfigDict
+
+# =========================
+# Base model configurations
+# =========================
+
+class ORMBase(BaseModel):
+    """Base for models mapped to SQLAlchemy objects."""
+    model_config = ConfigDict(from_attributes=True)
+
+class APIBase(BaseModel):
+    """Base for models mapped to external API payloads."""
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+# ======================================================
+# App-specific schemas (for API responses)
+# ======================================================
 
 class StoreBase(BaseModel):
     name: str
@@ -27,24 +44,113 @@ class Webhook(BaseModel):
     created_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
-# --- NEW SCHEMAS ---
 class ProductVariant(BaseModel):
     id: int
-    title: str
-    sku: Optional[str]
-    barcode: Optional[str]
-    price: Optional[float]
-    inventory_quantity: Optional[int]
+    title: Optional[str] = None
+    sku: Optional[str] = None
+    barcode: Optional[str] = None
+    price: Optional[float] = None
+    inventory_quantity: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
 class Product(BaseModel):
     id: int
     title: str
-    image_url: Optional[str]
-    status: Optional[str]
+    image_url: Optional[str] = None
+    status: Optional[str] = None
     variants: List[ProductVariant] = []
     model_config = ConfigDict(from_attributes=True)
 
 class ProductResponse(BaseModel):
     total_count: int
     products: List[Product]
+
+# ======================================================
+# Shopify GraphQL Ingest Models (from previous working version)
+# ======================================================
+
+class Money(APIBase):
+    amount: Optional[float] = None
+    currency_code: Optional[str] = Field(None, alias="currencyCode")
+
+class LocationModel(APIBase):
+    legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
+    name: Optional[str] = None
+
+class InventoryLevelModel(APIBase):
+    updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+    quantities: Optional[List[Dict[str, Any]]] = None
+    location: Optional[LocationModel] = None
+
+class InventoryItemModel(APIBase):
+    legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
+    unit_cost: Optional[Money] = Field(None, alias="unitCost")
+    inventory_levels: Optional[List[InventoryLevelModel]] = Field(None, alias="inventoryLevels")
+
+class ProductModel(APIBase):
+    legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
+    title: Optional[str] = None
+    # ... other product fields if needed
+
+class VariantModel(APIBase):
+    legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
+    id: Optional[str] = None
+    title: Optional[str] = None
+    price: Optional[float] = None
+    sku: Optional[str] = None
+    barcode: Optional[str] = None
+    inventory_item: Optional[InventoryItemModel] = Field(None, alias="inventoryItem")
+    product: Optional[ProductModel] = None
+    # ... other variant fields
+
+class LineItemModel(APIBase):
+    id: Optional[str] = None
+    title: Optional[str] = None
+    quantity: Optional[int] = None
+    sku: Optional[str] = None
+    variant: Optional[VariantModel] = None
+    original_unit_price: Optional[Money] = Field(None, alias="originalUnitPriceSet")
+    total_discount: Optional[Money] = Field(None, alias="totalDiscountSet")
+    # ... other line item fields
+
+class TrackingInfo(APIBase):
+    company: Optional[str] = None
+    number: Optional[str] = None
+    url: Optional[HttpUrl] = None
+
+class FulfillmentEventModel(APIBase):
+    id: Optional[str] = None
+    message: Optional[str] = None
+    status: Optional[str] = None
+    happened_at: Optional[datetime] = Field(None, alias="happenedAt")
+
+class FulfillmentModel(APIBase):
+    id: Optional[str] = None
+    legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
+    status: Optional[str] = None
+    created_at: Optional[datetime] = Field(None, alias="createdAt")
+    updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+    tracking_info: Optional[List[TrackingInfo]] = Field(default=None, alias="trackingInfo")
+    events: Optional[List[FulfillmentEventModel]] = None
+
+class ShopifyOrder(APIBase):
+    id: Optional[str] = None
+    legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
+    name: Optional[str] = None
+    email: Optional[str] = None
+    created_at: Optional[datetime] = Field(None, alias="createdAt")
+    cancelled_at: Optional[datetime] = Field(None, alias="cancelledAt")
+    financial_status: Optional[str] = Field(None, alias="displayFinancialStatus")
+    fulfillment_status: Optional[str] = Field(None, alias="displayFulfillmentStatus")
+    total_price: Optional[Money] = Field(None, alias="totalPriceSet")
+    subtotal_price: Optional[Money] = Field(None, alias="subtotalPriceSet")
+    total_tax: Optional[Money] = Field(None, alias="totalTaxSet")
+    total_discounts: Optional[Money] = Field(None, alias="totalDiscountsSet")
+    total_shipping_price: Optional[Money] = Field(None, alias="totalShippingPriceSet")
+    tags: Optional[List[str]] = None
+    note: Optional[str] = None
+    paymentGatewayNames: Optional[List[str]] = Field(None, alias="paymentGatewayNames")
+    cancel_reason: Optional[str] = Field(None, alias="cancelReason")
+    currency: Optional[str] = Field(None, alias="currencyCode")
+    line_items: Optional[List[LineItemModel]] = Field(None, alias="lineItems")
+    fulfillments: Optional[List[FulfillmentModel]] = None
