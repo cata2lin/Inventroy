@@ -44,23 +44,23 @@ class Webhook(BaseModel):
     created_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
-# --- UPDATED Schemas for the mutations page and product views ---
+# --- CORRECTED Schemas for the mutations page and product views ---
 
 class Location(ORMBase):
     id: int
-    shopify_gid: str
+    shopify_gid: Optional[str] = None # GID can be nullable if sync fails
     name: Optional[str] = None
 
 class InventoryLevel(ORMBase):
     location_id: int
     available: Optional[int] = None
-    location: Location # Nested location schema to access its GID
+    location: Location
 
 class ProductVariant(ORMBase):
     id: int
     shopify_gid: str
     inventory_item_id: Optional[int] = None
-    inventory_item_gid: Optional[str] = None # Will be populated by a validator
+    inventory_item_gid: Optional[str] = None # This field will be created by the validator below
     title: Optional[str] = None
     sku: Optional[str] = None
     barcode: Optional[str] = None
@@ -70,15 +70,16 @@ class ProductVariant(ORMBase):
     inventory_quantity: Optional[int] = None
     inventory_levels: List[InventoryLevel] = []
 
-    # This validator constructs the inventory_item_gid needed by the frontend,
-    # as it's not stored directly in our database.
+    # This validator is the key fix. It correctly constructs the full GID
+    # that the Shopify API needs for inventory mutations.
     @field_validator("inventory_item_gid", mode="before")
     @classmethod
     def assemble_inventory_item_gid(cls, v, values):
+        # Access the raw data from the ORM model to get the inventory_item_id
         inventory_item_id = values.data.get('inventory_item_id')
         if inventory_item_id:
             return f"gid://shopify/InventoryItem/{inventory_item_id}"
-        return None
+        return None # Return None if there's no ID
 
 class Product(ORMBase):
     id: int
@@ -104,7 +105,7 @@ class Money(APIBase):
     currency_code: Optional[str] = Field(None, alias="currencyCode")
 
 class LocationModel(APIBase):
-    id: Optional[str] = None # The GID from Shopify
+    id: Optional[str] = None
     legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
     name: Optional[str] = None
 
@@ -114,7 +115,7 @@ class InventoryLevelModel(APIBase):
     location: Optional[LocationModel] = None
 
 class InventoryItemModel(APIBase):
-    id: Optional[str] = None # The GID from Shopify
+    id: Optional[str] = None
     legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
     unit_cost: Optional[Money] = Field(None, alias="unitCost")
     inventory_levels: Optional[List[InventoryLevelModel]] = Field(None, alias="inventoryLevels")
@@ -122,7 +123,6 @@ class InventoryItemModel(APIBase):
 class ProductModel(APIBase):
     legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
     title: Optional[str] = None
-    # ... other product fields if needed
 
 class VariantModel(APIBase):
     legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
@@ -133,7 +133,6 @@ class VariantModel(APIBase):
     barcode: Optional[str] = None
     inventory_item: Optional[InventoryItemModel] = Field(None, alias="inventoryItem")
     product: Optional[ProductModel] = None
-    # ... other variant fields
 
 class LineItemModel(APIBase):
     id: Optional[str] = None
@@ -143,7 +142,6 @@ class LineItemModel(APIBase):
     variant: Optional[VariantModel] = None
     original_unit_price: Optional[Money] = Field(None, alias="originalUnitPriceSet")
     total_discount: Optional[Money] = Field(None, alias="totalDiscountSet")
-    # ... other line item fields
 
 class TrackingInfo(APIBase):
     company: Optional[str] = None

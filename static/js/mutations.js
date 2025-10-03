@@ -147,17 +147,19 @@ document.addEventListener('DOMContentLoaded', () => {
                     <label for="inventoryItemId">Select Variant</label>
                     <select name="inventoryItemId" id="inventoryItemId" required>
                         <option value="">-- Choose a variant --</option>
-                        ${currentProduct.variants.map(v => `<option value="${v.inventory_item_gid}" data-cost="${v.cost_per_item || ''}">${v.title}</option>`).join('')}
+                        ${currentProduct.variants.filter(v => v.inventory_item_gid).map(v => `<option value="${v.inventory_item_gid}" data-cost="${v.cost_per_item || ''}">${v.title}</option>`).join('')}
                     </select>
                     <label for="cost">New Cost</label>
                     <input type="number" id="cost" name="cost" step="0.01" placeholder="e.g., 7.50" required>
                 `;
                 break;
             case 'inventorySetQuantities':
-                const locations = {}; // Use a map to get unique locations
+                const locations = {};
                 currentProduct.variants.forEach(v => {
                     v.inventory_levels.forEach(l => {
-                        locations[l.location.shopify_gid] = l.location.name;
+                        if (l.location && l.location.shopify_gid) {
+                            locations[l.location.shopify_gid] = l.location.name;
+                        }
                     });
                 });
 
@@ -165,7 +167,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <label for="inventoryItemId">Select Variant</label>
                     <select name="inventoryItemId" required>
                          <option value="">-- Choose a variant --</option>
-                        ${currentProduct.variants.map(v => `<option value="${v.inventory_item_gid}">${v.title}</option>`).join('')}
+                        ${currentProduct.variants.filter(v => v.inventory_item_gid).map(v => `<option value="${v.inventory_item_gid}">${v.title}</option>`).join('')}
                     </select>
                     
                     <label for="locationId">Select Location</label>
@@ -217,7 +219,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 case 'setProductCategory':
                     variables.product = {
                         id: formData.get('productId'),
-                        category: formData.get('categoryId')
+                        productTaxonomy: {
+                            productTaxonomyNodeId: formData.get('categoryId')
+                        }
                     };
                     break;
                 case 'updateProductType':
@@ -251,7 +255,7 @@ document.addEventListener('DOMContentLoaded', () => {
                      variables.input = {
                         name: "available",
                         reason: "correction",
-                        quantities: [{
+                        setQuantities: [{
                             inventoryItemId: formData.get('inventoryItemId'),
                             locationId: formData.get('locationId'),
                             quantity: parseInt(formData.get('quantity'), 10)
