@@ -9,11 +9,10 @@ from urllib.parse import quote_plus
 load_dotenv()
 
 # --- Database Configuration ---
-# The raw connection details.
 DB_USER = os.getenv("DB_USER", "scraper")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "Scraper123#") # Raw password with special characters
 DB_HOST = os.getenv("DB_HOST", "38.242.226.83")
-DB_NAME = os.getenv("DB_NAME", "orders1")
+DB_NAME = os.getenv("DB_NAME", "InventorySync")
 
 # URL-encode the password to handle special characters like '#' safely
 encoded_password = quote_plus(DB_PASSWORD)
@@ -21,18 +20,12 @@ encoded_password = quote_plus(DB_PASSWORD)
 # Construct the final, safe database URL
 DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}/{DB_NAME}"
 
-# --- START OF THE FIX ---
 # Create the SQLAlchemy engine with an increased connection pool size.
-# This provides more connections for concurrent background tasks and webhooks.
 engine = create_engine(
     DATABASE_URL,
-    pool_size=15,          # Increased from the default of 5
-    max_overflow=20        # Increased from the default of 10
+    pool_size=15,
+    max_overflow=20
 )
-# --- END OF THE FIX ---
-
-# Create the SQLAlchemy engine
-engine = create_engine(DATABASE_URL)
 
 # Create a SessionLocal class, which will be a factory for new Session objects
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

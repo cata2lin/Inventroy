@@ -1,152 +1,63 @@
-# shopify_service.py
-
 import os
 import time
 import requests
 import random
 from typing import List, Optional, Dict, Any, Generator
-from pydantic import BaseModel, Field, HttpUrl  # (kept for other functions)
 from datetime import datetime
-import schemas
-
-# --- Helper function ---
-def gid_to_id(gid: Optional[str]) -> Optional[int]:
-    if not gid:
-        return None
-    try:
-        return int(str(gid).split('/')[-1])
-    except (IndexError, ValueError):
-        return None
-
-# --- GraphQL Fragments ---
-MONEY_FRAGMENT = "fragment MoneyFragment on MoneyV2 { amount currencyCode }"
-LOCATION_FRAGMENT = "fragment LocationFragment on Location { id legacyResourceId name }"
-INVENTORY_LEVEL_FRAGMENT = """
-fragment InventoryLevelFragment on InventoryLevel {
-  quantities(names: ["available", "on_hand"]) { name quantity }
-  updatedAt
-  location { ...LocationFragment }
-}
-"""
-INVENTORY_ITEM_FRAGMENT = """
-fragment InventoryItemFragment on InventoryItem {
-  id legacyResourceId sku
-  unitCost { amount }
-  inventoryLevels(first: 10) { edges { node { ...InventoryLevelFragment } } }
-}
-"""
-# FIX: Added bodyHtml to the ProductFragment
-PRODUCT_FRAGMENT = """
-fragment ProductFragment on Product {
-  id legacyResourceId title bodyHtml vendor productType status createdAt handle updatedAt publishedAt status tags
-  featuredImage { url }
-  category { name }
-}
-"""
-VARIANT_FRAGMENT = """
-fragment VariantFragment on ProductVariant {
-  id legacyResourceId title price sku position inventoryPolicy compareAtPrice
-  barcode inventoryQuantity createdAt updatedAt
-  inventoryItem { ...InventoryItemFragment }
-  product { ...ProductFragment }
-}
-"""
-LINE_ITEM_FRAGMENT = """
-fragment LineItemFragment on LineItem {
-  id title quantity sku vendor taxable
-  originalUnitPriceSet { shopMoney { ...MoneyFragment } }
-  totalDiscountSet { shopMoney { ...MoneyFragment } }
-  variant { ...VariantFragment }
-}
-"""
-FULFILLMENT_EVENT_FRAGMENT = "fragment FulfillmentEventFragment on FulfillmentEvent { id message status happenedAt }"
-FULFILLMENT_FRAGMENT = """
-fragment FulfillmentFragment on Fulfillment {
-  id legacyResourceId status createdAt updatedAt
-  trackingInfo { company number url }
-  events(first: 20) { edges { node { ...FulfillmentEventFragment } } }
-}
-"""
 
 # --- GraphQL Queries ---
-GET_ALL_ORDERS_QUERY = f"""
-{MONEY_FRAGMENT}
-{LOCATION_FRAGMENT}
-{INVENTORY_LEVEL_FRAGMENT}
-{INVENTORY_ITEM_FRAGMENT}
-{PRODUCT_FRAGMENT}
-{VARIANT_FRAGMENT}
-{LINE_ITEM_FRAGMENT}
-{FULFILLMENT_EVENT_FRAGMENT}
-{FULFILLMENT_FRAGMENT}
-query GetAllData($cursor: String, $query: String) {{
-  orders(first: 5, after: $cursor, sortKey: CREATED_AT, reverse: true, query: $query) {{
-    pageInfo {{ hasNextPage endCursor }}
-    edges {{
-      node {{
-        id legacyResourceId name createdAt updatedAt cancelledAt cancelReason closedAt processedAt
-        displayFinancialStatus displayFulfillmentStatus currencyCode note tags
-        paymentGatewayNames
-        totalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
-        subtotalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
-        totalTaxSet {{ shopMoney {{ ...MoneyFragment }} }}
-        totalDiscountsSet {{ shopMoney {{ ...MoneyFragment }} }}
-        totalShippingPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
-        lineItems(first: 50) {{ edges {{ node {{ ...LineItemFragment }} }} }}
-        fulfillments(first: 10) {{ ...FulfillmentFragment }}
-      }}
-    }}
-  }}
-}}
-"""
-
-GET_ALL_PRODUCTS_QUERY = f"""
-{LOCATION_FRAGMENT}
-{INVENTORY_LEVEL_FRAGMENT}
-{INVENTORY_ITEM_FRAGMENT}
-{PRODUCT_FRAGMENT}
-query GetAllProducts($cursor: String) {{
-  products(first: 20, after: $cursor, sortKey: UPDATED_AT) {{
-    pageInfo {{ hasNextPage endCursor }}
-    edges {{
-      node {{
-        ...ProductFragment
-        variants(first: 50) {{
-          edges {{
-            node {{
-              id legacyResourceId title price sku position inventoryPolicy compareAtPrice
-              barcode inventoryQuantity createdAt updatedAt
-              inventoryItem {{ ...InventoryItemFragment }}
-            }}
-          }}
-        }}
-      }}
-    }}
-  }}
-}}
-"""
-
-GET_INVENTORY_DETAILS_QUERY = """
-query GetInventoryDetails($cursor: String) {
-  inventoryItems(first: 100, after: $cursor) {
+GET_ALL_PRODUCTS_QUERY = """
+query GetAllProducts($cursor: String) {
+  products(first: 20, after: $cursor, sortKey: UPDATED_AT) {
     pageInfo { hasNextPage endCursor }
-    edges { node { legacyResourceId tracked unitCost { amount } } }
-  }
-}
-"""
-
-# IMPORTANT: Shopify 2025-04 no longer supports `inventoryItems(ids: ...)`.
-# Use the root `nodes(ids: [...])` field and inline-fragment the InventoryItem.
-GET_INVENTORY_LEVELS_QUERY = """
-query getInventoryLevels($itemIds: [ID!]!) {
-  nodes(ids: $itemIds) {
-    ... on InventoryItem {
-      legacyResourceId
-      inventoryLevels(first: 100) {
-        edges {
-          node {
-            location { legacyResourceId }
-            quantities(names: ["available", "on_hand"]) { name quantity }
+    edges {
+      node {
+        id
+        legacyResourceId
+        title
+        bodyHtml
+        vendor
+        productType
+        status
+        createdAt
+        handle
+        updatedAt
+        publishedAt
+        status
+        tags
+        featuredImage { url }
+        category { name }
+        variants(first: 50) {
+          edges {
+            node {
+              id
+              legacyResourceId
+              title
+              price
+              sku
+              position
+              inventoryPolicy
+              compareAtPrice
+              barcode
+              inventoryQuantity
+              createdAt
+              updatedAt
+              inventoryItem {
+                id
+                legacyResourceId
+                sku
+                unitCost { amount }
+                inventoryLevels(first: 10) {
+                  edges {
+                    node {
+                      quantities(names: ["available", "on_hand"]) { name quantity }
+                      updatedAt
+                      location { id legacyResourceId name }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -156,135 +67,12 @@ query getInventoryLevels($itemIds: [ID!]!) {
 """
 
 class ShopifyService:
-    def __init__(self, store_url: str, token: str, api_version: str = "2025-04"):
+    def __init__(self, store_url: str, token: str, api_version: str = "2025-10"):
         if not all([store_url, token]):
             raise ValueError("Store URL and Access Token are required.")
         self.api_endpoint = f"https://{store_url}/admin/api/{api_version}/graphql.json"
-        self.rest_api_endpoint = f"https://{store_url}/admin/api/{api_version}"
         self.headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": token}
-        self.rest_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
 
-    # ---------- inventory levels for specific items ----------
-    def get_inventory_levels_for_items(self, item_legacy_ids: List[int]) -> List[Dict[str, Any]]:
-        """
-        Return list of dicts:
-        [
-          {"id": <inventory_item_legacy_id>, "location_id": <legacy_id>, "available": int, "on_hand": int},
-          ...
-        ]
-        """
-        if not item_legacy_ids:
-            return []
-
-        # Convert legacy ints to GIDs to query via `nodes(ids: [...])`
-        item_gids = [f"gid://shopify/InventoryItem/{item_id}" for item_id in item_legacy_ids]
-
-        try:
-            variables = {"itemIds": item_gids}
-            data = self._execute_query(GET_INVENTORY_LEVELS_QUERY, variables)
-
-            # We expect `data["nodes"]` to be a list of InventoryItem nodes (and possibly None for unknown ids)
-            nodes = (data or {}).get("nodes", [])
-            if not isinstance(nodes, list):
-                print("Received unexpected structure for nodes in getInventoryLevels.")
-                return []
-
-            results: List[Dict[str, Any]] = []
-            for node in nodes:
-                if not node or "legacyResourceId" not in node:
-                    # This node may be None or a different type; skip
-                    continue
-
-                item_legacy = node.get("legacyResourceId")
-                inv_levels = ((node.get("inventoryLevels") or {}).get("edges")) or []
-                for lev_edge in inv_levels:
-                    lev_node = (lev_edge or {}).get("node") or {}
-                    loc_legacy = ((lev_node.get("location") or {}).get("legacyResourceId"))
-                    q_list = lev_node.get("quantities") or []
-                    available = 0
-                    on_hand = 0
-                    for q in q_list:
-                        n = q.get("name")
-                        try:
-                            qty = int(q.get("quantity", 0))
-                        except Exception:
-                            qty = 0
-                        if n == "available":
-                            available = qty
-                        elif n == "on_hand":
-                            on_hand = qty
-                    if not on_hand:
-                        on_hand = available
-
-                    results.append(
-                        {
-                            "id": int(item_legacy) if item_legacy is not None else None,
-                            "location_id": int(loc_legacy) if loc_legacy is not None else None,
-                            "available": int(available),
-                            "on_hand": int(on_hand),
-                        }
-                    )
-            return results
-        except Exception as e:
-            print(f"An error occurred during inventory level fetch: {e}")
-            return []
-
-    # ---------- various helpers ----------
-    def get_order_id_from_fulfillment_order_gid(self, fulfillment_order_gid: str) -> Optional[int]:
-        query = """
-        query($id: ID!) {
-          fulfillmentOrder(id: $id) {
-            order { legacyResourceId }
-          }
-        }
-        """
-        variables = {"id": fulfillment_order_gid}
-        try:
-            data = self._execute_query(query, variables)
-            if data and data.get("fulfillmentOrder") and data["fulfillmentOrder"].get("order"):
-                return data["fulfillmentOrder"]["order"].get("legacyResourceId")
-        except Exception as e:
-            print(f"Could not resolve order ID for fulfillment order {fulfillment_order_gid}: {e}")
-        return None
-
-    def get_webhooks(self) -> List[Dict[str, Any]]:
-        url = f"{self.rest_api_endpoint}/webhooks.json"
-        response = requests.get(url, headers=self.rest_headers)
-        response.raise_for_status()
-        return response.json().get("webhooks", [])
-
-    def create_webhook(self, topic: str, address: str) -> Dict[str, Any]:
-        url = f"{self.rest_api_endpoint}/webhooks.json"
-        payload = {"webhook": {"topic": topic, "address": address, "format": "json"}}
-        response = requests.post(url, headers=self.rest_headers, json=payload)
-        response.raise_for_status()
-        return response.json().get("webhook")
-
-    def delete_webhook(self, webhook_id: int):
-        url = f"{self.rest_api_endpoint}/webhooks/{webhook_id}.json"
-        response = requests.delete(url, headers=self.rest_headers)
-        response.raise_for_status()
-        return response.status_code
-
-    def get_total_counts(self, created_at_min: Optional[str] = None, created_at_max: Optional[str] = None) -> Dict[str, int]:
-        try:
-            params = {"status": "any"}
-            if created_at_min:
-                params["created_at_min"] = created_at_min
-            if created_at_max:
-                params["created_at_max"] = created_at_max
-            order_count_url = f"{self.rest_api_endpoint}/orders/count.json"
-            product_count_url = f"{self.rest_api_endpoint}/products/count.json"
-            order_response = requests.get(order_count_url, headers=self.rest_headers, params=params, timeout=10)
-            order_response.raise_for_status()
-            product_response = requests.get(product_count_url, headers=self.rest_headers, timeout=10)
-            product_response.raise_for_status()
-            return {"orders": order_response.json().get("count", 0), "products": product_response.json().get("count", 0)}
-        except requests.exceptions.RequestException as e:
-            print(f"An error occurred while fetching counts via REST API: {e}")
-            return {"orders": 0, "products": 0}
-
-    # ---------- low-level GraphQL ----------
     def _execute_query(self, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = {"query": query, "variables": variables or {}}
         max_retries = 7
@@ -317,73 +105,7 @@ class ShopifyService:
             return []
         return [edge["node"] for edge in data["edges"]]
 
-    # ---------- orders ----------
-    def get_all_orders_and_related_data(
-        self,
-        created_at_min: Optional[str] = None,
-        created_at_max: Optional[str] = None
-    ) -> Generator[List[schemas.ShopifyOrder], None, None]:
-        has_next_page = True
-        cursor = None
-        query_parts = []
-        if created_at_min:
-            query_parts.append(f"created_at:>{created_at_min}")
-        if created_at_max:
-            query_parts.append(f"created_at:<{created_at_max}")
-        query_string = " AND ".join(query_parts) if query_parts else None
-
-        print(f"Starting order data fetch from {self.api_endpoint} with query: {query_string}...")
-        while has_next_page:
-            try:
-                variables = {"cursor": cursor, "query": query_string}
-                data = self._execute_query(GET_ALL_ORDERS_QUERY, variables)
-
-                if not data or "orders" not in data:
-                    print("Received no data or malformed orders data from API. Stopping.")
-                    has_next_page = False
-                    continue
-
-                order_connection = data["orders"]
-                page_info = order_connection.get("pageInfo", {})
-                has_next_page = page_info.get("hasNextPage", False)
-                cursor = page_info.get("endCursor")
-                orders_on_page = []
-
-                for order_node in self._flatten_edges(order_connection):
-                    order_node["lineItems"] = self._flatten_edges(order_node.get("lineItems"))
-                    for item in order_node["lineItems"]:
-                        if item.get("variant") and item["variant"].get("inventoryItem"):
-                            item["variant"]["inventoryItem"]["inventoryLevels"] = self._flatten_edges(item["variant"]["inventoryItem"].get("inventoryLevels"))
-                        if item.get("originalUnitPriceSet"):
-                            item["originalUnitPriceSet"] = item["originalUnitPriceSet"]["shopMoney"]
-                        if item.get("totalDiscountSet"):
-                            item["totalDiscountSet"] = item["totalDiscountSet"]["shopMoney"]
-                    for fulfillment in order_node.get("fulfillments", []):
-                        if fulfillment.get("trackingInfo"):
-                            tracking_info = fulfillment["trackingInfo"][0] if fulfillment["trackingInfo"] else {}
-                            fulfillment["tracking_company"] = tracking_info.get("company")
-                            fulfillment["tracking_number"] = tracking_info.get("number")
-                            fulfillment["tracking_url"] = str(tracking_info.get("url")) if tracking_info.get("url") else None
-                        fulfillment["events"] = self._flatten_edges(fulfillment.get("events"))
-                    for key in ["totalPriceSet", "subtotalPriceSet", "totalTaxSet", "totalDiscountsSet", "totalShippingPriceSet"]:
-                        if order_node.get(key):
-                            order_node[key] = order_node[key]["shopMoney"]
-                    orders_on_page.append(schemas.ShopifyOrder.parse_obj(order_node))
-
-                yield orders_on_page
-
-            except (ValueError, requests.exceptions.RequestException) as e:
-                print(f"An error occurred during order page fetch: {e}. Attempting to continue.")
-                has_next_page = False
-
-        print("Finished fetching all order pages from Shopify.")
-
-    # ---------- products + variants ----------
     def get_all_products_and_variants(self) -> Generator[List[Dict[str, Any]], None, None]:
-        """
-        Returns raw dicts to preserve nested fields like featuredImage.url and
-        inventoryItem.unitCost.amount without Pydantic stripping.
-        """
         has_next_page = True
         cursor = None
         print(f"Starting product data fetch from {self.api_endpoint}...")
@@ -400,42 +122,25 @@ class ShopifyService:
                 products_on_page: List[Dict[str, Any]] = []
 
                 for product_node in self._flatten_edges(product_connection):
-                    # Flatten variant edges
                     variants = self._flatten_edges(product_node.pop("variants", {}))
-                    # Flatten inventory levels inside each variant
                     for variant_node in variants:
                         inv = variant_node.get("inventoryItem")
                         if inv and isinstance(inv, dict):
                             inv["inventoryLevels"] = self._flatten_edges(inv.get("inventoryLevels"))
                     products_on_page.append({
-                        "product": product_node,     # raw dict with featuredImage.url etc.
-                        "variants": variants         # raw dicts with inventoryItem.unitCost.amount etc.
+                        "product": product_node,
+                        "variants": variants
                     })
-
                 yield products_on_page
             except (ValueError, requests.exceptions.RequestException) as e:
                 print(f"An error occurred during product fetch: {e}. Stopping.")
                 return
         print("Finished fetching all product pages from Shopify.")
 
-    # ---------- inventory details ----------
-    def get_all_inventory_details(self) -> Generator[List[Dict[str, Any]], None, None]:
-        has_next_page = True
-        cursor = None
-        print(f"Starting inventory details fetch from {self.api_endpoint}...")
-        while has_next_page:
-            try:
-                data = self._execute_query(GET_INVENTORY_DETAILS_QUERY, {"cursor": cursor})
-                if not data or "inventoryItems" not in data:
-                    print("Received no data or malformed inventoryItems data. Stopping detail sync.")
-                    return
-                inventory_connection = data["inventoryItems"]
-                page_info = inventory_connection.get("pageInfo", {})
-                has_next_page = page_info.get("hasNextPage", False)
-                cursor = page_info.get("endCursor")
-                items_on_page = self._flatten_edges(inventory_connection)
-                yield items_on_page
-            except (ValueError, requests.exceptions.RequestException) as e:
-                print(f"An error occurred during inventory details fetch: {e}. Stopping.")
-                return
-        print("Finished fetching all inventory details.")
+def gid_to_id(gid: Optional[str]) -> Optional[int]:
+    if not gid:
+        return None
+    try:
+        return int(str(gid).split('/')[-1])
+    except (IndexError, ValueError):
+        return None
