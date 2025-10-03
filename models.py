@@ -1,7 +1,7 @@
 # models.py
 
 from sqlalchemy import (Column, Integer, String, DateTime, Text,
-                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index, Computed)
+                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index, Computed, UniqueConstraint)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from passlib.context import CryptContext
@@ -33,6 +33,9 @@ class Store(Base):
     enabled = Column(BOOLEAN, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    inventory_snapshots = relationship("InventorySnapshot", back_populates="store")
 
 class Product(Base):
     __tablename__ = "products"
@@ -84,6 +87,7 @@ class ProductVariant(Base):
 
     product = relationship("Product", back_populates="variants")
     inventory_levels = relationship("InventoryLevel", back_populates="variant", cascade="all, delete-orphan")
+    inventory_snapshots = relationship("InventorySnapshot", back_populates="product_variant", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index('ux_variants_store_sku_primary', 'store_id', 'sku_normalized',
@@ -109,6 +113,23 @@ class InventoryLevel(Base):
     variant = relationship("ProductVariant", back_populates="inventory_levels")
     location = relationship("Location", back_populates="inventory_levels")
 
+# --- New Model from ERD ---
+class InventorySnapshot(Base):
+    __tablename__ = "inventory_snapshots"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(DateTime(timezone=True), nullable=False)
+    product_variant_id = Column(BIGINT, ForeignKey("product_variants.id", ondelete="CASCADE"), nullable=False, index=True)
+    store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    on_hand = Column(Integer, nullable=False)
+
+    product_variant = relationship("ProductVariant", back_populates="inventory_snapshots")
+    store = relationship("Store", back_populates="inventory_snapshots")
+    
+    __table_args__ = (
+        UniqueConstraint('date', 'product_variant_id', 'store_id', name='inventory_snapshots_date_product_variant_id_store_id_key'),
+    )
+
+
 # --- New Audit & Error Tables ---
 class SyncRun(Base):
     __tablename__ = "sync_runs"
@@ -131,3 +152,12 @@ class SyncDeadLetter(Base):
     payload = Column(JSONB, nullable=False)
     reason = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class Webhook(Base):
+    __tablename__ = 'webhooks'
+    id = Column(Integer, primary_key=True)
+    shopify_webhook_id = Column(BIGINT, unique=True, nullable=False)
+    store_id = Column(Integer, ForeignKey('stores.id'), nullable=False)
+    topic = Column(String(255), nullable=False)
+    address = Column(String(2048), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

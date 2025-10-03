@@ -108,6 +108,7 @@ def _extract_variant_fields(v_data: Any, product_id: int, store_id: int, last_se
 # --- Robust Upsert Logic ---
 def create_or_update_products(db: Session, store_id: int, run_id: int, items: List[Any], last_seen_at: datetime):
     prod_rows, var_rows, loc_rows, inv_level_rows = [], [], [], []
+    now = datetime.now(timezone.utc)
 
     existing_primary_skus = {r[0] for r in db.query(models.ProductVariant.sku_normalized).filter(
         models.ProductVariant.store_id == store_id,
@@ -117,8 +118,11 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
     seen_skus_in_page = set()
 
     for bundle in items or []:
-        p_data, v_data_list = bundle.get("product", {}), bundle.get("variants", [])
         try:
+            # CORRECTED: Treat the 'bundle' directly as the product data.
+            p_data = bundle
+            v_data_list = p_data.get("variants", [])
+
             p_row = _extract_product_fields(p_data, store_id, last_seen_at)
             prod_rows.append(p_row)
 
