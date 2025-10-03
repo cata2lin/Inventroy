@@ -110,37 +110,17 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
     prod_rows, var_rows, loc_rows, inv_level_rows = [], [], [], []
     now = datetime.now(timezone.utc)
 
-    existing_primary_skus = {r[0] for r in db.query(models.ProductVariant.sku_normalized).filter(
-        models.ProductVariant.store_id == store_id,
-        models.ProductVariant.is_primary_variant == True,
-        models.ProductVariant.sku_normalized != None
-    )}
-    seen_skus_in_page = set()
-
     for bundle in items or []:
         try:
-            # CORRECTED: Treat the 'bundle' directly as the product data.
-            p_data = bundle
-            v_data_list = p_data.get("variants", [])
-
+            p_data, v_data_list = bundle, bundle.get("variants", [])
+            
             p_row = _extract_product_fields(p_data, store_id, last_seen_at)
             prod_rows.append(p_row)
 
             for v_data in v_data_list:
                 v_row = _extract_variant_fields(v_data, p_row["id"], store_id, last_seen_at)
-                
-                sku_norm = normalize_sku(v_row["sku"])
-                v_row["is_primary_variant"] = False
-                if sku_norm:
-                    key = (store_id, sku_norm)
-                    if key not in seen_skus_in_page and sku_norm not in existing_primary_skus:
-                        v_row["is_primary_variant"] = True
-                        seen_skus_in_page.add(key)
-                        existing_primary_skus.add(sku_norm)
-                
                 var_rows.append(v_row)
                 
-                # Extract inventory levels
                 for lvl in _get(v_data, "inventoryItem", "inventoryLevels", default=[]):
                     loc_id = gid_to_id(_get(lvl, "location", "id"))
                     if not loc_id: continue
@@ -159,31 +139,60 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
 
     if not prod_rows: return
 
+    # --- De-duplication logic for variants before insertion ---
+    unique_variants_map = {}
+    variants_with_null_sku = []
+
+    for v_row in var_rows:
+        sku = v_row.get("sku")
+        if sku and sku.strip():
+            # Keep only the last seen variant for a given SKU in the batch
+            unique_variants_map[(store_id, sku)] = v_row
+        else:
+            # Collect variants with no SKU to be inserted/updated by their ID
+            variants_with_null_sku.append(v_row)
+    
+    # Reconstruct the list of variants to be processed
+    deduplicated_var_rows = list(unique_variants_map.values()) + variants_with_null_sku
+
     def pg_upsert(table, rows, conflict_cols, update_cols):
         if not rows: return
-        # Deduplicate within the batch to prevent conflicts with self
-        unique_rows = list({tuple(row.get(col) for col in conflict_cols): row for row in rows}.values())
-        stmt = pg_insert(table).values(unique_rows)
+        # The primary key (id) is always unique within the batch from Shopify
+        stmt = pg_insert(table).values(rows)
         stmt = stmt.on_conflict_do_update(index_elements=conflict_cols, set_=update_cols)
         db.execute(stmt)
 
-    # Upsert all data in the correct order
-    pg_upsert(models.Product.__table__, prod_rows, ['id'], {
-        "title": pg_insert(models.Product).excluded.title,
-        "last_seen_at": pg_insert(models.Product).excluded.last_seen_at
-    })
-    pg_upsert(models.ProductVariant.__table__, var_rows, ['id'], {
-        "sku": pg_insert(models.ProductVariant).excluded.sku,
-        "is_primary_variant": pg_insert(models.ProductVariant).excluded.is_primary_variant,
-        "last_seen_at": pg_insert(models.ProductVariant).excluded.last_seen_at
-    })
-    pg_upsert(models.Location.__table__, loc_rows, ['id'], {
-        "name": pg_insert(models.Location).excluded.name
-    })
-    pg_upsert(models.InventoryLevel.__table__, inv_level_rows, ['variant_id', 'location_id'], {
-        "available": pg_insert(models.InventoryLevel).excluded.available,
-        "on_hand": pg_insert(models.InventoryLevel).excluded.on_hand,
-        "last_fetched_at": pg_insert(models.InventoryLevel).excluded.last_fetched_at
-    })
-    
-    db.commit()
+    try:
+        # Upsert all data in the correct order
+        pg_upsert(models.Product.__table__, prod_rows, ['id'], {
+            "title": pg_insert(models.Product).excluded.title,
+            # Add other fields to update on conflict as needed
+            "last_seen_at": pg_insert(models.Product).excluded.last_seen_at
+        })
+        
+        # Upsert variants using the de-duplicated list
+        pg_upsert(models.ProductVariant.__table__, deduplicated_var_rows, ['id'], {
+            "sku": pg_insert(models.ProductVariant).excluded.sku,
+            "price": pg_insert(models.ProductVariant).excluded.price,
+            "inventory_quantity": pg_insert(models.ProductVariant).excluded.inventory_quantity,
+            # Add other fields to update on conflict as needed
+            "last_seen_at": pg_insert(models.ProductVariant).excluded.last_seen_at
+        })
+
+        pg_upsert(models.Location.__table__, loc_rows, ['id'], {
+            "name": pg_insert(models.Location).excluded.name
+        })
+        
+        pg_upsert(models.InventoryLevel.__table__, inv_level_rows, ['variant_id', 'location_id'], {
+            "available": pg_insert(models.InventoryLevel).excluded.available,
+            "on_hand": pg_insert(models.InventoryLevel).excluded.on_hand,
+            "last_fetched_at": pg_insert(models.InventoryLevel).excluded.last_fetched_at
+        })
+        
+        db.commit()
+
+    except Exception as e:
+        db.rollback()
+        # Log the entire batch that failed for inspection
+        log_dead_letter(db, store_id, run_id, {"products": prod_rows, "variants": var_rows}, f"Page processing failed: {e}")
+        db.commit()

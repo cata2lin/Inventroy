@@ -55,7 +55,7 @@ class Product(Base):
     tags = Column(Text)
     image_url = Column(String(2048))
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
-    last_seen_at = Column(DateTime(timezone=True)) # New field
+    last_seen_at = Column(DateTime(timezone=True)) 
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
 
 class ProductVariant(Base):
@@ -80,7 +80,6 @@ class ProductVariant(Base):
     updated_at = Column(DateTime(timezone=True))
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     
-    # New fields for robust sync
     is_primary_variant = Column(BOOLEAN, default=False, nullable=False)
     sku_normalized = Column(Text, Computed("NULLIF(BTRIM(LOWER(sku)), '')", persisted=True))
     last_seen_at = Column(DateTime(timezone=True))
@@ -90,8 +89,8 @@ class ProductVariant(Base):
     inventory_snapshots = relationship("InventorySnapshot", back_populates="product_variant", cascade="all, delete-orphan")
 
     __table_args__ = (
-        Index('ux_variants_store_sku_primary', 'store_id', 'sku_normalized',
-              unique=True, postgresql_where=is_primary_variant),
+        # Reflects the actual unique constraint from the ERD
+        UniqueConstraint('sku', 'store_id', name='product_variants_sku_store_id_key'),
     )
 
 class Location(Base):
@@ -113,7 +112,6 @@ class InventoryLevel(Base):
     variant = relationship("ProductVariant", back_populates="inventory_levels")
     location = relationship("Location", back_populates="inventory_levels")
 
-# --- New Model from ERD ---
 class InventorySnapshot(Base):
     __tablename__ = "inventory_snapshots"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -129,8 +127,6 @@ class InventorySnapshot(Base):
         UniqueConstraint('date', 'product_variant_id', 'store_id', name='inventory_snapshots_date_product_variant_id_store_id_key'),
     )
 
-
-# --- New Audit & Error Tables ---
 class SyncRun(Base):
     __tablename__ = "sync_runs"
     id = Column(BIGINT, primary_key=True)
