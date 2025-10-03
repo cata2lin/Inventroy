@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field, HttpUrl, ConfigDict, field_validator
+from pydantic import BaseModel, Field, HttpUrl, ConfigDict, field_validator, ValidationInfo
 
 # =========================
 # Base model configurations
@@ -48,7 +48,7 @@ class Webhook(BaseModel):
 
 class Location(ORMBase):
     id: int
-    shopify_gid: Optional[str] = None # GID can be nullable if sync fails
+    shopify_gid: Optional[str] = None
     name: Optional[str] = None
 
 class InventoryLevel(ORMBase):
@@ -60,7 +60,7 @@ class ProductVariant(ORMBase):
     id: int
     shopify_gid: str
     inventory_item_id: Optional[int] = None
-    inventory_item_gid: Optional[str] = None # This field will be created by the validator below
+    inventory_item_gid: Optional[str] = None # Will be populated by the validator
     title: Optional[str] = None
     sku: Optional[str] = None
     barcode: Optional[str] = None
@@ -74,12 +74,13 @@ class ProductVariant(ORMBase):
     # that the Shopify API needs for inventory mutations.
     @field_validator("inventory_item_gid", mode="before")
     @classmethod
-    def assemble_inventory_item_gid(cls, v, values):
-        # Access the raw data from the ORM model to get the inventory_item_id
-        inventory_item_id = values.data.get('inventory_item_id')
-        if inventory_item_id:
-            return f"gid://shopify/InventoryItem/{inventory_item_id}"
-        return None # Return None if there's no ID
+    def assemble_inventory_item_gid(cls, v: Any, info: ValidationInfo) -> Optional[str]:
+        # When using from_attributes=True, the full model object is in info.data
+        if info.data and hasattr(info.data, 'inventory_item_id'):
+            inventory_item_id = info.data.inventory_item_id
+            if inventory_item_id:
+                return f"gid://shopify/InventoryItem/{inventory_item_id}"
+        return None
 
 class Product(ORMBase):
     id: int
@@ -94,7 +95,6 @@ class Product(ORMBase):
 class ProductResponse(BaseModel):
     total_count: int
     products: List[Product]
-
 
 # ======================================================
 # Shopify GraphQL Ingest Models (from previous working version)

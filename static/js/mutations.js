@@ -143,19 +143,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 break;
             case 'updateInventoryCost':
-                 html += `
-                    <label for="inventoryItemId">Select Variant</label>
-                    <select name="inventoryItemId" id="inventoryItemId" required>
-                        <option value="">-- Choose a variant --</option>
-                        ${currentProduct.variants.filter(v => v.inventory_item_gid).map(v => `<option value="${v.inventory_item_gid}" data-cost="${v.cost_per_item || ''}">${v.title}</option>`).join('')}
-                    </select>
-                    <label for="cost">New Cost</label>
-                    <input type="number" id="cost" name="cost" step="0.01" placeholder="e.g., 7.50" required>
-                `;
+                const costVariants = currentProduct.variants.filter(v => v.inventory_item_gid);
+                if (costVariants.length > 0) {
+                    html += `
+                        <label for="inventoryItemId">Select Variant</label>
+                        <select name="inventoryItemId" id="inventoryItemId" required>
+                            <option value="">-- Choose a variant --</option>
+                            ${costVariants.map(v => `<option value="${v.inventory_item_gid}" data-cost="${v.cost_per_item || ''}">${v.title}</option>`).join('')}
+                        </select>
+                        <label for="cost">New Cost</label>
+                        <input type="number" id="cost" name="cost" step="0.01" placeholder="e.g., 7.50" required>
+                    `;
+                } else {
+                    html += `<p>This product has no variants with trackable inventory.</p>`;
+                }
                 break;
             case 'inventorySetQuantities':
+                const quantityVariants = currentProduct.variants.filter(v => v.inventory_item_gid);
                 const locations = {};
-                currentProduct.variants.forEach(v => {
+                quantityVariants.forEach(v => {
                     v.inventory_levels.forEach(l => {
                         if (l.location && l.location.shopify_gid) {
                             locations[l.location.shopify_gid] = l.location.name;
@@ -163,25 +169,32 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                 });
 
-                html += `
-                    <label for="inventoryItemId">Select Variant</label>
-                    <select name="inventoryItemId" required>
-                         <option value="">-- Choose a variant --</option>
-                        ${currentProduct.variants.filter(v => v.inventory_item_gid).map(v => `<option value="${v.inventory_item_gid}">${v.title}</option>`).join('')}
-                    </select>
-                    
-                    <label for="locationId">Select Location</label>
-                    <select name="locationId" id="locationId" required>
-                        <option value="">-- Choose a location --</option>
-                        ${Object.entries(locations).map(([gid, name]) => `<option value="${gid}">${name}</option>`).join('')}
-                    </select>
+                if (quantityVariants.length > 0) {
+                     html += `
+                        <label for="inventoryItemId">Select Variant</label>
+                        <select name="inventoryItemId" required>
+                            <option value="">-- Choose a variant --</option>
+                            ${quantityVariants.map(v => `<option value="${v.inventory_item_gid}">${v.title}</option>`).join('')}
+                        </select>
+                        
+                        <label for="locationId">Select Location</label>
+                        <select name="locationId" id="locationId" required>
+                            <option value="">-- Choose a location --</option>
+                            ${Object.entries(locations).map(([gid, name]) => `<option value="${gid}">${name}</option>`).join('')}
+                        </select>
 
-                    <label for="quantity">New 'Available' Quantity</label>
-                    <input type="number" id="quantity" name="quantity" required placeholder="e.g., 100">
-                `;
+                        <label for="quantity">New 'Available' Quantity</label>
+                        <input type="number" id="quantity" name="quantity" required placeholder="e.g., 100">
+                    `;
+                } else {
+                     html += `<p>This product has no variants with trackable inventory.</p>`;
+                }
                 break;
         }
-        html += '<button type="submit">Execute Mutation</button>';
+        // Only show the submit button if the form is not empty
+        if (html !== '<form id="mutation-form">') {
+            html += '<button type="submit">Execute Mutation</button>';
+        }
         html += '</form>';
         mutationFormContainer.innerHTML = html;
         attachFormListeners();
