@@ -1,6 +1,7 @@
 // static/js/config_page.js
 
 document.addEventListener('DOMContentLoaded', () => {
+    // --- (Element references remain the same, with one addition) ---
     const addStoreForm = document.getElementById('add-store-form');
     const storesListContainer = document.getElementById('stores-list-container');
     const addStoreBtn = document.getElementById('add-store-btn');
@@ -11,8 +12,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const createAllWebhooksBtn = document.getElementById('create-all-webhooks-btn');
     const webhooksListContainer = document.getElementById('webhooks-list-container');
     
+    // NEW ELEMENT REFERENCE
+    const deleteAllWebhooksBtn = document.getElementById('delete-all-webhooks-btn');
+
     let currentStoreId = null;
 
+    // --- (Existing functions remain the same) ---
     const loadStores = async () => {
         storesListContainer.setAttribute('aria-busy', 'true');
         try {
@@ -152,6 +157,30 @@ document.addEventListener('DOMContentLoaded', () => {
             alert(`Error: ${error.message}`);
         }
     };
+    
+    // --- NEW EVENT LISTENER ---
+    deleteAllWebhooksBtn.addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to delete ALL webhooks for ALL stores? This action cannot be undone.')) return;
+        
+        deleteAllWebhooksBtn.setAttribute('aria-busy', 'true');
+        try {
+            const response = await fetch(API_ENDPOINTS.deleteAllWebhooks, { method: 'DELETE' });
+            const result = await response.json();
+            if (!response.ok) {
+                const errorDetails = result.detail.errors ? `\n\nDetails:\n${result.detail.errors.join('\n')}` : '';
+                throw new Error(result.detail.message + errorDetails);
+            }
+            alert(result.message);
+            // If the modal is open, refresh its content
+            if (currentStoreId) {
+                await loadWebhooks();
+            }
+        } catch (error) {
+            alert(`Error: ${error.message}`);
+        } finally {
+            deleteAllWebhooksBtn.removeAttribute('aria-busy');
+        }
+    });
 
     loadStores();
 });

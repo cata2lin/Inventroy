@@ -16,7 +16,6 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-# List of all webhook topics the application needs
 ESSENTIAL_WEBHOOK_TOPICS = [
     "products/create", "products/update", "products/delete",
     "inventory_levels/update",
@@ -42,7 +41,6 @@ def add_store(store: schemas.StoreCreate, db: Session = Depends(get_db)):
 # --- Webhook Management Endpoints ---
 @router.get("/stores/{store_id}/webhooks", response_model=List[schemas.Webhook])
 def get_store_webhooks(store_id: int, db: Session = Depends(get_db)):
-    """Gets all locally registered webhooks for a store."""
     return crud_webhook.get_webhook_registrations_for_store(db, store_id=store_id)
 
 @router.post("/stores/{store_id}/webhooks/create-all", status_code=201)
@@ -50,17 +48,13 @@ def create_all_necessary_webhooks(store_id: int, request: Request, db: Session =
     store = crud_store.get_store(db, store_id=store_id)
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
-
     try:
         service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
         base_url = str(request.base_url).replace("http://", "https://")
         correct_address = f"{base_url.rstrip('/')}/api/webhooks/{store_id}"
-        
         existing_webhooks = service.get_webhooks()
         existing_webhooks_map = {wh['topic']: {'id': wh['id'], 'address': wh['address']} for wh in existing_webhooks}
-
         created_count, updated_count = 0, 0
-
         for topic in ESSENTIAL_WEBHOOK_TOPICS:
             existing = existing_webhooks_map.get(topic)
             if not existing:
@@ -73,11 +67,9 @@ def create_all_necessary_webhooks(store_id: int, request: Request, db: Session =
                 created_webhook = service.create_webhook(topic=topic, address=correct_address)
                 crud_webhook.create_webhook_registration(db, store_id=store.id, webhook_data=created_webhook)
                 updated_count += 1
-        
         message = f"Webhook setup complete. Created: {created_count}, Updated: {updated_count}."
         if created_count == 0 and updated_count == 0:
             message = "All necessary webhooks are already correctly registered."
-            
         return {"message": message}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create/verify webhooks: {str(e)}")
@@ -87,7 +79,6 @@ def delete_store_webhook(store_id: int, shopify_webhook_id: int, db: Session = D
     store = crud_store.get_store(db, store_id=store_id)
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
-
     try:
         service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
         service.delete_webhook(webhook_id=shopify_webhook_id)
@@ -95,3 +86,37 @@ def delete_store_webhook(store_id: int, shopify_webhook_id: int, db: Session = D
         return Response(status_code=204)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete webhook: {str(e)}")
+
+# --- NEW ENDPOINT ---
+@router.delete("/webhooks/delete-all", status_code=200)
+def delete_all_webhooks_for_all_stores(db: Session = Depends(get_db)):
+    """
+    Deletes all Shopify webhooks for every configured store.
+    """
+    stores = crud_store.get_all_stores(db)
+    if not stores:
+        return {"message": "No stores are configured."}
+
+    deleted_count = 0
+    errors = []
+
+    for store in stores:
+        try:
+            service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+            existing_webhooks = service.get_webhooks()
+            
+            for webhook in existing_webhooks:
+                try:
+                    service.delete_webhook(webhook_id=webhook['id'])
+                    crud_webhook.delete_webhook_registration(db, shopify_webhook_id=webhook['id'])
+                    deleted_count += 1
+                except Exception as e:
+                    errors.append(f"Failed to delete webhook {webhook['id']} for store {store.name}: {e}")
+
+        except Exception as e:
+            errors.append(f"Could not process webhooks for store {store.name}: {e}")
+
+    if errors:
+        raise HTTPException(status_code=500, detail={"message": f"Completed with errors. Deleted {deleted_count} webhooks.", "errors": errors})
+
+    return {"message": f"Successfully deleted {deleted_count} webhooks from all stores."}
