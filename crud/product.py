@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 import models
+import json # Importăm json pentru serializare
 
 try:
     from shopify_service import gid_to_id
@@ -15,12 +16,12 @@ except ImportError:
         try: return int(str(gid).split("/")[-1])
         except (IndexError, ValueError): return None
 
-# --- Main function to get products for the UI ---
+# --- Funcție principală pentru a obține produse pentru UI ---
 def get_products(
     db: Session, skip: int = 0, limit: int = 100, store_id: Optional[int] = None, search: Optional[str] = None
 ) -> Tuple[List[models.Product], int]:
     """
-    Fetches a paginated list of products with optional filtering.
+    Obține o listă paginată de produse cu filtrare opțională.
     """
     query = db.query(models.Product).options(joinedload(models.Product.variants))
 
@@ -42,7 +43,7 @@ def get_products(
 
     return products, total_count
 
-# --- Helper functions for data extraction and normalization ---
+# --- Funcții ajutătoare pentru extragerea și normalizarea datelor ---
 def _get(obj: Any, *path: str, default=None):
     cur = obj
     for key in path:
@@ -63,20 +64,36 @@ def _to_dt(val) -> Optional[datetime]:
 def _first_image_url(prod: Any) -> Optional[str]:
     return _get(prod, "featuredImage", "url") or _get(prod, "image", "src")
 
-def normalize_sku(val: Optional[str]) -> Optional[str]:
-    s = (val or "").strip().lower()
-    return s if s else None
+# Funcție pentru a face obiectele datetime serializabile JSON
+def json_serial(obj):
+    """JSON serializer for objects not serializable by default json code"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError ("Type %s not serializable" % type(obj))
 
 def log_dead_letter(db: Session, store_id: int, run_id: int, payload: Dict, reason: str):
-    dead_letter = models.SyncDeadLetter(
-        store_id=store_id,
-        run_id=run_id,
-        payload=payload,
-        reason=reason
-    )
-    db.add(dead_letter)
+    """
+    Înregistrează un payload eșuat în tabela `sync_dead_letters`, asigurându-se că este serializabil JSON.
+    """
+    try:
+        # Serializăm payload-ul folosind handler-ul nostru custom pentru datetime
+        payload_str = json.dumps(payload, default=json_serial)
+        payload_json = json.loads(payload_str) # Re-încărcăm pentru a fi un obiect dict valid pentru inserare
 
-# --- Data Extraction from Shopify Payload ---
+        dead_letter = models.SyncDeadLetter(
+            store_id=store_id,
+            run_id=run_id,
+            payload=payload_json,
+            reason=reason
+        )
+        db.add(dead_letter)
+        db.commit() # Comitem imediat înregistrarea în dead letter
+    except Exception as e:
+        db.rollback()
+        print(f"FATAL: Could not log to dead letter table. Reason: {e}")
+
+
+# --- Extragerea datelor din payload-ul Shopify ---
 def _extract_product_fields(p_data: Any, store_id: int, last_seen_at: datetime) -> Dict:
     pid = gid_to_id(p_data.get("id"))
     if not pid: raise ValueError("Missing product ID")
@@ -85,7 +102,8 @@ def _extract_product_fields(p_data: Any, store_id: int, last_seen_at: datetime) 
         "title": p_data.get("title"), "body_html": p_data.get("bodyHtml"),
         "vendor": p_data.get("vendor"), "product_type": p_data.get("productType"),
         "status": p_data.get("status"), "handle": p_data.get("handle"),
-        "tags": ",".join(p_data.get("tags", [])), "image_url": _first_image_url(p_data),
+        "tags": ",".join(p_data.get("tags", []) if p_data.get("tags") is not None else []), 
+        "image_url": _first_image_url(p_data),
         "created_at": _to_dt(p_data.get("createdAt")), "updated_at": _to_dt(p_data.get("updatedAt")),
         "published_at": _to_dt(p_data.get("publishedAt")), "last_seen_at": last_seen_at,
     }
@@ -105,94 +123,96 @@ def _extract_variant_fields(v_data: Any, product_id: int, store_id: int, last_se
         "last_seen_at": last_seen_at,
     }
 
-# --- Robust Upsert Logic ---
+# --- Logică robustă de Upsert ---
 def create_or_update_products(db: Session, store_id: int, run_id: int, items: List[Any], last_seen_at: datetime):
-    prod_rows, var_rows, loc_rows, inv_level_rows = [], [], [], []
+    if not items:
+        return
+
     now = datetime.now(timezone.utc)
 
-    for bundle in items or []:
+    # Procesăm fiecare produs individual pentru a evita erorile de cardinalitate
+    for bundle in items:
         try:
-            p_data, v_data_list = bundle, bundle.get("variants", [])
-            
+            # Extragem datele pentru produs și variante
+            p_data = bundle
+            v_data_list = p_data.get("variants", [])
+
             p_row = _extract_product_fields(p_data, store_id, last_seen_at)
-            prod_rows.append(p_row)
+            
+            # Upsert pentru produs
+            product_stmt = pg_insert(models.Product).values(p_row)
+            product_update_stmt = product_stmt.on_conflict_do_update(
+                index_elements=['id'],
+                set_={
+                    "title": product_stmt.excluded.title,
+                    "status": product_stmt.excluded.status,
+                    "vendor": product_stmt.excluded.vendor,
+                    "updated_at": product_stmt.excluded.updated_at,
+                    "last_seen_at": product_stmt.excluded.last_seen_at
+                }
+            )
+            db.execute(product_update_stmt)
 
-            for v_data in v_data_list:
-                v_row = _extract_variant_fields(v_data, p_row["id"], store_id, last_seen_at)
-                var_rows.append(v_row)
-                
-                for lvl in _get(v_data, "inventoryItem", "inventoryLevels", default=[]):
-                    loc_id = gid_to_id(_get(lvl, "location", "id"))
-                    if not loc_id: continue
-                    loc_rows.append({"id": loc_id, "store_id": store_id, "name": _get(lvl, "location", "name")})
-                    qmap = {q["name"]: q["quantity"] for q in _get(lvl, "quantities", default=[])}
-                    inv_level_rows.append({
-                        "variant_id": v_row["id"],
-                        "location_id": loc_id,
-                        "inventory_item_id": v_row["inventory_item_id"],
-                        "available": qmap.get("available", 0),
-                        "on_hand": qmap.get("on_hand", qmap.get("available", 0)),
-                        "last_fetched_at": now,
-                    })
+            # Procesăm și facem upsert pentru fiecare variantă individual
+            if v_data_list:
+                loc_rows, inv_level_rows = [], []
+                for v_data in v_data_list:
+                    v_row = _extract_variant_fields(v_data, p_row["id"], store_id, last_seen_at)
+                    
+                    variant_stmt = pg_insert(models.ProductVariant).values(v_row)
+                    variant_update_stmt = variant_stmt.on_conflict_do_update(
+                        index_elements=['id'],
+                        set_={
+                            "sku": variant_stmt.excluded.sku,
+                            "price": variant_stmt.excluded.price,
+                            "barcode": variant_stmt.excluded.barcode,
+                            "inventory_quantity": variant_stmt.excluded.inventory_quantity,
+                            "updated_at": variant_stmt.excluded.updated_at,
+                            "last_seen_at": variant_stmt.excluded.last_seen_at
+                        }
+                    )
+                    db.execute(variant_update_stmt)
+
+                    # Colectăm nivelurile de inventar și locațiile
+                    for lvl in _get(v_data, "inventoryItem", "inventoryLevels", default=[]):
+                        loc_id = gid_to_id(_get(lvl, "location", "id"))
+                        if not loc_id: continue
+                        loc_rows.append({"id": loc_id, "store_id": store_id, "name": _get(lvl, "location", "name")})
+                        qmap = {q["name"]: q["quantity"] for q in _get(lvl, "quantities", default=[])}
+                        inv_level_rows.append({
+                            "variant_id": v_row["id"], "location_id": loc_id,
+                            "inventory_item_id": v_row["inventory_item_id"],
+                            "available": qmap.get("available", 0),
+                            "on_hand": qmap.get("on_hand", qmap.get("available", 0)),
+                            "last_fetched_at": now,
+                        })
+
+                # Upsert pentru locații (în lot, deoarece ID-urile sunt unice)
+                if loc_rows:
+                    loc_stmt = pg_insert(models.Location).values(loc_rows)
+                    loc_update_stmt = loc_stmt.on_conflict_do_update(
+                        index_elements=['id'],
+                        set_={"name": loc_stmt.excluded.name}
+                    )
+                    db.execute(loc_update_stmt)
+
+                # Upsert pentru nivelurile de inventar (în lot)
+                if inv_level_rows:
+                    inv_stmt = pg_insert(models.InventoryLevel).values(inv_level_rows)
+                    inv_update_stmt = inv_stmt.on_conflict_do_update(
+                        index_elements=['variant_id', 'location_id'],
+                        set_={
+                            "available": inv_stmt.excluded.available,
+                            "on_hand": inv_stmt.excluded.on_hand,
+                            "last_fetched_at": inv_stmt.excluded.last_fetched_at
+                        }
+                    )
+                    db.execute(inv_update_stmt)
+
+            # Comitem tranzacția pentru fiecare produs în parte
+            db.commit()
+
         except Exception as e:
-            log_dead_letter(db, store_id, run_id, bundle, f"Data extraction failed: {e}")
-
-    if not prod_rows: return
-
-    # --- De-duplication logic for variants before insertion ---
-    unique_variants_map = {}
-    variants_with_null_sku = []
-
-    for v_row in var_rows:
-        sku = v_row.get("sku")
-        if sku and sku.strip():
-            # Keep only the last seen variant for a given SKU in the batch
-            unique_variants_map[(store_id, sku)] = v_row
-        else:
-            # Collect variants with no SKU to be inserted/updated by their ID
-            variants_with_null_sku.append(v_row)
-    
-    # Reconstruct the list of variants to be processed
-    deduplicated_var_rows = list(unique_variants_map.values()) + variants_with_null_sku
-
-    def pg_upsert(table, rows, conflict_cols, update_cols):
-        if not rows: return
-        # The primary key (id) is always unique within the batch from Shopify
-        stmt = pg_insert(table).values(rows)
-        stmt = stmt.on_conflict_do_update(index_elements=conflict_cols, set_=update_cols)
-        db.execute(stmt)
-
-    try:
-        # Upsert all data in the correct order
-        pg_upsert(models.Product.__table__, prod_rows, ['id'], {
-            "title": pg_insert(models.Product).excluded.title,
-            # Add other fields to update on conflict as needed
-            "last_seen_at": pg_insert(models.Product).excluded.last_seen_at
-        })
-        
-        # Upsert variants using the de-duplicated list
-        pg_upsert(models.ProductVariant.__table__, deduplicated_var_rows, ['id'], {
-            "sku": pg_insert(models.ProductVariant).excluded.sku,
-            "price": pg_insert(models.ProductVariant).excluded.price,
-            "inventory_quantity": pg_insert(models.ProductVariant).excluded.inventory_quantity,
-            # Add other fields to update on conflict as needed
-            "last_seen_at": pg_insert(models.ProductVariant).excluded.last_seen_at
-        })
-
-        pg_upsert(models.Location.__table__, loc_rows, ['id'], {
-            "name": pg_insert(models.Location).excluded.name
-        })
-        
-        pg_upsert(models.InventoryLevel.__table__, inv_level_rows, ['variant_id', 'location_id'], {
-            "available": pg_insert(models.InventoryLevel).excluded.available,
-            "on_hand": pg_insert(models.InventoryLevel).excluded.on_hand,
-            "last_fetched_at": pg_insert(models.InventoryLevel).excluded.last_fetched_at
-        })
-        
-        db.commit()
-
-    except Exception as e:
-        db.rollback()
-        # Log the entire batch that failed for inspection
-        log_dead_letter(db, store_id, run_id, {"products": prod_rows, "variants": var_rows}, f"Page processing failed: {e}")
-        db.commit()
+            db.rollback() # Anulăm tranzacția pentru produsul curent care a eșuat
+            log_dead_letter(db, store_id, run_id, bundle, f"Product processing failed: {e}")
+            continue # Continuăm cu următorul produs din lot
