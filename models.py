@@ -95,6 +95,8 @@ class ProductVariant(Base):
 class Location(Base):
     __tablename__ = "locations"
     id = Column(BIGINT, primary_key=True, index=False)
+    # --- NEW COLUMN ---
+    shopify_gid = Column(String(255), unique=True, nullable=False) 
     store_id = Column(Integer, ForeignKey("stores.id"), nullable=False)
     name = Column(String(255))
     inventory_levels = relationship("InventoryLevel", back_populates="location")

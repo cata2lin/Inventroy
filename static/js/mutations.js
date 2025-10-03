@@ -60,8 +60,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!productId) {
             currentProduct = null;
             mutationSelectionContainer.style.display = 'none';
-            mutationSelect.value = ''; // Reset mutation dropdown
-            mutationFormContainer.innerHTML = ''; // Clear form
+            mutationSelect.value = '';
+            mutationFormContainer.innerHTML = '';
             return;
         }
         try {
@@ -69,7 +69,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) throw new Error('Failed to fetch product details.');
             currentProduct = await response.json();
             mutationSelectionContainer.style.display = 'block';
-            renderMutationForm(); // Render form for the currently selected mutation
+            renderMutationForm();
         } catch (error) {
             console.error(error.message);
             alert(`Error fetching product details: ${error.message}`);
@@ -81,7 +81,6 @@ document.addEventListener('DOMContentLoaded', () => {
         productSelect.innerHTML = '<option value="">-- Select a product from results --</option>';
         if (products.length > 0) {
             products.forEach(p => {
-                // Use a combination of title and SKU for better identification
                 const optionText = `${p.title} (${p.variants.length > 0 ? p.variants[0].sku || 'No SKU' : 'No Variants'})`;
                 productSelect.add(new Option(optionText, p.id));
             });
@@ -155,14 +154,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 `;
                 break;
             case 'inventorySetQuantities':
+                const locations = {}; // Use a map to get unique locations
+                currentProduct.variants.forEach(v => {
+                    v.inventory_levels.forEach(l => {
+                        locations[l.location.shopify_gid] = l.location.name;
+                    });
+                });
+
                 html += `
                     <label for="inventoryItemId">Select Variant</label>
                     <select name="inventoryItemId" required>
                          <option value="">-- Choose a variant --</option>
                         ${currentProduct.variants.map(v => `<option value="${v.inventory_item_gid}">${v.title}</option>`).join('')}
                     </select>
-                    <label for="locationId">Location GID (e.g., gid://shopify/Location/123)</label>
-                    <input type="text" id="locationId" name="locationId" required placeholder="gid://shopify/Location/123456">
+                    
+                    <label for="locationId">Select Location</label>
+                    <select name="locationId" id="locationId" required>
+                        <option value="">-- Choose a location --</option>
+                        ${Object.entries(locations).map(([gid, name]) => `<option value="${gid}">${name}</option>`).join('')}
+                    </select>
+
                     <label for="quantity">New 'Available' Quantity</label>
                     <input type="number" id="quantity" name="quantity" required placeholder="e.g., 100">
                 `;
@@ -181,7 +192,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const findCategoryBtn = document.getElementById('find-category-btn');
         if (findCategoryBtn) findCategoryBtn.addEventListener('click', findCategory);
 
-        // Pre-fill cost when variant is selected for direct cost update
         const inventoryItemSelect = document.getElementById('inventoryItemId');
         if (inventoryItemSelect && mutationSelect.value === 'updateInventoryCost') {
             inventoryItemSelect.addEventListener('change', (e) => {
@@ -203,14 +213,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const variables = {};
 
         try {
-            // --- THIS LOGIC IS NOW FULLY IMPLEMENTED ---
             switch (mutationName) {
                 case 'setProductCategory':
                     variables.product = {
                         id: formData.get('productId'),
-                        productTaxonomy: {
-                            taxonomyId: formData.get('categoryId')
-                        }
+                        category: formData.get('categoryId')
                     };
                     break;
                 case 'updateProductType':
@@ -244,7 +251,7 @@ document.addEventListener('DOMContentLoaded', () => {
                      variables.input = {
                         name: "available",
                         reason: "correction",
-                        setQuantities: [{
+                        quantities: [{
                             inventoryItemId: formData.get('inventoryItemId'),
                             locationId: formData.get('locationId'),
                             quantity: parseInt(formData.get('quantity'), 10)
@@ -252,7 +259,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     };
                     break;
             }
-            // --- END OF IMPLEMENTED LOGIC ---
 
             const response = await fetch(API_ENDPOINTS.executeMutation(storeId), {
                 method: 'POST',
@@ -260,7 +266,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ mutation_name: mutationName, variables }),
             });
             const result = await response.json();
-            if (!response.ok) throw result; // Throw error object on failure
+            if (!response.ok) throw result;
             apiResponse.textContent = JSON.stringify(result, null, 2);
         } catch (error) {
             apiResponse.textContent = `Error: ${JSON.stringify(error, null, 2)}`;

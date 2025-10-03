@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field, HttpUrl, ConfigDict
+from pydantic import BaseModel, Field, HttpUrl, ConfigDict, field_validator
 
 # =========================
 # Base model configurations
@@ -44,26 +44,56 @@ class Webhook(BaseModel):
     created_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
-class ProductVariant(BaseModel):
+# --- UPDATED Schemas for the mutations page and product views ---
+
+class Location(ORMBase):
     id: int
+    shopify_gid: str
+    name: Optional[str] = None
+
+class InventoryLevel(ORMBase):
+    location_id: int
+    available: Optional[int] = None
+    location: Location # Nested location schema to access its GID
+
+class ProductVariant(ORMBase):
+    id: int
+    shopify_gid: str
+    inventory_item_id: Optional[int] = None
+    inventory_item_gid: Optional[str] = None # Will be populated by a validator
     title: Optional[str] = None
     sku: Optional[str] = None
     barcode: Optional[str] = None
     price: Optional[float] = None
+    compare_at_price: Optional[float] = None
+    cost_per_item: Optional[float] = None
     inventory_quantity: Optional[int] = None
-    model_config = ConfigDict(from_attributes=True)
+    inventory_levels: List[InventoryLevel] = []
 
-class Product(BaseModel):
+    # This validator constructs the inventory_item_gid needed by the frontend,
+    # as it's not stored directly in our database.
+    @field_validator("inventory_item_gid", mode="before")
+    @classmethod
+    def assemble_inventory_item_gid(cls, v, values):
+        inventory_item_id = values.data.get('inventory_item_id')
+        if inventory_item_id:
+            return f"gid://shopify/InventoryItem/{inventory_item_id}"
+        return None
+
+class Product(ORMBase):
     id: int
+    shopify_gid: str
+    store_id: int
     title: str
+    product_type: Optional[str] = None
     image_url: Optional[str] = None
     status: Optional[str] = None
     variants: List[ProductVariant] = []
-    model_config = ConfigDict(from_attributes=True)
 
 class ProductResponse(BaseModel):
     total_count: int
     products: List[Product]
+
 
 # ======================================================
 # Shopify GraphQL Ingest Models (from previous working version)
@@ -74,6 +104,7 @@ class Money(APIBase):
     currency_code: Optional[str] = Field(None, alias="currencyCode")
 
 class LocationModel(APIBase):
+    id: Optional[str] = None # The GID from Shopify
     legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
     name: Optional[str] = None
 
@@ -83,6 +114,7 @@ class InventoryLevelModel(APIBase):
     location: Optional[LocationModel] = None
 
 class InventoryItemModel(APIBase):
+    id: Optional[str] = None # The GID from Shopify
     legacy_resource_id: Optional[int] = Field(None, alias="legacyResourceId")
     unit_cost: Optional[Money] = Field(None, alias="unitCost")
     inventory_levels: Optional[List[InventoryLevelModel]] = Field(None, alias="inventoryLevels")

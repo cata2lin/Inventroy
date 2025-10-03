@@ -17,12 +17,12 @@ except ImportError:
         try: return int(str(gid).split("/")[-1])
         except (IndexError, ValueError): return None
 
-# --- Funcție principală pentru a obține produse pentru UI ---
+# --- Main function to get products for UI ---
 def get_products(
     db: Session, skip: int = 0, limit: int = 100, store_id: Optional[int] = None, search: Optional[str] = None
 ) -> Tuple[List[models.Product], int]:
     """
-    Obține o listă paginată de produse cu filtrare opțională.
+    Get a paginated list of products with optional filtering.
     """
     query = db.query(models.Product).options(joinedload(models.Product.variants))
 
@@ -46,14 +46,14 @@ def get_products(
 
 def get_product(db: Session, product_id: int) -> Optional[models.Product]:
     """
-    Obține un singur produs după ID, cu variantele sale.
+    Get a single product by ID, with its variants and their inventory levels/locations.
     """
     return db.query(models.Product).options(
-        joinedload(models.Product.variants)
+        joinedload(models.Product.variants).joinedload(models.ProductVariant.inventory_levels).joinedload(models.InventoryLevel.location)
     ).filter(models.Product.id == product_id).first()
 
 
-# --- Funcții ajutătoare ---
+# --- Helper functions ---
 def _get(obj: Any, *path: str, default=None):
     cur = obj
     for key in path:
@@ -75,14 +75,14 @@ def _first_image_url(prod: Any) -> Optional[str]:
     return _get(prod, "featuredImage", "url") or _get(prod, "image", "src")
 
 def json_serial(obj):
-    """Serializer JSON pentru obiecte care nu sunt serializabile implicit."""
+    """JSON serializer for objects not serializable by default."""
     if isinstance(obj, datetime):
         return obj.isoformat()
-    raise TypeError ("Tipul %s nu este serializabil" % type(obj))
+    raise TypeError ("Type %s not serializable" % type(obj))
 
 def log_dead_letter(db: Session, store_id: int, run_id: int, payload: Dict, reason: str):
     """
-    Înregistrează un payload eșuat, asigurându-se că este serializabil JSON.
+    Logs a failed payload, ensuring it is JSON serializable.
     """
     try:
         payload_str = json.dumps(payload, default=json_serial, indent=2)
@@ -98,13 +98,13 @@ def log_dead_letter(db: Session, store_id: int, run_id: int, payload: Dict, reas
         db.commit()
     except Exception as e:
         db.rollback()
-        print(f"FATAL: Nu s-a putut înregistra în tabela dead letter. Motiv: {e}")
+        print(f"FATAL: Could not write to dead letter table. Reason: {e}")
 
 
-# --- Extragerea datelor ---
+# --- Data Extraction ---
 def _extract_product_fields(p_data: Any, store_id: int, last_seen_at: datetime) -> Dict:
     pid = gid_to_id(p_data.get("id"))
-    if not pid: raise ValueError("ID produs lipsă")
+    if not pid: raise ValueError("Missing product ID")
     tags = p_data.get("tags", [])
     return {
         "id": pid, "store_id": store_id, "shopify_gid": p_data.get("id"),
@@ -119,9 +119,8 @@ def _extract_product_fields(p_data: Any, store_id: int, last_seen_at: datetime) 
 
 def _extract_variant_fields(v_data: Any, product_id: int, store_id: int, last_seen_at: datetime) -> Dict:
     vid = gid_to_id(v_data.get("id"))
-    if not vid: raise ValueError("ID variantă lipsă")
-
-    # Transformăm SKU-urile goale în None (NULL) pentru a evita conflictele de unicitate
+    if not vid: raise ValueError("Missing variant ID")
+    
     sku = v_data.get("sku")
     if sku is not None and not sku.strip():
         sku = None
@@ -138,7 +137,7 @@ def _extract_variant_fields(v_data: Any, product_id: int, store_id: int, last_se
         "last_seen_at": last_seen_at,
     }
 
-# --- Logică robustă de Upsert ---
+# --- Robust Upsert Logic ---
 def create_or_update_products(db: Session, store_id: int, run_id: int, items: List[Any], last_seen_at: datetime):
     if not items:
         return
@@ -149,36 +148,44 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
             p_data = bundle
             p_row = _extract_product_fields(p_data, store_id, last_seen_at)
 
-            # Upsert produs
+            # Upsert product
             product_stmt = pg_insert(models.Product).values(p_row)
             product_stmt = product_stmt.on_conflict_do_update(
                 index_elements=['id'],
                 set_={k: getattr(product_stmt.excluded, k) for k in p_row if k not in ['id', 'store_id']}
             )
             db.execute(product_stmt)
-
-            # Procesare variante
+            
+            # Process variants
             v_data_list = p_data.get("variants", [])
             if v_data_list:
                 loc_rows_map = {}
                 inv_level_rows = []
-
+                
                 for v_data in v_data_list:
                     v_row = _extract_variant_fields(v_data, p_row["id"], store_id, last_seen_at)
-
-                    # Încercăm să facem upsert pe baza ID-ului unic
+                    
                     variant_stmt = pg_insert(models.ProductVariant).values(v_row)
                     variant_stmt = variant_stmt.on_conflict_do_update(
                         index_elements=['id'],
                         set_={k: getattr(variant_stmt.excluded, k) for k in v_row if k != 'id'}
                     )
                     db.execute(variant_stmt)
-
-                    # Colectăm locații și inventar
+                    
+                    # Collect locations and inventory
                     for lvl in _get(v_data, "inventoryItem", "inventoryLevels", default=[]):
-                        loc_id = gid_to_id(_get(lvl, "location", "id"))
-                        if not loc_id: continue
-                        loc_rows_map[loc_id] = {"id": loc_id, "store_id": store_id, "name": _get(lvl, "location", "name")}
+                        loc_gid = _get(lvl, "location", "id")
+                        loc_id = gid_to_id(loc_gid)
+                        if not loc_id or not loc_gid: continue
+                        
+                        # --- MODIFIED PART: Add shopify_gid to location data ---
+                        loc_rows_map[loc_id] = {
+                            "id": loc_id,
+                            "shopify_gid": loc_gid, # Save the full GID
+                            "store_id": store_id, 
+                            "name": _get(lvl, "location", "name")
+                        }
+                        
                         qmap = {q["name"]: q["quantity"] for q in _get(lvl, "quantities", default=[])}
                         inv_level_rows.append({
                             "variant_id": v_row["id"], "location_id": loc_id,
@@ -187,11 +194,16 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
                             "last_fetched_at": now,
                         })
 
-                # Upsert locații și inventar
+                # Upsert locations and inventory
                 if loc_rows_map:
                     loc_rows = list(loc_rows_map.values())
-                    loc_stmt = pg_insert(models.Location).values(loc_rows).on_conflict_do_update(
-                        index_elements=['id'], set_={"name": pg_insert(models.Location).excluded.name}
+                    loc_stmt = pg_insert(models.Location).values(loc_rows)
+                    loc_stmt = loc_stmt.on_conflict_do_update(
+                        index_elements=['id'], 
+                        set_={
+                            "name": loc_stmt.excluded.name,
+                            "shopify_gid": loc_stmt.excluded.shopify_gid # Also update GID on conflict
+                        }
                     )
                     db.execute(loc_stmt)
                 if inv_level_rows:
@@ -209,7 +221,6 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
 
         except IntegrityError as e:
             db.rollback()
-            # Dacă inserarea eșuează din cauza constrângerii de SKU, o înregistrăm și continuăm
             if "product_variants_sku_store_id_key" in str(e):
                  log_dead_letter(db, store_id, run_id, bundle, f"Data integrity error (duplicate SKU): {e.orig}")
             else:
