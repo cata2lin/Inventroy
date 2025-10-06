@@ -6,6 +6,40 @@
     <title>{{ title }} - Inventory Intelligence</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
     <link rel="stylesheet" href="/static/css/style.css" />
+
+    <style>
+        /* New rule for compact product images */
+        .product-image-compact {
+            max-height: 50px; /* Limits the height to 50 pixels */
+            width: auto;     /* Maintains aspect ratio */
+            display: block;  /* Ensures it behaves well in table cells */
+        }
+
+        /* Compact table cell styling */
+        .table-container.compact table td {
+            padding: 0.5rem;
+            vertical-align: middle;
+        }
+
+        /* Style for the inline stock update form */
+        .update-form-inline {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 0;
+        }
+
+        .update-form-inline input {
+            margin-bottom: 0;
+            width: 80px; /* Give the input a fixed width */
+        }
+        
+        /* Green color for successful update button */
+        .update-form-inline button.success {
+            background-color: var(--pico-color-green-500);
+            border-color: var(--pico-color-green-500);
+            color: var(--pico-color-white);
+        }
+    </style>
 </head>
 <body>
     <div class="app-layout">
