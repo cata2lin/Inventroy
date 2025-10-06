@@ -155,16 +155,13 @@ def _update_authoritative_version(db: Session, barcode: str, store_id: int, quan
         db.add(new_version)
     db.commit()
 
-# --- THIS FUNCTION IS CORRECTED ---
 def _get_propagation_targets(db: Session, barcode: str) -> List[models.Store]:
-    """Finds ALL stores that sell this barcode."""
     member_store_ids = (
         db.query(models.ProductVariant.store_id)
         .filter(models.ProductVariant.barcode == barcode)
         .distinct()
         .all()
     )
-    # The logic no longer excludes the source store.
     target_ids = [sid[0] for sid in member_store_ids]
     
     if not target_ids:
@@ -215,5 +212,17 @@ def _execute_propagation(db: Session, barcode: str, desired_total: int, target_s
             }
             service.execute_mutation("inventorySetQuantities", variables)
             print(f"[SYNC] Successfully wrote quantity {desired_total} for barcode {barcode} to store '{store.name}'.")
+
+            # --- THIS IS THE CRITICAL FIX ---
+            # After a successful write to Shopify, update our own database to reflect the change.
+            variant_ids = [v.id for v in variants_to_update]
+            crud_product.update_inventory_levels_for_variants(
+                db, 
+                variant_ids=variant_ids, 
+                location_id=store.sync_location_id, 
+                new_quantity=desired_total
+            )
+            print(f"[DB-UPDATE] Synced local DB for barcode {barcode} in store '{store.name}'.")
+
         except Exception as e:
             print(f"[SYNC-ERROR] Failed to write to store '{store.name}': {e}")
