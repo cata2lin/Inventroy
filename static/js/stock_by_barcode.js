@@ -69,7 +69,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Failed to load stores:', error);
         }
     };
-    
+
     // --- UI Rendering ---
     const updateDashboard = (metrics) => {
         dashboard.stock.textContent = metrics.total_stock.toLocaleString();
@@ -96,7 +96,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>
                     <form class="update-form-inline">
                         <input type="number" class="quantity-input-inline" value="${group.total_stock}" required />
-                        <button class="update-stock-btn-inline" data-barcode="${group.barcode}">Set</button>
+                        <button type="submit" class="update-stock-btn-inline" data-barcode="${group.barcode}">Set</button>
                     </form>
                 </td>
             </tr>
@@ -109,7 +109,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <th>Image</th>
                         <th>Primary Product</th>
                         <th>Variants</th>
-                        <th>Total Stock</th>
+                        <th>Stock Level</th>
                         <th>Total Retail (RON)</th>
                         <th>Set Stock</th>
                     </tr>
@@ -118,7 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </table>
         `;
     };
-    
+
     const openManageModal = (groupIndex) => {
         const group = barcodeGroupsData[groupIndex];
         if (!group) return;
@@ -144,8 +144,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Event Handlers ---
     const handleStockUpdate = async (e) => {
         e.preventDefault();
-        const button = e.target;
-        const form = button.closest('form');
+        const form = e.target;
+        const button = form.querySelector('button');
         const barcode = button.dataset.barcode;
         const quantityInput = form.querySelector('.quantity-input-inline');
         const quantity = quantityInput.value;
@@ -153,7 +153,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!barcode || quantity === '') return;
 
         button.setAttribute('aria-busy', 'true');
-        
+
         try {
             const response = await fetch(`/api/stock/bulk-update`, {
                 method: 'POST',
@@ -184,7 +184,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!variantId) return;
 
         card.setAttribute('aria-busy', 'true');
-        
+
         try {
             const response = await fetch('/api/stock/set-primary', {
                 method: 'POST',
@@ -199,13 +199,12 @@ document.addEventListener('DOMContentLoaded', () => {
             card.removeAttribute('aria-busy');
         }
     };
-    
+
     // --- Initial Setup & Event Listeners ---
     Object.values(filters).forEach(el => {
         el.addEventListener('input', debounce(fetchStockData, 400));
     });
 
-    // CORRECTED: This listener now specifically targets the product image to open the modal.
     stockContainer.addEventListener('click', (e) => {
         if (e.target.classList.contains('product-image-compact')) {
             const row = e.target.closest('tr[data-group-index]');
@@ -215,12 +214,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // CORRECTED: The listener is now attached to the container and listens for 'submit' events.
     stockContainer.addEventListener('submit', (e) => {
         if (e.target.matches('.update-form-inline')) {
             handleStockUpdate(e);
         }
     });
-    
+
     modalBody.addEventListener('click', handleSetPrimary);
     modal.addEventListener('click', (e) => {
         if (e.target.matches('.close') || e.target === modal) {
