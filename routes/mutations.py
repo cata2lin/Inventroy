@@ -19,14 +19,13 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 def _raise_if_user_errors(result: Dict[str, Any]) -> None:
-    envelopes = [
+    for key in (
         "productUpdate",
         "productVariantsBulkUpdate",
         "inventoryItemUpdate",
         "inventorySetQuantities",
         "quantityRulesAdd",
-    ]
-    for key in envelopes:
+    ):
         node = result.get(key)
         if isinstance(node, dict):
             errs = node.get("userErrors") or []
@@ -35,7 +34,6 @@ def _raise_if_user_errors(result: Dict[str, Any]) -> None:
             break
 
 def _persist_product_update(db: Session, variables: Dict[str, Any], data: Dict[str, Any]) -> None:
-    # setProductCategory, updateProductType
     node = data.get("productUpdate") or {}
     prod = node.get("product") or {}
     prod_gid: Optional[str] = (variables.get("product") or {}).get("id") or prod.get("id")
@@ -53,7 +51,6 @@ def _persist_product_update(db: Session, variables: Dict[str, Any], data: Dict[s
         db.commit()
 
 def _persist_variants_bulk(db: Session, mutation_name: str, variables: Dict[str, Any]) -> None:
-    # updateVariantPrices, updateVariantCompareAt, updateVariantBarcode, updateVariantCosts
     incoming: List[Dict[str, Any]] = variables.get("variants") or []
     for v in incoming:
         v_gid = v.get("id")
@@ -78,7 +75,6 @@ def _persist_variants_bulk(db: Session, mutation_name: str, variables: Dict[str,
         db.commit()
 
 def _persist_inventory_item_update(db: Session, variables: Dict[str, Any]) -> None:
-    # updateInventoryCost
     inv_gid = variables.get("id")
     input_ = variables.get("input") or {}
     if not inv_gid or "cost" not in input_:
@@ -95,7 +91,10 @@ def _persist_inventory_item_update(db: Session, variables: Dict[str, Any]) -> No
     db.commit()
 
 def _ensure_location(db: Session, loc_gid: str, store_id: int) -> Optional[int]:
-    # Make sure FK to locations exists. Name is NOT NULL, use empty string if unknown.
+    """
+    Ensure a row exists in locations for the given Shopify GID.
+    locations.name is NOT NULL, so use "" as a stub if unknown.
+    """
     loc_id = gid_to_id(loc_gid)
     if not loc_id:
         return None
@@ -106,29 +105,38 @@ def _ensure_location(db: Session, loc_gid: str, store_id: int) -> Optional[int]:
             db.commit()
         except Exception:
             db.rollback()
+            return None
     return loc_id
 
 def _persist_set_quantities(db: Session, variables: Dict[str, Any]) -> None:
-    # inventorySetQuantities
+    """
+    inventorySetQuantities: set absolute 'available' per (inventoryItemId, locationId).
+    Upsert inventory_levels for (variant_id, location_id). Create stub location if missing.
+    """
     input_ = variables.get("input") or {}
     items = input_.get("quantities") or []
+
     for item in items:
         inv_gid = item.get("inventoryItemId")
         loc_gid = item.get("locationId")
         qty = item.get("quantity")
         if not inv_gid or not loc_gid or qty is None:
             continue
+
         inv_id = gid_to_id(inv_gid)
         if not inv_id:
             continue
+
         variant = (db.query(models.ProductVariant)
                      .filter(models.ProductVariant.inventory_item_id == inv_id)
                      .first())
         if not variant:
             continue
+
         loc_id = _ensure_location(db, loc_gid, store_id=variant.store_id)
         if not loc_id:
             continue
+
         lvl = (db.query(models.InventoryLevel)
                  .filter(models.InventoryLevel.variant_id == variant.id,
                          models.InventoryLevel.location_id == loc_id)
@@ -149,6 +157,7 @@ def _persist_set_quantities(db: Session, variables: Dict[str, Any]) -> None:
                 updated_at=_now_utc(),
                 last_fetched_at=_now_utc(),
             ))
+
     if items:
         db.commit()
 
@@ -157,8 +166,7 @@ def _persist_set_quantities(db: Session, variables: Dict[str, Any]) -> None:
 @router.post("/execute/{store_id}")
 def execute_mutation(store_id: int, payload: Dict[str, Any], db: Session = Depends(get_db)):
     """
-    Execute a GraphQL mutation for a specific store.
-    Persist successful changes to the local database.
+    Execute a GraphQL mutation and persist success locally.
     """
     store = crud_store.get_store(db, store_id)
     if not store:
@@ -192,9 +200,6 @@ def execute_mutation(store_id: int, payload: Dict[str, Any], db: Session = Depen
 
 @router.post("/find-categories/{store_id}")
 def find_categories(store_id: int, payload: Dict[str, Any], db: Session = Depends(get_db)):
-    """
-    Find Shopify taxonomy categories by search string.
-    """
     store = crud_store.get_store(db, store_id)
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
