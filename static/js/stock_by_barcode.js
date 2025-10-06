@@ -31,6 +31,10 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     };
 
+    const currencyFormatter = (amount) => {
+        return new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON' }).format(amount);
+    };
+
     // --- Data Fetching ---
     const fetchStockData = async () => {
         stockContainer.setAttribute('aria-busy', 'true');
@@ -68,10 +72,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // --- UI Rendering ---
     const updateDashboard = (metrics) => {
-        const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
         dashboard.stock.textContent = metrics.total_stock.toLocaleString();
-        dashboard.inventoryValue.textContent = formatter.format(metrics.total_inventory_value);
-        dashboard.retailValue.textContent = formatter.format(metrics.total_retail_value);
+        dashboard.inventoryValue.textContent = currencyFormatter(metrics.total_inventory_value);
+        dashboard.retailValue.textContent = currencyFormatter(metrics.total_retail_value);
     };
 
     const renderTableView = () => {
@@ -89,7 +92,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 </td>
                 <td>${group.variants.length}</td>
                 <td>${group.total_stock}</td>
-                <td>${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(group.total_retail_value)}</td>
+                <td>${currencyFormatter(group.total_retail_value)}</td>
                 <td>
                     <form class="update-form-inline">
                         <input type="number" class="quantity-input-inline" value="${group.total_stock}" required />
@@ -107,7 +110,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <th>Primary Product</th>
                         <th>Variants</th>
                         <th>Total Stock</th>
-                        <th>Total Retail</th>
+                        <th>Total Retail (RON)</th>
                         <th>Set Stock</th>
                     </tr>
                 </thead>
@@ -139,15 +142,48 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // --- Event Handlers ---
-    const handleStockUpdate = async (e) => { /* ... same as before ... */ };
-    
+    const handleStockUpdate = async (e) => {
+        e.preventDefault();
+        const button = e.target;
+        const form = button.closest('form');
+        const barcode = button.dataset.barcode;
+        const quantityInput = form.querySelector('.quantity-input-inline');
+        const quantity = quantityInput.value;
+
+        if (!barcode || quantity === '') return;
+
+        button.setAttribute('aria-busy', 'true');
+        
+        try {
+            const response = await fetch(`/api/stock/bulk-update`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ barcode, quantity: parseInt(quantity) })
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                 const errorMsg = result.detail.errors ? result.detail.errors.join('\\n') : (result.detail.message || JSON.stringify(result.detail));
+                 throw new Error(errorMsg);
+            }
+            button.classList.add('success');
+            setTimeout(() => {
+                button.classList.remove('success');
+                // Optimistically update the value in the input
+                quantityInput.value = quantity;
+            }, 1500);
+        } catch (error) {
+            alert(`Error: ${error.message}`);
+        } finally {
+            button.removeAttribute('aria-busy');
+        }
+    };
+
     const handleSetPrimary = async (e) => {
         const card = e.target.closest('.variant-card');
         if (!card) return;
         const variantId = card.dataset.variantId;
         if (!variantId) return;
 
-        // Add a visual loading state to the clicked card
         card.setAttribute('aria-busy', 'true');
         
         try {
@@ -179,7 +215,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     stockContainer.addEventListener('submit', (e) => {
         if (e.target.matches('.update-form-inline')) {
-            e.preventDefault();
             handleStockUpdate(e);
         }
     });

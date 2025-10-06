@@ -25,6 +25,10 @@ class StoreBase(BaseModel):
     name: str
     shopify_url: str
     api_token: str
+    
+    # --- THIS FIELD IS NEW ---
+    currency: str = Field("RON", max_length=10)
+    
     api_secret: Optional[str] = None
     webhook_secret: Optional[str] = None
 

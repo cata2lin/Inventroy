@@ -39,7 +39,27 @@
         <p>This action will affect all stores configured in the system.</p>
         <button id="delete-all-webhooks-btn" class="secondary">Delete All Webhooks</button>
     </article>
+<article>
+            <header><strong>Add a New Store</strong></header>
+            <form id="add-store-form">
+                <label for="name">Store Name</label>
+                <input type="text" id="name" name="name" placeholder="My Awesome Store" required>
+                
+                <label for="shopify_url">Shopify URL</label>
+                <input type="text" id="shopify_url" name="shopify_url" placeholder="your-shop.myshopify.com" required>
 
+                <label for="currency">Currency Code (e.g., RON, EUR, USD)</label>
+                <input type="text" id="currency" name="currency" placeholder="RON" required>
+                
+                <label for="api_token">Admin API Access Token</label>
+                <input type="password" id="api_token" name="api_token" required>
+                
+                <label for="api_secret">API Secret Key (for HMAC)</label>
+                <input type="password" id="api_secret" name="api_secret" required>
+                
+                <button type="submit" id="add-store-btn">Add Store</button>
+            </form>
+        </article>
     <dialog id="edit-store-modal">
       <article>
         <header>

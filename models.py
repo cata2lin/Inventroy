@@ -1,5 +1,4 @@
 # models.py
-
 from sqlalchemy import (Column, Integer, String, DateTime, Text,
                         ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index, Computed, UniqueConstraint)
 from sqlalchemy.orm import relationship
@@ -29,13 +28,16 @@ class Store(Base):
     api_token = Column(String(255), nullable=False)
     api_secret = Column(String(255), nullable=True)
     webhook_secret = Column(String(255), nullable=True)
+    
+    # --- THIS COLUMN IS NEW ---
+    currency = Column(String(10), nullable=False, server_default="RON")
+    
     sync_location_id = Column(BIGINT)
     enabled = Column(BOOLEAN, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     inventory_snapshots = relationship("InventorySnapshot", back_populates="store")
-    # --- THIS RELATIONSHIP IS NEW ---
     products = relationship("Product", back_populates="store")
 
 class Product(Base):
@@ -59,7 +61,6 @@ class Product(Base):
     last_seen_at = Column(DateTime(timezone=True))
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
     
-    # --- THIS RELATIONSHIP IS NEW ---
     store = relationship("Store", back_populates="products")
 
 

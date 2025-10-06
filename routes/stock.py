@@ -1,10 +1,11 @@
 # routes/stock.py
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel
+from pantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
 from unidecode import unidecode
+import requests
 
 from database import get_db
 import models
@@ -13,9 +14,22 @@ from shopify_service import ShopifyService, gid_to_id
 
 router = APIRouter(prefix="/api/stock", tags=["Stock Management"])
 
+# --- Currency Conversion ---
+def get_exchange_rates(base_currency: str = "RON") -> Dict[str, float]:
+    try:
+        # Using a reliable public API for exchange rates
+        response = requests.get(f"https://api.exchangerate-api.com/v4/latest/{base_currency}")
+        response.raise_for_status()
+        data = response.json()
+        rates = data.get("rates", {})
+        rates[base_currency] = 1.0
+        return rates
+    except Exception:
+        # Hardcoded fallback rates in case the API fails
+        return {"RON": 1.0, "EUR": 5.0, "USD": 4.6}
+
 # --- Helper for Smart Search ---
 def normalize_and_split(text: str) -> List[str]:
-    # Handles cases where text might be None (e.g., SKU is null)
     if not text:
         return []
     return [unidecode(word) for word in text.lower().split()]
@@ -32,10 +46,6 @@ def get_stock_grouped_by_barcode(
     max_retail: Optional[float] = Query(None),
     db: Session = Depends(get_db)
 ):
-    """
-    Returns a list of products grouped by barcode from ALL stores,
-    with advanced filtering and search capabilities.
-    """
     base_query = (
         db.query(models.ProductVariant)
         .filter(models.ProductVariant.barcode != None, models.ProductVariant.barcode != '')
@@ -48,10 +58,8 @@ def get_stock_grouped_by_barcode(
     if store_id:
         base_query = base_query.filter(models.ProductVariant.store_id == store_id)
 
-    # Pre-fetch all variants to perform complex filtering in Python
     all_variants = base_query.all()
     
-    # --- Smart Search Filtering (In-memory) ---
     if search:
         search_terms = normalize_and_split(search)
         matching_barcodes = set()
@@ -63,12 +71,16 @@ def get_stock_grouped_by_barcode(
         
         all_variants = [v for v in all_variants if v.barcode in matching_barcodes]
 
-    # --- Grouping and Metrics Calculation ---
+    exchange_rates = get_exchange_rates("RON")
+    
     grouped_by_barcode: Dict[str, Dict[str, Any]] = {}
     for variant in all_variants:
         barcode = variant.barcode
         if barcode not in grouped_by_barcode:
-            grouped_by_barcode[barcode] = { "barcode": barcode, "variants": [], "total_stock": 0, "total_retail_value": 0.0, "total_inventory_value": 0.0 }
+            grouped_by_barcode[barcode] = { "barcode": barcode, "variants": [], "total_stock": 0, "total_retail_value_ron": 0.0, "total_inventory_value_ron": 0.0 }
+
+        store_currency = variant.product.store.currency
+        rate = exchange_rates.get(store_currency, 1.0)
 
         variant_stock = sum(level.available for level in variant.inventory_levels if level.available is not None)
         variant_retail_value = variant_stock * float(variant.price or 0)
@@ -84,21 +96,19 @@ def get_stock_grouped_by_barcode(
         })
         
         grouped_by_barcode[barcode]["total_stock"] += variant_stock
-        grouped_by_barcode[barcode]["total_retail_value"] += variant_retail_value
-        grouped_by_barcode[barcode]["total_inventory_value"] += variant_inventory_value
+        grouped_by_barcode[barcode]["total_retail_value_ron"] += variant_retail_value * rate
+        grouped_by_barcode[barcode]["total_inventory_value_ron"] += variant_inventory_value * rate
 
-    # --- Post-Grouping Filtering (for stock and value) ---
     filtered_groups = list(grouped_by_barcode.values())
     if min_stock is not None:
         filtered_groups = [g for g in filtered_groups if g["total_stock"] >= min_stock]
     if max_stock is not None:
         filtered_groups = [g for g in filtered_groups if g["total_stock"] <= max_stock]
     if min_retail is not None:
-        filtered_groups = [g for g in filtered_groups if g["total_retail_value"] >= min_retail]
+        filtered_groups = [g for g in filtered_groups if g["total_retail_value_ron"] >= min_retail]
     if max_retail is not None:
-        filtered_groups = [g for g in filtered_groups if g["total_retail_value"] <= max_retail]
+        filtered_groups = [g for g in filtered_groups if g["total_retail_value_ron"] <= max_retail]
         
-    # --- Final Data Structuring ---
     final_results = []
     for group in filtered_groups:
         primary_variant = next((v for v in group["variants"] if v["is_barcode_primary"]), group["variants"][0])
@@ -108,8 +118,9 @@ def get_stock_grouped_by_barcode(
             "primary_title": primary_variant["product_title"],
             "variants": group["variants"],
             "total_stock": group["total_stock"],
-            "total_retail_value": round(group["total_retail_value"], 2),
-            "total_inventory_value": round(group["total_inventory_value"], 2)
+            "total_retail_value": round(group["total_retail_value_ron"], 2),
+            "total_inventory_value": round(group["total_inventory_value_ron"], 2),
+            "currency": "RON"
         })
     
     grand_total_stock = sum(g['total_stock'] for g in final_results)
