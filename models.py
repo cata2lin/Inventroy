@@ -35,6 +35,8 @@ class Store(Base):
     last_synced_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     inventory_snapshots = relationship("InventorySnapshot", back_populates="store")
+    # --- THIS RELATIONSHIP IS NEW ---
+    products = relationship("Product", back_populates="store")
 
 class Product(Base):
     __tablename__ = "products"
@@ -56,6 +58,10 @@ class Product(Base):
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     last_seen_at = Column(DateTime(timezone=True))
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
+    
+    # --- THIS RELATIONSHIP IS NEW ---
+    store = relationship("Store", back_populates="products")
+
 
 class ProductVariant(Base):
     __tablename__ = "product_variants"
@@ -80,8 +86,6 @@ class ProductVariant(Base):
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     
     is_primary_variant = Column(BOOLEAN, default=False, nullable=False)
-    
-    # --- THIS COLUMN IS NEW ---
     is_barcode_primary = Column(BOOLEAN, default=False, nullable=False)
     
     sku_normalized = Column(Text, Computed("NULLIF(BTRIM(LOWER(sku)), '')", persisted=True))
