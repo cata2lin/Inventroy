@@ -3,50 +3,45 @@ from typing import List, Dict, Any
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
 
 from database import get_db
 import models
 import crud.store as crud_store
-from shopify_service import ShopifyService
+import crud.product as crud_product # Import the product CRUD module
+from shopify_service import ShopifyService, gid_to_id
 
 router = APIRouter(prefix="/api/stock", tags=["Stock Management"])
 
-# --- NEW CRUD LOGIC (included directly for simplicity) ---
+# --- CRUD LOGIC (included directly for simplicity) ---
 def set_primary_for_barcode(db: Session, variant_id_to_set: int):
-    """Sets a variant as the primary for its barcode, and unsets all others."""
     variant = db.query(models.ProductVariant).filter(models.ProductVariant.id == variant_id_to_set).first()
     if not variant or not variant.barcode:
         raise HTTPException(status_code=404, detail="Variant with that barcode not found.")
 
-    # Unset all other variants with the same barcode in the same store
+    # Unset all other variants with the same barcode across ALL stores
     db.query(models.ProductVariant).filter(
-        models.ProductVariant.store_id == variant.store_id,
         models.ProductVariant.barcode == variant.barcode
     ).update({"is_barcode_primary": False}, synchronize_session=False)
 
-    # Set the target variant as primary
     variant.is_barcode_primary = True
     db.commit()
     return variant
 
 # --- API ENDPOINTS ---
 
-@router.get("/by-barcode/{store_id}")
-def get_stock_grouped_by_barcode(store_id: int, db: Session = Depends(get_db)):
+@router.get("/by-barcode")
+def get_stock_grouped_by_barcode(db: Session = Depends(get_db)):
     """
-    Returns a list of products, grouped by barcode, for a specific store.
-    Includes primary designation and image URLs.
+    Returns a list of products grouped by barcode from ALL stores.
     """
     variants_with_barcode = (
         db.query(models.ProductVariant)
         .filter(
-            models.ProductVariant.store_id == store_id,
             models.ProductVariant.barcode != None,
             models.ProductVariant.barcode != ''
         )
         .options(
-            joinedload(models.ProductVariant.product),
+            joinedload(models.ProductVariant.product).joinedload(models.Product.store),
             joinedload(models.ProductVariant.inventory_levels).joinedload(models.InventoryLevel.location)
         )
         .order_by(models.ProductVariant.barcode, models.ProductVariant.is_barcode_primary.desc())
@@ -57,8 +52,6 @@ def get_stock_grouped_by_barcode(store_id: int, db: Session = Depends(get_db)):
     for variant in variants_with_barcode:
         barcode = variant.barcode
         if barcode not in grouped_by_barcode:
-            # The first variant we see for a barcode becomes the temporary primary for display
-            # if none is explicitly set, thanks to the ORDER BY clause above.
             grouped_by_barcode[barcode] = {
                 "barcode": barcode,
                 "primary_image_url": variant.product.image_url,
@@ -69,13 +62,13 @@ def get_stock_grouped_by_barcode(store_id: int, db: Session = Depends(get_db)):
         total_available = sum(level.available for level in variant.inventory_levels if level.available is not None)
 
         grouped_by_barcode[barcode]["variants"].append({
-            "variant_id": variant.id, # <-- Important for making updates
+            "variant_id": variant.id,
             "product_title": variant.product.title,
             "variant_title": variant.title,
             "sku": variant.sku,
-            "image_url": variant.product.image_url,
+            "store_name": variant.product.store.name, # <-- NEW: Show store name
             "inventory_item_gid": f"gid://shopify/InventoryItem/{variant.inventory_item_id}",
-            "is_barcode_primary": variant.is_barcode_primary, # <-- Pass to frontend
+            "is_barcode_primary": variant.is_barcode_primary,
             "total_available": total_available,
             "locations": [
                 {"name": lvl.location.name, "location_gid": lvl.location.shopify_gid, "available": lvl.available}
@@ -89,12 +82,9 @@ class PrimaryVariantPayload(BaseModel):
 
 @router.post("/set-primary")
 def set_primary_variant(payload: PrimaryVariantPayload, db: Session = Depends(get_db)):
-    """Sets a specific variant as the primary for its barcode group."""
     try:
         set_primary_for_barcode(db, payload.variant_id)
         return {"status": "ok", "message": "Primary variant updated successfully."}
-    except HTTPException as e:
-        raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -103,46 +93,81 @@ class BulkStockUpdatePayload(BaseModel):
     quantity: int
     location_gid: str
 
-@router.post("/bulk-update/{store_id}")
+@router.post("/bulk-update")
 def bulk_update_stock_by_barcode(
-    store_id: int,
     payload: BulkStockUpdatePayload,
     db: Session = Depends(get_db)
 ):
-    store = crud_store.get_store(db, store_id)
-    if not store:
-        raise HTTPException(status_code=404, detail="Store not found")
+    """
+    Updates the stock for all variants sharing a barcode ACROSS ALL STORES
+    at a specific location. Then, updates the local database.
+    """
+    location_id = gid_to_id(payload.location_gid)
+    if not location_id:
+        raise HTTPException(status_code=400, detail="Invalid location GID.")
 
-    variants_to_update = (
-        db.query(models.ProductVariant)
-        .filter(
-            models.ProductVariant.store_id == store_id,
-            models.ProductVariant.barcode == payload.barcode
-        )
-        .all()
-    )
+    all_variants = db.query(models.ProductVariant).filter(
+        models.ProductVariant.barcode == payload.barcode
+    ).options(joinedload(models.ProductVariant.product).joinedload(models.Product.store)).all()
 
-    if not variants_to_update:
+    if not all_variants:
         raise HTTPException(status_code=404, detail="No variants found with that barcode")
 
-    service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+    # Group variants by store
+    variants_by_store: Dict[int, List[models.ProductVariant]] = {}
+    for v in all_variants:
+        store_id = v.product.store.id
+        if store_id not in variants_by_store:
+            variants_by_store[store_id] = []
+        variants_by_store[store_id].append(v)
     
-    quantities_payload = [
-        {
-            "inventoryItemId": f"gid://shopify/InventoryItem/{v.inventory_item_id}",
-            "locationId": payload.location_gid,
-            "quantity": payload.quantity,
-        }
-        for v in variants_to_update if v.inventory_item_id
-    ]
+    errors = []
+    success_updates = []
 
-    if not quantities_payload:
-         raise HTTPException(status_code=400, detail="Variants have no inventory items to update")
+    for store_id, variants in variants_by_store.items():
+        store = variants[0].product.store
+        service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+        
+        quantities_payload = [
+            {
+                "inventoryItemId": f"gid://shopify/InventoryItem/{v.inventory_item_id}",
+                "locationId": payload.location_gid,
+                "quantity": payload.quantity,
+            }
+            for v in variants if v.inventory_item_id
+        ]
+        
+        if not quantities_payload:
+            continue
 
-    variables = { "input": { "reason": "correction", "quantities": quantities_payload } }
+        variables = {"input": {"reason": "correction", "quantities": quantities_payload}}
 
-    try:
-        result = service.execute_mutation("inventorySetQuantities", variables)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        try:
+            result = service.execute_mutation("inventorySetQuantities", variables)
+            if result.get("inventorySetQuantities", {}).get("userErrors", []):
+                errors.append(f"Store {store.name}: {result['inventorySetQuantities']['userErrors'][0]['message']}")
+            else:
+                # On success, prepare to update our local DB
+                variant_ids_to_update = [v.id for v in variants]
+                success_updates.append({"variant_ids": variant_ids_to_update, "location_id": location_id})
+
+        except Exception as e:
+            errors.append(f"Store {store.name}: {str(e)}")
+
+    # After all API calls, update the local database for successful ones
+    if success_updates:
+        for update in success_updates:
+            crud_product.update_inventory_levels_for_variants(
+                db, 
+                variant_ids=update["variant_ids"],
+                location_id=update["location_id"],
+                new_quantity=payload.quantity
+            )
+
+    if errors:
+        raise HTTPException(
+            status_code=422, 
+            detail={"message": "Completed with partial success.", "errors": errors}
+        )
+
+    return {"status": "ok", "message": "Stock updated successfully for all applicable stores."}

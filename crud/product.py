@@ -231,3 +231,25 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
             db.rollback()
             log_dead_letter(db, store_id, run_id, bundle, f"A general error occurred: {e}")
             continue
+        
+# --- ADD THIS NEW FUNCTION AT THE END OF THE FILE ---
+def update_inventory_levels_for_variants(
+    db: Session, variant_ids: List[int], location_id: int, new_quantity: int
+):
+    """
+    Updates the 'available' quantity for a list of variants at a specific location.
+    This should be called after a successful Shopify API update.
+    """
+    now = datetime.now(timezone.utc)
+    
+    # First, find existing inventory levels for the variants at the location
+    db.query(models.InventoryLevel).filter(
+        models.InventoryLevel.variant_id.in_(variant_ids),
+        models.InventoryLevel.location_id == location_id
+    ).update({
+        models.InventoryLevel.available: new_quantity,
+        models.InventoryLevel.updated_at: now,
+        models.InventoryLevel.last_fetched_at: now
+    }, synchronize_session=False)
+
+    db.commit()
