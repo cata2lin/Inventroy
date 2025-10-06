@@ -186,8 +186,9 @@ def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get
         # --- THIS IS THE CORRECTED PART ---
         variables = {
             "input": {
-                "name": "available", # Specify that we are setting the "available" quantity
+                "name": "available",
                 "reason": "correction",
+                "ignoreCompareQuantity": True, # Ignore the old quantity for a force-set
                 "quantities": quantities_payload
             }
         }
