@@ -22,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // --- Helpers ---
+  // Synthesize an InventoryItem GID if backend only returns numeric id
   const invGid = (v) => v.inventory_item_gid || (v.inventory_item_id ? `gid://shopify/InventoryItem/${v.inventory_item_id}` : null);
 
   // --- API Calls ---
@@ -40,7 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const storeId = storeSelect.value;
     const searchTerm = productSearchInput.value.trim();
     if (!storeId || searchTerm.length < 2) {
-      productSelect.innerHTML = '<option value="">-- Search for a product --</option>';
+      productSelect.innerHTML = '<option value=\"\">-- Search for a product --</option>';
       productSelect.disabled = true;
       return;
     }
@@ -77,7 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- UI Rendering ---
   const renderProductOptions = (products) => {
-    productSelect.innerHTML = '<option value="">-- Select a product from results --</option>';
+    productSelect.innerHTML = '<option value=\"\">-- Select a product from results --</option>';
     if (products.length > 0) {
       products.forEach(p => {
         const firstSku = (p.variants && p.variants.length > 0) ? (p.variants[0].sku || 'No SKU') : 'No Variants';
@@ -86,7 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       productSelect.disabled = false;
     } else {
-      productSelect.innerHTML = '<option value="">-- No products found --</option>';
+      productSelect.innerHTML = '<option value=\"\">-- No products found --</option>';
       productSelect.disabled = true;
     }
   };
@@ -98,33 +99,33 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    let html = '<form id="mutation-form">';
+    let html = '<form id=\"mutation-form\">';
 
     switch (mutation) {
       case 'setProductCategory':
         html += `
-          <input type="hidden" name="productId" value="${currentProduct.shopify_gid}">
-          <label for="categoryId">New Category GID (e.g., gid://shopify/TaxonomyCategory/123)</label>
-          <input type="text" id="categoryId" name="categoryId" required placeholder="gid://shopify/TaxonomyCategory/123">
-          <label for="findCategory">Find Category by Name</label>
-          <div class="grid">
-            <input type="text" id="findCategoryInput" placeholder="e.g., Apparel">
-            <button type="button" id="find-category-btn" class="outline">Find</button>
+          <input type=\"hidden\" name=\"productId\" value=\"${currentProduct.shopify_gid}\">
+          <label for=\"categoryId\">New Category GID (e.g., gid://shopify/TaxonomyCategory/123)</label>
+          <input type=\"text\" id=\"categoryId\" name=\"categoryId\" required placeholder=\"gid://shopify/TaxonomyCategory/123\">
+          <label for=\"findCategory\">Find Category by Name</label>
+          <div class=\"grid\">
+            <input type=\"text\" id=\"findCategoryInput\" placeholder=\"e.g., Apparel\">
+            <button type=\"button\" id=\"find-category-btn\" class=\"outline\">Find</button>
           </div>`;
         break;
 
       case 'updateProductType':
         html += `
-          <input type="hidden" name="productId" value="${currentProduct.shopify_gid}">
-          <label for="productType">New Product Type</label>
-          <input type="text" id="productType" name="productType" value="${currentProduct.product_type || ''}" required>`;
+          <input type=\"hidden\" name=\"productId\" value=\"${currentProduct.shopify_gid}\">
+          <label for=\"productType\">New Product Type</label>
+          <input type=\"text\" id=\"productType\" name=\"productType\" value=\"${currentProduct.product_type || ''}\" required>`;
         break;
 
       case 'updateVariantPrices':
       case 'updateVariantCompareAt':
       case 'updateVariantBarcode':
       case 'updateVariantCosts':
-        html += `<input type="hidden" name="productId" value="${currentProduct.shopify_gid}">`;
+        html += `<input type=\"hidden\" name=\"productId\" value=\"${currentProduct.shopify_gid}\">`;
         html += `<h6>Update values for each variant:</h6>`;
         (currentProduct.variants || []).forEach(v => {
           let value = '';
@@ -150,10 +151,10 @@ document.addEventListener('DOMContentLoaded', () => {
             type = 'number';
           }
           html += `
-            <div class="variant-row">
-              <label for="variant_${v.id}">${v.title} (SKU: ${v.sku || 'N/A'})</label>
-              <input type="hidden" name="variantId" value="${v.shopify_gid}">
-              <input type="${type}" id="variant_${v.id}" name="value" placeholder="${placeholder}" value="${value}" ${type === 'number' ? 'step="0.01"' : ''} required>
+            <div class=\"variant-row\">
+              <label for=\"variant_${v.id}\">${v.title} (SKU: ${v.sku || 'N/A'})</label>
+              <input type=\"hidden\" name=\"variantId\" value=\"${v.shopify_gid}\">
+              <input type=\"${type}\" id=\"variant_${v.id}\" name=\"value\" placeholder=\"${placeholder}\" value=\"${value}\" ${type === 'number' ? 'step=\"0.01\"' : ''} required>
             </div>`;
         });
         break;
@@ -162,13 +163,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const costVariants = (currentProduct.variants || []).filter(v => invGid(v));
         if (costVariants.length > 0) {
           html += `
-            <label for="inventoryItemId">Select Variant</label>
-            <select name="inventoryItemId" id="inventoryItemId" required>
-              <option value="">-- Choose a variant --</option>
-              ${costVariants.map(v => `<option value="${invGid(v)}" data-cost="${v.cost_per_item ?? ''}">${v.title}</option>`).join('')}
+            <label for=\"inventoryItemId\">Select Variant</label>
+            <select name=\"inventoryItemId\" id=\"inventoryItemId\" required>
+              <option value=\"\">-- Choose a variant --</option>
+              ${costVariants.map(v => `<option value=\"${invGid(v)}\" data-cost=\"${v.cost_per_item ?? ''}\">${v.title}</option>`).join('')}
             </select>
-            <label for="cost">New Cost</label>
-            <input type="number" id="cost" name="cost" step="0.01" placeholder="e.g., 7.50" required>
+            <label for=\"cost\">New Cost</label>
+            <input type=\"number\" id=\"cost\" name=\"cost\" step=\"0.01\" placeholder=\"e.g., 7.50\" required>
           `;
         } else {
           html += `<p>This product has no variants with trackable inventory.</p>`;
@@ -188,18 +189,18 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         if (quantityVariants.length > 0) {
           html += `
-            <label for="inventoryItemId">Select Variant</label>
-            <select name="inventoryItemId" id="inventoryItemId" required>
-              <option value="">-- Choose a variant --</option>
-              ${quantityVariants.map(v => `<option value="${invGid(v)}">${v.title}</option>`).join('')}
+            <label for=\"inventoryItemId\">Select Variant</label>
+            <select name=\"inventoryItemId\" id=\"inventoryItemId\" required>
+              <option value=\"\">-- Choose a variant --</option>
+              ${quantityVariants.map(v => `<option value=\"${invGid(v)}\">${v.title}</option>`).join('')}
             </select>
-            <label for="locationId">Select Location</label>
-            <select name="locationId" id="locationId" required>
-              <option value="">-- Choose a location --</option>
-              ${Object.entries(locations).map(([gid, name]) => `<option value="${gid}">${name}</option>`).join('')}
+            <label for=\"locationId\">Select Location</label>
+            <select name=\"locationId\" id=\"locationId\" required>
+              <option value=\"\">-- Choose a location --</option>
+              ${Object.entries(locations).map(([gid, name]) => `<option value=\"${gid}\">${name}</option>`).join('')}
             </select>
-            <label for="quantity">New 'Available' Quantity</label>
-            <input type="number" id="quantity" name="quantity" required placeholder="e.g., 100">
+            <label for=\"quantity\">New 'Available' Quantity</label>
+            <input type=\"number\" id=\"quantity\" name=\"quantity\" required placeholder=\"e.g., 100\">
           `;
         } else {
           html += `<p>This product has no variants with trackable inventory.</p>`;
@@ -208,8 +209,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    if (html !== '<form id="mutation-form">') {
-      html += '<button type="submit">Execute Mutation</button>';
+    if (html !== '<form id=\"mutation-form\">') {
+      html += '<button type=\"submit\">Execute Mutation</button>';
     }
     html += '</form>';
 
@@ -288,12 +289,12 @@ document.addEventListener('DOMContentLoaded', () => {
           variables.input = {
             name: 'available',
             reason: 'correction',
+            ignoreCompareQuantity: true, // per 2025-10 requirement
             quantities: [
               {
                 inventoryItemId: formData.get('inventoryItemId'),
                 locationId: formData.get('locationId'),
                 quantity: parseInt(formData.get('quantity'), 10),
-                // compareQuantity: optional but recommended (CAS) per docs
               },
             ],
           };
@@ -331,7 +332,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const result = await response.json();
       if (!response.ok) throw result;
-      apiResponse.textContent = "Search Results:\n" + JSON.stringify(result, null, 2);
+      apiResponse.textContent = "Search Results:\\n" + JSON.stringify(result, null, 2);
     } catch (error) {
       apiResponse.textContent = `Error: ${JSON.stringify(error, null, 2)}`;
     }
@@ -341,7 +342,7 @@ document.addEventListener('DOMContentLoaded', () => {
   storeSelect.addEventListener('change', () => {
     productSearchInput.disabled = !storeSelect.value;
     productSearchInput.value = '';
-    productSelect.innerHTML = '<option value="">-- Search for a product --</option>';
+    productSelect.innerHTML = '<option value=\"\">-- Search for a product --</option>';
     productSelect.disabled = true;
     currentProduct = null;
     mutationSelectionContainer.style.display = 'none';
