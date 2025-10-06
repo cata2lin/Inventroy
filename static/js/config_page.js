@@ -165,10 +165,19 @@ document.addEventListener('DOMContentLoaded', () => {
         deleteAllWebhooksBtn.setAttribute('aria-busy', 'true');
         try {
             const response = await fetch(API_ENDPOINTS.deleteAllWebhooks, { method: 'DELETE' });
-            const result = await response.json();
+            
+            // Gracefully handle both JSON and text responses
+            const resultText = await response.text();
+            let result;
+            try {
+                result = JSON.parse(resultText);
+            } catch (e) {
+                result = { message: resultText };
+            }
+
             if (!response.ok) {
-                const errorDetails = result.detail.errors ? `\n\nDetails:\n${result.detail.errors.join('\n')}` : '';
-                throw new Error(result.detail.message + errorDetails);
+                const errorDetails = result.errors ? `\n\nDetails:\n${result.errors.join('\n')}` : '';
+                throw new Error(result.message + errorDetails);
             }
             alert(result.message);
             // If the modal is open, refresh its content
@@ -181,6 +190,3 @@ document.addEventListener('DOMContentLoaded', () => {
             deleteAllWebhooksBtn.removeAttribute('aria-busy');
         }
     });
-
-    loadStores();
-});
