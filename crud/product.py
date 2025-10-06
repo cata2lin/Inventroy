@@ -149,7 +149,7 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
             db.execute(product_stmt)
             
             v_data_list = p_data.get("variants", [])
-            if isinstance(v_data_list, dict) and "edges" in v_data_list: # Handle GraphQL edge format
+            if isinstance(v_data_list, dict) and "edges" in v_data_list:
                  v_data_list = [edge['node'] for edge in v_data_list['edges']]
 
             if v_data_list:
