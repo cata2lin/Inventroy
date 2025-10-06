@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request, Form, Depends, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse
+from routes.mutations import router as mutations_router
 from dotenv import load_dotenv
 from jose import jwt, JOSEError
 from datetime import datetime, timedelta
@@ -102,3 +103,4 @@ app.include_router(config.router)
 # NEW: Include the products and mutations router
 app.include_router(products.router)
 app.include_router(mutations.router)
+app.include_router(mutations_router)
