@@ -1,6 +1,5 @@
 # routes/stock.py
 from typing import List, Dict, Any, Optional
-# --- THIS LINE IS CORRECTED ---
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
@@ -18,6 +17,7 @@ router = APIRouter(prefix="/api/stock", tags=["Stock Management"])
 # --- Currency Conversion ---
 def get_exchange_rates(base_currency: str = "RON") -> Dict[str, float]:
     try:
+        # Using a reliable public API for exchange rates
         response = requests.get(f"https://api.exchangerate-api.com/v4/latest/{base_currency}")
         response.raise_for_status()
         data = response.json()
@@ -25,6 +25,7 @@ def get_exchange_rates(base_currency: str = "RON") -> Dict[str, float]:
         rates[base_currency] = 1.0
         return rates
     except Exception:
+        # Hardcoded fallback rates in case the API fails
         return {"RON": 1.0, "EUR": 5.0, "USD": 4.6}
 
 # --- Helper for Smart Search ---
@@ -58,7 +59,7 @@ def get_stock_grouped_by_barcode(
         base_query = base_query.filter(models.ProductVariant.store_id == store_id)
 
     all_variants = base_query.all()
-    
+
     if search:
         search_terms = normalize_and_split(search)
         matching_barcodes = set()
@@ -67,11 +68,11 @@ def get_stock_grouped_by_barcode(
             normalized_full_text = normalize_and_split(full_text)
             if all(term in normalized_full_text for term in search_terms):
                 matching_barcodes.add(v.barcode)
-        
+
         all_variants = [v for v in all_variants if v.barcode in matching_barcodes]
 
     exchange_rates = get_exchange_rates("RON")
-    
+
     grouped_by_barcode: Dict[str, Dict[str, Any]] = {}
     for variant in all_variants:
         barcode = variant.barcode
@@ -93,7 +94,7 @@ def get_stock_grouped_by_barcode(
             "store_name": variant.product.store.name,
             "is_barcode_primary": variant.is_barcode_primary,
         })
-        
+
         grouped_by_barcode[barcode]["total_stock"] += variant_stock
         grouped_by_barcode[barcode]["total_retail_value_ron"] += variant_retail_value * rate
         grouped_by_barcode[barcode]["total_inventory_value_ron"] += variant_inventory_value * rate
@@ -107,7 +108,7 @@ def get_stock_grouped_by_barcode(
         filtered_groups = [g for g in filtered_groups if g["total_retail_value_ron"] >= min_retail]
     if max_retail is not None:
         filtered_groups = [g for g in filtered_groups if g["total_retail_value_ron"] <= max_retail]
-        
+
     final_results = []
     for group in filtered_groups:
         primary_variant = next((v for v in group["variants"] if v["is_barcode_primary"]), group["variants"][0])
@@ -121,7 +122,7 @@ def get_stock_grouped_by_barcode(
             "total_inventory_value": round(group["total_inventory_value_ron"], 2),
             "currency": "RON"
         })
-    
+
     grand_total_stock = sum(g['total_stock'] for g in final_results)
     grand_total_retail = sum(g['total_retail_value'] for g in final_results)
     grand_total_inventory = sum(g['total_inventory_value'] for g in final_results)
@@ -168,7 +169,7 @@ def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get
         store_id = v.product.store.id
         if store_id not in variants_by_store: variants_by_store[store_id] = []
         variants_by_store[store_id].append(v)
-    
+
     errors = []
     success_updates = []
 
@@ -180,12 +181,12 @@ def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get
 
         location_gid = f"gid://shopify/Location/{store.sync_location_id}"
         service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
-        
+
         quantities_payload = [
             {"inventoryItemId": f"gid://shopify/InventoryItem/{v.inventory_item_id}", "locationId": location_gid, "quantity": payload.quantity}
             for v in variants if v.inventory_item_id
         ]
-        
+
         if not quantities_payload: continue
 
         variables = {"input": {"reason": "correction", "quantities": quantities_payload}}
@@ -209,4 +210,4 @@ def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get
     if errors:
         raise HTTPException(status_code=422, detail={"message": "Completed with errors.", "errors": errors})
 
-    return {"status": "ok", "message": "Stock updated successfully for all applicable stores."}Genti Promo	pr0gsk-za.myshopify.com	
+    return {"status": "ok", "message": "Stock updated successfully for all applicable stores."}
