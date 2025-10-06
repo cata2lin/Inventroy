@@ -190,3 +190,6 @@ document.addEventListener('DOMContentLoaded', () => {
             deleteAllWebhooksBtn.removeAttribute('aria-busy');
         }
     });
+
+    loadStores();
+});
