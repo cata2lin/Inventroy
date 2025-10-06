@@ -1,6 +1,7 @@
 # routes/stock.py
 from typing import List, Dict, Any, Optional
-from pantic import BaseModel
+# --- THIS LINE IS CORRECTED ---
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
@@ -17,7 +18,6 @@ router = APIRouter(prefix="/api/stock", tags=["Stock Management"])
 # --- Currency Conversion ---
 def get_exchange_rates(base_currency: str = "RON") -> Dict[str, float]:
     try:
-        # Using a reliable public API for exchange rates
         response = requests.get(f"https://api.exchangerate-api.com/v4/latest/{base_currency}")
         response.raise_for_status()
         data = response.json()
@@ -25,7 +25,6 @@ def get_exchange_rates(base_currency: str = "RON") -> Dict[str, float]:
         rates[base_currency] = 1.0
         return rates
     except Exception:
-        # Hardcoded fallback rates in case the API fails
         return {"RON": 1.0, "EUR": 5.0, "USD": 4.6}
 
 # --- Helper for Smart Search ---
