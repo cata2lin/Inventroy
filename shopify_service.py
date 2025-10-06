@@ -175,7 +175,9 @@ class ShopifyService:
     def __init__(self, store_url: str, token: str, api_version: str = "2025-10"):
         if not all([store_url, token]):
             raise ValueError("Store URL and Access Token are required.")
-        self.api_endpoint = f"https://{store_url}/admin/api/{api_version}/graphql.json"
+        # CORRECTED: This ensures both endpoints are always available on the object
+        self.graphql_endpoint = f"https://{store_url}/admin/api/{api_version}/graphql.json"
+        self.rest_endpoint = f"https://{store_url}/admin/api/{api_version}"
         self.headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": token}
 
     def _execute_query(self, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -184,7 +186,7 @@ class ShopifyService:
         base_delay = 1.0
         for attempt in range(max_retries):
             try:
-                response = requests.post(self.api_endpoint, headers=self.headers, json=payload, timeout=30)
+                response = requests.post(self.graphql_endpoint, headers=self.headers, json=payload, timeout=30)
                 response.raise_for_status()
                 json_response = response.json()
                 if "errors" in json_response and json_response.get("errors"):
@@ -242,7 +244,8 @@ class ShopifyService:
     def find_categories(self, query: str) -> Dict[str, Any]:
         variables = {"q": query}
         return self._execute_query(FIND_CATEGORIES_QUERY, variables)
-    # --- NEW WEBHOOK METHODS (using REST API) ---
+
+    # --- WEBHOOK METHODS (using REST API) ---
     def get_webhooks(self) -> List[Dict[str, Any]]:
         """Retrieves all webhook subscriptions."""
         response = requests.get(f"{self.rest_endpoint}/webhooks.json", headers=self.headers)
