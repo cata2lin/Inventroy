@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field, HttpUrl, ConfigDict, field_validator, ValidationInfo
+from pydantic import BaseModel, Field, HttpUrl, ConfigDict, model_validator
 
 # =========================
 # Base model configurations
@@ -44,7 +44,7 @@ class Webhook(BaseModel):
     created_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
-# --- CORRECTED Schemas for the mutations page and product views ---
+# --- Schemas for the mutations page and product views ---
 
 class Location(ORMBase):
     id: int
@@ -54,13 +54,13 @@ class Location(ORMBase):
 class InventoryLevel(ORMBase):
     location_id: int
     available: Optional[int] = None
-    location: Location
+    location: Optional[Location] = None
 
 class ProductVariant(ORMBase):
     id: int
     shopify_gid: str
     inventory_item_id: Optional[int] = None
-    inventory_item_gid: Optional[str] = None # Will be populated by the validator
+    inventory_item_gid: Optional[str] = None  # derived below
     title: Optional[str] = None
     sku: Optional[str] = None
     barcode: Optional[str] = None
@@ -68,19 +68,14 @@ class ProductVariant(ORMBase):
     compare_at_price: Optional[float] = None
     cost_per_item: Optional[float] = None
     inventory_quantity: Optional[int] = None
-    inventory_levels: List[InventoryLevel] = []
+    inventory_levels: List[InventoryLevel] = Field(default_factory=list)
 
-    # This validator is the key fix. It correctly constructs the full GID
-    # that the Shopify API needs for inventory mutations.
-    @field_validator("inventory_item_gid", mode="before")
-    @classmethod
-    def assemble_inventory_item_gid(cls, v: Any, info: ValidationInfo) -> Optional[str]:
-        # When using from_attributes=True, the full model object is in info.data
-        if info.data and hasattr(info.data, 'inventory_item_id'):
-            inventory_item_id = info.data.inventory_item_id
-            if inventory_item_id:
-                return f"gid://shopify/InventoryItem/{inventory_item_id}"
-        return None
+    @model_validator(mode="after")
+    def _derive_inventory_item_gid(self):
+        # If server returns only legacy numeric id, synthesize the GID for UI mutations.
+        if not self.inventory_item_gid and self.inventory_item_id:
+            self.inventory_item_gid = f"gid://shopify/InventoryItem/{self.inventory_item_id}"
+        return self
 
 class Product(ORMBase):
     id: int
@@ -90,7 +85,7 @@ class Product(ORMBase):
     product_type: Optional[str] = None
     image_url: Optional[str] = None
     status: Optional[str] = None
-    variants: List[ProductVariant] = []
+    variants: List[ProductVariant] = Field(default_factory=list)
 
 class ProductResponse(BaseModel):
     total_count: int

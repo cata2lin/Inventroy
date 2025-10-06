@@ -1,5 +1,4 @@
 # shopify_service.py
-
 import os
 import time
 import requests
@@ -7,7 +6,6 @@ import random
 from typing import List, Optional, Dict, Any, Generator
 from pydantic import BaseModel, Field, HttpUrl
 from datetime import datetime
-import schemas
 
 # --- Helper function ---
 def gid_to_id(gid: Optional[str]) -> Optional[int]:
@@ -30,29 +28,34 @@ fragment InventoryLevelFragment on InventoryLevel {
 """
 INVENTORY_ITEM_FRAGMENT = """
 fragment InventoryItemFragment on InventoryItem {
-  id legacyResourceId sku
+  id
+  legacyResourceId
+  sku
   unitCost { amount }
-  inventoryLevels(first: 10) { edges { node { ...InventoryLevelFragment } } }
+  inventoryLevels(first: 10) {
+    edges { node { ...InventoryLevelFragment } }
+  }
 }
 """
 PRODUCT_FRAGMENT = """
 fragment ProductFragment on Product {
-  id legacyResourceId title bodyHtml vendor productType status createdAt handle updatedAt publishedAt status tags
+  id legacyResourceId title bodyHtml vendor productType status createdAt handle
+  updatedAt publishedAt status tags
   featuredImage { url }
   category { name }
 }
 """
 VARIANT_FRAGMENT = """
 fragment VariantFragment on ProductVariant {
-  id legacyResourceId title price sku position inventoryPolicy compareAtPrice
-  barcode inventoryQuantity createdAt updatedAt
+  id legacyResourceId title price sku position inventoryPolicy compareAtPrice barcode
+  inventoryQuantity createdAt updatedAt
   inventoryItem { ...InventoryItemFragment }
   product { ...ProductFragment }
 }
 """
 LINE_ITEM_FRAGMENT = """
 fragment LineItemFragment on LineItem {
-  id title quantity sku vendor taxable
+  id title quantity sku
   originalUnitPriceSet { shopMoney { ...MoneyFragment } }
   totalDiscountSet { shopMoney { ...MoneyFragment } }
   variant { ...VariantFragment }
@@ -67,38 +70,7 @@ fragment FulfillmentFragment on Fulfillment {
 }
 """
 
-# --- GraphQL Queries (CORRECTED) ---
-GET_ALL_ORDERS_QUERY = f"""
-{MONEY_FRAGMENT}
-{LOCATION_FRAGMENT}
-{INVENTORY_LEVEL_FRAGMENT}
-{INVENTORY_ITEM_FRAGMENT}
-{PRODUCT_FRAGMENT}
-{VARIANT_FRAGMENT}
-{LINE_ITEM_FRAGMENT}
-{FULFILLMENT_EVENT_FRAGMENT}
-{FULFILLMENT_FRAGMENT}
-query GetAllData($cursor: String, $query: String) {{
-  orders(first: 5, after: $cursor, sortKey: CREATED_AT, reverse: true, query: $query) {{
-    pageInfo {{ hasNextPage endCursor }}
-    edges {{
-      node {{
-        id legacyResourceId name createdAt updatedAt cancelledAt cancelReason closedAt processedAt
-        displayFinancialStatus displayFulfillmentStatus currencyCode note tags
-        paymentGatewayNames
-        totalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
-        subtotalPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
-        totalTaxSet {{ shopMoney {{ ...MoneyFragment }} }}
-        totalDiscountsSet {{ shopMoney {{ ...MoneyFragment }} }}
-        totalShippingPriceSet {{ shopMoney {{ ...MoneyFragment }} }}
-        lineItems(first: 50) {{ edges {{ node {{ ...LineItemFragment }} }} }}
-        fulfillments(first: 10) {{ ...FulfillmentFragment }}
-      }}
-    }}
-  }}
-}}
-"""
-
+# --- GraphQL Queries ---
 GET_ALL_PRODUCTS_QUERY = f"""
 {LOCATION_FRAGMENT}
 {INVENTORY_LEVEL_FRAGMENT}
@@ -113,8 +85,8 @@ query GetAllProducts($cursor: String) {{
         variants(first: 50) {{
           edges {{
             node {{
-              id legacyResourceId title price sku position inventoryPolicy compareAtPrice
-              barcode inventoryQuantity createdAt updatedAt
+              id legacyResourceId title price sku position inventoryPolicy compareAtPrice barcode
+              inventoryQuantity createdAt updatedAt
               inventoryItem {{ ...InventoryItemFragment }}
             }}
           }}
@@ -128,77 +100,81 @@ query GetAllProducts($cursor: String) {{
 # --- GraphQL Mutations ---
 MUTATIONS = {
     "setProductCategory": """
-        mutation SetProductCategory($product: ProductUpdateInput!) {
-          productUpdate(product: $product) {
-            product { id category { id fullName } }
-            userErrors { field message }
-          }
+      mutation SetProductCategory($product: ProductUpdateInput!) {
+        productUpdate(product: $product) {
+          product { id category { id fullName } }
+          userErrors { field message }
         }
+      }
     """,
     "updateProductType": """
-        mutation UpdateProductType($product: ProductUpdateInput!) {
-          productUpdate(product: $product) {
-            product { id productType }
-            userErrors { field message }
-          }
+      mutation UpdateProductType($product: ProductUpdateInput!) {
+        productUpdate(product: $product) {
+          product { id productType }
+          userErrors { field message }
         }
+      }
     """,
     "updateVariantPrices": """
-        mutation UpdateVariantPrices($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-            productVariants { id price }
-            userErrors { field message }
-          }
+      mutation UpdateVariantPrices($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+        productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+          productVariants { id price }
+          userErrors { field message }
         }
+      }
     """,
     "updateVariantCompareAt": """
-        mutation UpdateVariantCompareAt($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-            productVariants { id compareAtPrice }
-            userErrors { field message }
-          }
+      mutation UpdateVariantCompareAt($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+        productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+          productVariants { id compareAtPrice }
+          userErrors { field message }
         }
+      }
     """,
     "updateVariantBarcode": """
-        mutation UpdateVariantBarcode($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-            productVariants { id barcode }
-            userErrors { field message }
-          }
+      mutation UpdateVariantBarcode($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+        productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+          productVariants { id barcode }
+          userErrors { field message }
         }
+      }
     """,
     "updateVariantCosts": """
-        mutation UpdateVariantCosts($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-            productVariants { id inventoryItem { id unitCost { amount currencyCode } } }
-            userErrors { field message }
-          }
+      mutation UpdateVariantCosts($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+        productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+          productVariants { id inventoryItem { id unitCost { amount currencyCode } } }
+          userErrors { field message }
         }
+      }
     """,
     "updateInventoryCost": """
-        mutation UpdateInventoryCost($id: ID!, $input: InventoryItemInput!) {
-          inventoryItemUpdate(id: $id, input: $input) {
-            inventoryItem { id unitCost { amount currencyCode } }
-            userErrors { field message }
-          }
+      mutation UpdateInventoryCost($id: ID!, $input: InventoryItemInput!) {
+        inventoryItemUpdate(id: $id, input: $input) {
+          inventoryItem { id unitCost { amount currencyCode } }
+          userErrors { field message }
         }
+      }
     """,
     "inventorySetQuantities": """
-        mutation SetAbsQty($input: InventorySetQuantitiesInput!) {
-          inventorySetQuantities(input: $input) {
-            inventoryAdjustmentGroup { changes { name delta quantityAfterChange } }
-            userErrors { field message }
+      mutation SetAbsQty($input: InventorySetQuantitiesInput!) {
+        inventorySetQuantities(input: $input) {
+          inventoryAdjustmentGroup {
+            changes { name delta quantityAfterChange }
           }
+          userErrors { field message }
         }
+      }
     """,
 }
 
 FIND_CATEGORIES_QUERY = """
-    query FindCategories($q: String!) {
-      taxonomy {
-        categories(search: $q, first: 10) { nodes { id fullName } }
-      }
+query FindCategories($q: String!) {
+  taxonomy {
+    categories(search: $q, first: 10) {
+      nodes { id fullName }
     }
+  }
+}
 """
 
 class ShopifyService:
@@ -221,7 +197,6 @@ class ShopifyService:
                     is_throttled = any(err.get("extensions", {}).get("code") == "THROTTLED" for err in json_response["errors"])
                     if is_throttled and attempt < max_retries - 1:
                         wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                        print(f"API throttled. Retrying in {wait_time:.2f} seconds...")
                         time.sleep(wait_time)
                         continue
                     raise ValueError(f"GraphQL API Error: {json_response['errors']}")
@@ -229,7 +204,6 @@ class ShopifyService:
             except requests.exceptions.RequestException as e:
                 if attempt < max_retries - 1:
                     wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                    print(f"Network error: {e}. Retrying in {wait_time:.2f} seconds...")
                     time.sleep(wait_time)
                 else:
                     raise e
@@ -243,32 +217,25 @@ class ShopifyService:
     def get_all_products_and_variants(self, cursor: Optional[str] = None, updated_at_max: Optional[str] = None) -> Generator[Dict[str, Any], None, None]:
         has_next_page = True
         query_filter = f"updated_at:<='{updated_at_max}'" if updated_at_max else None
-
         while has_next_page:
             try:
                 variables = {"cursor": cursor, "query": query_filter}
                 data = self._execute_query(GET_ALL_PRODUCTS_QUERY, variables)
-                
                 if not data or "products" not in data:
                     yield {"products": [], "pageInfo": {"hasNextPage": False}}
                     return
-
                 product_connection = data["products"]
                 page_info = product_connection.get("pageInfo", {})
                 has_next_page = page_info.get("hasNextPage", False)
                 cursor = page_info.get("endCursor")
-
                 products = self._flatten_edges(product_connection)
                 for prod in products:
                     prod["variants"] = self._flatten_edges(prod.get("variants"))
                     for variant in prod["variants"]:
                         if variant.get("inventoryItem"):
                             variant["inventoryItem"]["inventoryLevels"] = self._flatten_edges(variant["inventoryItem"].get("inventoryLevels"))
-                
                 yield {"products": products, "pageInfo": page_info}
-
             except (ValueError, requests.exceptions.RequestException) as e:
-                print(f"An error occurred during product page fetch: {e}. Stopping.")
                 yield {"products": [], "pageInfo": {"hasNextPage": False}, "error": str(e)}
                 return
 
