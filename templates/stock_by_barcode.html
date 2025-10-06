@@ -4,10 +4,12 @@
 <div class="container">
     <hgroup>
         <h1>Stock by Barcode</h1>
-        <h2>View and bulk-update inventory for products sharing a barcode across all stores.</h2>
+        <h2>Master inventory control across all stores.</h2>
     </hgroup>
 
-    <article id="stock-container" aria-busy="true" class="table-container">
+    <input type="search" id="product-search-input" placeholder="Search by product name or SKU...">
+
+    <article id="stock-container" aria-busy="true" class="table-container compact">
         </article>
 
     <dialog id="manage-variants-modal">
@@ -16,13 +18,9 @@
                 <button class="close" aria-label="Close"></button>
                 <strong id="modal-title">Manage Variants</strong>
             </header>
-            
-            <div id="modal-body">
-                </div>
-            
+            <div id="modal-body"></div>
         </article>
     </dialog>
-
 </div>
 {% endblock %}
 
