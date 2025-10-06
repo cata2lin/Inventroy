@@ -1,16 +1,22 @@
 // static/js/stock_by_barcode.js
 document.addEventListener('DOMContentLoaded', () => {
+    // --- Element References ---
     const storeFilter = document.getElementById('store-filter');
     const stockContainer = document.getElementById('stock-container');
+    const modal = document.getElementById('manage-variants-modal');
+    const modalTitle = document.getElementById('modal-title');
+    const modalBody = document.getElementById('modal-body');
+
+    // --- State ---
+    let barcodeGroupsData = []; // Store the fetched data globally
     let locationsMap = {};
 
+    // --- Data Fetching ---
     const loadStores = async () => {
         try {
             const response = await fetch('/api/config/stores');
             const stores = await response.json();
-            stores.forEach(store => {
-                storeFilter.add(new Option(store.name, store.id));
-            });
+            stores.forEach(store => storeFilter.add(new Option(store.name, store.id)));
         } catch (error) {
             console.error('Failed to load stores:', error);
         }
@@ -23,12 +29,11 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         stockContainer.setAttribute('aria-busy', 'true');
-
         try {
             const response = await fetch(`/api/stock/by-barcode/${storeId}`);
             if (!response.ok) throw new Error('Failed to fetch stock data.');
-            const data = await response.json();
-            renderStockView(data);
+            barcodeGroupsData = await response.json(); // Store data
+            renderTableView();
         } catch (error) {
             stockContainer.innerHTML = `<p style="color:red;">${error.message}</p>`;
         } finally {
@@ -36,55 +41,88 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    const renderStockView = (data) => {
-        if (data.length === 0) {
+    // --- UI Rendering ---
+    const renderTableView = () => {
+        if (barcodeGroupsData.length === 0) {
             stockContainer.innerHTML = '<p>No products with barcodes found for this store.</p>';
-            stockContainer.classList.remove('grid');
             return;
         }
-        stockContainer.classList.add('grid');
 
-        // Collect all unique locations
+        // Collect all unique locations for the dropdowns
         locationsMap = {};
-        data.forEach(group => group.variants.forEach(variant => variant.locations.forEach(loc => {
+        barcodeGroupsData.forEach(group => group.variants.forEach(variant => variant.locations.forEach(loc => {
             if (loc.location_gid) locationsMap[loc.location_gid] = loc.name;
         })));
+
+        const tableRows = barcodeGroupsData.map((group, index) => {
+            const totalStock = group.variants.reduce((sum, v) => sum + v.total_available, 0);
+            return `
+                <tr>
+                    <td><img src="${group.primary_image_url || '/static/img/placeholder.png'}" alt="${group.primary_title}" class="product-image"></td>
+                    <td>
+                        <strong>${group.primary_title}</strong><br>
+                        <small>Barcode: <code>${group.barcode}</code></small>
+                    </td>
+                    <td>${group.variants.length}</td>
+                    <td>${totalStock}</td>
+                    <td><button class="outline" data-group-index="${index}">Manage</button></td>
+                </tr>
+            `;
+        }).join('');
+
+        stockContainer.innerHTML = `
+            <table>
+                <thead>
+                    <tr>
+                        <th>Image</th>
+                        <th>Primary Product</th>
+                        <th>Variants</th>
+                        <th>Total Stock</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${tableRows}
+                </tbody>
+            </table>
+        `;
+    };
+    
+    const openManageModal = (groupIndex) => {
+        const group = barcodeGroupsData[groupIndex];
+        if (!group) return;
+
+        modalTitle.textContent = `Manage Barcode: ${group.barcode}`;
+        
         const locationOptions = Object.entries(locationsMap)
             .map(([gid, name]) => `<option value="${gid}">${name}</option>`).join('');
 
-        stockContainer.innerHTML = data.map(group => `
-            <article class="barcode-card">
-                <header>
-                    <img src="${group.primary_image_url || '/static/img/placeholder.png'}" alt="${group.primary_title}">
-                </header>
-                <div class="card-body">
-                    <strong>${group.primary_title}</strong>
-                    <p>Barcode: <code>${group.barcode}</code></p>
-                    <details>
-                        <summary>Manage ${group.variants.length} Variants & Stock</summary>
-                        <div class="barcode-group" data-barcode="${group.barcode}">
-                            ${group.variants.map(v => `
-                                <div class="variant-row ${v.is_barcode_primary ? 'is-primary' : ''}">
-                                    <span>${v.product_title} (${v.sku || 'N/A'})</span>
-                                    <button class="set-primary-btn outline" data-variant-id="${v.variant_id}" ${v.is_barcode_primary ? 'disabled' : ''}>
-                                        ${v.is_barcode_primary ? 'Primary' : 'Set Primary'}
-                                    </button>
-                                </div>
-                            `).join('')}
-                            <hr>
-                            <div class="update-form grid">
-                                <select class="location-select" required>${locationOptions}</select>
-                                <input type="number" class="quantity-input" placeholder="New Qty" required />
-                                <button class="update-stock-btn">Update</button>
-                            </div>
-                            <small class="response-message"></small>
-                        </div>
-                    </details>
+        modalBody.innerHTML = `
+            <h5>Variants</h5>
+            <div class="barcode-group" data-barcode="${group.barcode}">
+                ${group.variants.map(v => `
+                    <div class="variant-row ${v.is_barcode_primary ? 'is-primary' : ''}">
+                        <span>${v.product_title} (${v.sku || 'N/A'})</span>
+                        <button class="set-primary-btn outline" data-variant-id="${v.variant_id}" ${v.is_barcode_primary ? 'disabled' : ''}>
+                            ${v.is_barcode_primary ? 'Primary' : 'Set Primary'}
+                        </button>
+                    </div>
+                `).join('')}
+                <hr>
+                <h5>Update Stock</h5>
+                <div class="update-form grid">
+                    <select class="location-select" required>${locationOptions}</select>
+                    <input type="number" class="quantity-input" placeholder="New Qty" required />
+                    <button class="update-stock-btn">Update</button>
                 </div>
-            </article>
-        `).join('');
+                <small class="response-message"></small>
+            </div>
+        `;
+        modal.showModal();
     };
-    
+
+
+    // --- Event Handlers ---
     const handleStockUpdate = async (e) => {
         const storeId = storeFilter.value;
         const groupEl = e.target.closest('.barcode-group');
@@ -106,18 +144,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch(`/api/stock/bulk-update/${storeId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    barcode: barcode,
-                    location_gid: locationGid,
-                    quantity: parseInt(quantity)
-                })
+                body: JSON.stringify({ barcode, location_gid: locationGid, quantity: parseInt(quantity) })
             });
             const result = await response.json();
             if (!response.ok) throw new Error(result.detail || 'Update failed.');
             
             messageEl.textContent = 'Stock updated successfully!';
             messageEl.style.color = 'green';
-            setTimeout(fetchStockData, 2000); // Refresh data after 2 seconds
+            setTimeout(async () => {
+                await fetchStockData(); // Refresh main table
+                modal.close(); // Close modal on success
+            }, 1500);
         } catch (error) {
             messageEl.textContent = `Error: ${error.message}`;
             messageEl.style.color = 'red';
@@ -138,20 +175,39 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ variant_id: parseInt(variantId) })
             });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.detail || 'Failed to set primary variant.');
+            if (!response.ok) {
+                const result = await response.json();
+                throw new Error(result.detail || 'Failed to set primary variant.');
+            }
             
-            await fetchStockData();
+            await fetchStockData(); // Refresh main table to show new primary
+            modal.close();
         } catch (error) {
             alert(`Error: ${error.message}`);
             e.target.removeAttribute('aria-busy');
         }
     };
-
+    
+    // --- Initial Setup & Event Listeners ---
     storeFilter.addEventListener('change', fetchStockData);
-    stockContainer.addEventListener('click', (e) => {
-        if (e.target.classList.contains('update-stock-btn')) handleStockUpdate(e);
-        if (e.target.classList.contains('set-primary-btn')) handleSetPrimary(e);
+    
+    // Main listener for the page
+    document.body.addEventListener('click', (e) => {
+        // For opening the modal
+        if (e.target.matches('.table-container button[data-group-index]')) {
+            openManageModal(e.target.dataset.groupIndex);
+        }
+        // For closing the modal
+        if (e.target.matches('.close')) {
+            modal.close();
+        }
+        // For actions inside the modal
+        if (e.target.matches('.update-stock-btn')) {
+            handleStockUpdate(e);
+        }
+        if (e.target.matches('.set-primary-btn')) {
+            handleSetPrimary(e);
+        }
     });
 
     loadStores();

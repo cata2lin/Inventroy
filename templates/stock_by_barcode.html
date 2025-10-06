@@ -13,8 +13,22 @@
         </select>
     </div>
 
-    <div id="stock-container" class="grid" aria-busy="false">
-        </div>
+    <article id="stock-container" aria-busy="false" class="table-container">
+        </article>
+
+    <dialog id="manage-variants-modal">
+        <article>
+            <header>
+                <button class="close" aria-label="Close"></button>
+                <strong id="modal-title">Manage Variants</strong>
+            </header>
+            
+            <div id="modal-body">
+                </div>
+            
+        </article>
+    </dialog>
+
 </div>
 {% endblock %}
 
