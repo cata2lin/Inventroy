@@ -1,13 +1,10 @@
 # shopify_service.py
-import os
 import time
 import requests
 import random
 from typing import List, Optional, Dict, Any, Generator
-from pydantic import BaseModel, Field, HttpUrl
 from datetime import datetime
 
-# --- Helper function ---
 def gid_to_id(gid: Optional[str]) -> Optional[int]:
     if not gid:
         return None
@@ -16,7 +13,6 @@ def gid_to_id(gid: Optional[str]) -> Optional[int]:
     except (IndexError, ValueError):
         return None
 
-# --- GraphQL Fragments ---
 MONEY_FRAGMENT = "fragment MoneyFragment on MoneyV2 { amount currencyCode }"
 LOCATION_FRAGMENT = "fragment LocationFragment on Location { id legacyResourceId name }"
 INVENTORY_LEVEL_FRAGMENT = """
@@ -70,7 +66,6 @@ fragment FulfillmentFragment on Fulfillment {
 }
 """
 
-# --- GraphQL Queries ---
 GET_ALL_PRODUCTS_QUERY = f"""
 {LOCATION_FRAGMENT}
 {INVENTORY_LEVEL_FRAGMENT}
@@ -97,7 +92,6 @@ query GetAllProducts($cursor: String) {{
 }}
 """
 
-# --- GraphQL Mutations ---
 MUTATIONS = {
     "setProductCategory": """
       mutation SetProductCategory($product: ProductUpdateInput!) {

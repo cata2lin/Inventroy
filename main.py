@@ -1,44 +1,34 @@
 # main.py
-
 import os
 import sys
 from pathlib import Path
-from fastapi import FastAPI, Request, Form, Depends, Response
+from fastapi import FastAPI, Request, Form, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse
-from routes.mutations import router as mutations_router
 from dotenv import load_dotenv
 from jose import jwt, JOSEError
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 import models
 
-# Ensure project root is in Python path
 ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
 from database import engine, Base, get_db
-# Add the new products and mutations router
 from routes import sync_control, config, products, mutations
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Initialize the FastAPI app
 app = FastAPI(title="Inventory Suite")
 
-# Mount static files and templates directories
 app.mount("/static", StaticFiles(directory=str(ROOT_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(ROOT_DIR / "templates"))
 
-# Create database tables on startup if they don't exist
 Base.metadata.create_all(bind=engine)
 
-# Secret key for JWT authentication from environment variables
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-super-secret-key-that-is-long-and-secure")
 
-# --- Authentication Endpoints & Middleware (Unchanged) ---
 @app.post("/login")
 async def login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     user = db.query(models.User).filter_by(username=username).first()
@@ -47,10 +37,7 @@ async def login(username: str = Form(...), password: str = Form(...), db: Sessio
     payload = {"sub": user.username, "exp": datetime.utcnow() + timedelta(days=1)}
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
     response = RedirectResponse(url="/", status_code=303)
-    response.set_cookie(
-        key="access_token_8002", value=token, httponly=True, samesite="lax",
-        max_age=86400, secure=True
-    )
+    response.set_cookie(key="access_token_8002", value=token, httponly=True, samesite="lax", max_age=86400, secure=True)
     return response
 
 @app.middleware("http")
@@ -70,7 +57,6 @@ async def add_login_middleware(request: Request, call_next):
         return response
     return await call_next(request)
 
-# --- HTML Page Routes ---
 @app.get("/login_page", response_class=HTMLResponse, include_in_schema=False)
 async def get_login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request, "title": "Login"})
@@ -87,20 +73,16 @@ async def get_sync_control_page(request: Request):
 async def get_config_page(request: Request):
     return templates.TemplateResponse("config.html", {"request": request, "title": "Configuration"})
 
-# NEW: Products page route
 @app.get("/products", response_class=HTMLResponse, include_in_schema=False)
 async def get_products_page(request: Request):
     return templates.TemplateResponse("products.html", {"request": request, "title": "Products"})
 
-# NEW: Mutations page route
 @app.get("/mutations", response_class=HTMLResponse, include_in_schema=False)
 async def get_mutations_page(request: Request):
     return templates.TemplateResponse("mutations.html", {"request": request, "title": "Mutations"})
 
-# --- API Routers ---
+# Routers
 app.include_router(sync_control.router)
 app.include_router(config.router)
-# NEW: Include the products and mutations router
 app.include_router(products.router)
 app.include_router(mutations.router)
-app.include_router(mutations_router)
