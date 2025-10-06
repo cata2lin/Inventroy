@@ -242,3 +242,21 @@ class ShopifyService:
     def find_categories(self, query: str) -> Dict[str, Any]:
         variables = {"q": query}
         return self._execute_query(FIND_CATEGORIES_QUERY, variables)
+    # --- NEW WEBHOOK METHODS (using REST API) ---
+    def get_webhooks(self) -> List[Dict[str, Any]]:
+        """Retrieves all webhook subscriptions."""
+        response = requests.get(f"{self.rest_endpoint}/webhooks.json", headers=self.headers)
+        response.raise_for_status()
+        return response.json().get("webhooks", [])
+
+    def create_webhook(self, topic: str, address: str) -> Dict[str, Any]:
+        """Creates a new webhook subscription."""
+        payload = {"webhook": {"topic": topic, "address": address, "format": "json"}}
+        response = requests.post(f"{self.rest_endpoint}/webhooks.json", headers=self.headers, json=payload)
+        response.raise_for_status()
+        return response.json().get("webhook")
+
+    def delete_webhook(self, webhook_id: int) -> None:
+        """Deletes a webhook subscription by its ID."""
+        response = requests.delete(f"{self.rest_endpoint}/webhooks/{webhook_id}.json", headers=self.headers)
+        response.raise_for_status()
