@@ -263,3 +263,8 @@ class ShopifyService:
         """Deletes a webhook subscription by its ID."""
         response = requests.delete(f"{self.rest_endpoint}/webhooks/{webhook_id}.json", headers=self.headers)
         response.raise_for_status()
+    def get_locations(self) -> List[Dict[str, Any]]:
+        """Retrieves all inventory locations for a store using the REST API."""
+        response = requests.get(f"{self.rest_endpoint}/locations.json", headers=self.headers)
+        response.raise_for_status()
+        return response.json().get("locations", [])

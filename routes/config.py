@@ -1,8 +1,7 @@
 # routes/config.py
-
 from fastapi import APIRouter, Depends, HTTPException, Response, Request
-# This line was missing and is now added
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -39,6 +38,34 @@ def add_store(store: schemas.StoreCreate, db: Session = Depends(get_db)):
     if db.query(models.Store).filter(models.Store.name == store.name).first():
         raise HTTPException(status_code=400, detail="A store with this name already exists.")
     return crud_store.create_store(db=db, store=store)
+
+@router.get("/stores/{store_id}/locations")
+def get_store_locations(store_id: int, db: Session = Depends(get_db)):
+    """Fetches all inventory locations for a given store from Shopify."""
+    store = crud_store.get_store(db, store_id=store_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    try:
+        service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+        locations = service.get_locations()
+        return {"locations": locations}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch locations: {str(e)}")
+
+class StoreUpdatePayload(BaseModel):
+    sync_location_id: int
+
+@router.put("/stores/{store_id}")
+def update_store_settings(store_id: int, payload: StoreUpdatePayload, db: Session = Depends(get_db)):
+    """Updates the settings for a store, such as the sync location."""
+    db_store = crud_store.get_store(db, store_id=store_id)
+    if not db_store:
+        raise HTTPException(status_code=404, detail="Store not found")
+
+    db_store.sync_location_id = payload.sync_location_id
+    db.commit()
+    db.refresh(db_store)
+    return db_store
 
 # --- Webhook Management Endpoints ---
 @router.get("/stores/{store_id}/webhooks", response_model=List[schemas.Webhook])
@@ -89,13 +116,8 @@ def delete_store_webhook(store_id: int, shopify_webhook_id: int, db: Session = D
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete webhook: {str(e)}")
 
-# --- CORRECTED ENDPOINT ---
 @router.delete("/webhooks/delete-all", status_code=200)
 def delete_all_webhooks_for_all_stores(db: Session = Depends(get_db)):
-    """
-    Deletes all Shopify webhooks for every configured store.
-    This is now resilient to individual store failures.
-    """
     stores = crud_store.get_all_stores(db)
     if not stores:
         return {"message": "No stores are configured."}
@@ -105,26 +127,21 @@ def delete_all_webhooks_for_all_stores(db: Session = Depends(get_db)):
 
     for store in stores:
         try:
-            # This entire block is now wrapped in a try/except
             service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
             existing_webhooks = service.get_webhooks()
             
             for webhook in existing_webhooks:
                 try:
                     service.delete_webhook(webhook_id=webhook['id'])
-                    # Only delete from our DB if Shopify deletion was successful
                     crud_webhook.delete_webhook_registration(db, shopify_webhook_id=webhook['id'])
                     deleted_count += 1
                 except Exception as e:
-                    # Log error for a specific webhook but continue
                     errors.append(f"Failed to delete webhook {webhook['id']} for store '{store.name}': {e}")
 
         except Exception as e:
-            # This will catch errors from connecting to the store (e.g., bad credentials)
             errors.append(f"Could not process webhooks for store '{store.name}': {e}")
 
     if errors:
-        # Return a 207 Multi-Status if there were partial failures
         content = {
             "message": f"Completed with errors. Deleted {deleted_count} webhooks.",
             "errors": errors
