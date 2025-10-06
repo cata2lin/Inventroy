@@ -1,6 +1,8 @@
 # routes/config.py
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Request
+# This line was missing and is now added
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -103,22 +105,26 @@ def delete_all_webhooks_for_all_stores(db: Session = Depends(get_db)):
 
     for store in stores:
         try:
+            # This entire block is now wrapped in a try/except
             service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
             existing_webhooks = service.get_webhooks()
             
             for webhook in existing_webhooks:
                 try:
                     service.delete_webhook(webhook_id=webhook['id'])
+                    # Only delete from our DB if Shopify deletion was successful
                     crud_webhook.delete_webhook_registration(db, shopify_webhook_id=webhook['id'])
                     deleted_count += 1
                 except Exception as e:
+                    # Log error for a specific webhook but continue
                     errors.append(f"Failed to delete webhook {webhook['id']} for store '{store.name}': {e}")
 
         except Exception as e:
+            # This will catch errors from connecting to the store (e.g., bad credentials)
             errors.append(f"Could not process webhooks for store '{store.name}': {e}")
 
     if errors:
-        # Return a JSON response with a 207 status code for partial success
+        # Return a 207 Multi-Status if there were partial failures
         content = {
             "message": f"Completed with errors. Deleted {deleted_count} webhooks.",
             "errors": errors
