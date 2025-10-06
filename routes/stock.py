@@ -209,4 +209,4 @@ def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get
     if errors:
         raise HTTPException(status_code=422, detail={"message": "Completed with errors.", "errors": errors})
 
-    return {"status": "ok", "message": "Stock updated successfully for all applicable stores."}
+    return {"status": "ok", "message": "Stock updated successfully for all applicable stores."}Genti Promo	pr0gsk-za.myshopify.com	

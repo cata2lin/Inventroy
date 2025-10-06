@@ -85,7 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const tableRows = barcodeGroupsData.map((group, index) => `
             <tr data-group-index="${index}">
-                <td><img src="${group.primary_image_url || '/static/img/placeholder.png'}" class="product-image-compact"></td>
+                <td><img src="${group.primary_image_url || '/static/img/placeholder.png'}" class="product-image-compact" alt="Primary product image"></td>
                 <td class="product-title-cell">
                     <strong>${group.primary_title}</strong><br>
                     <small>Barcode: <code>${group.barcode}</code></small>
@@ -124,7 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!group) return;
         modalTitle.textContent = `Set Primary for Barcode: ${group.barcode}`;
         modalBody.innerHTML = `
-            <p><small>Click the image of the variant you want to set as the primary display.</small></p>
+            <p><small>Click the variant you want to set as the primary display.</small></p>
             <div class="variants-grid">
                 ${group.variants.map(v => `
                     <div class="variant-card ${v.is_barcode_primary ? 'is-primary' : ''}" data-variant-id="${v.variant_id}">
@@ -168,7 +168,6 @@ document.addEventListener('DOMContentLoaded', () => {
             button.classList.add('success');
             setTimeout(() => {
                 button.classList.remove('success');
-                // Optimistically update the value in the input
                 quantityInput.value = quantity;
             }, 1500);
         } catch (error) {
@@ -206,10 +205,13 @@ document.addEventListener('DOMContentLoaded', () => {
         el.addEventListener('input', debounce(fetchStockData, 400));
     });
 
+    // CORRECTED: This listener now specifically targets the product image to open the modal.
     stockContainer.addEventListener('click', (e) => {
-        const row = e.target.closest('tr[data-group-index]');
-        if (row && !e.target.closest('form')) {
-            openManageModal(row.dataset.groupIndex);
+        if (e.target.classList.contains('product-image-compact')) {
+            const row = e.target.closest('tr[data-group-index]');
+            if (row) {
+                openManageModal(row.dataset.groupIndex);
+            }
         }
     });
 
