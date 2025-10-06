@@ -183,7 +183,14 @@ def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get
 
         if not quantities_payload: continue
 
-        variables = {"input": {"reason": "correction", "quantities": quantities_payload}}
+        # --- THIS IS THE CORRECTED PART ---
+        variables = {
+            "input": {
+                "name": "available", # Specify that we are setting the "available" quantity
+                "reason": "correction",
+                "quantities": quantities_payload
+            }
+        }
 
         try:
             result = service.execute_mutation("inventorySetQuantities", variables)
