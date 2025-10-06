@@ -3,7 +3,8 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_
+# --- THIS IMPORT IS NEW AND FIXES THE ERROR ---
+from sqlalchemy import or_, func
 
 from database import get_db
 import models
@@ -42,8 +43,6 @@ def get_stock_grouped_by_barcode(search: Optional[str] = Query(None), db: Sessio
     )
 
     if search:
-        # Smart Search Logic: Find all barcodes associated with the searched product titles,
-        # then get all variants for those barcodes.
         search_term = f"%{search.lower()}%"
         matching_barcodes = (
             db.query(models.ProductVariant.barcode)
@@ -57,7 +56,7 @@ def get_stock_grouped_by_barcode(search: Optional[str] = Query(None), db: Sessio
         query = query.filter(models.ProductVariant.barcode.in_(matching_barcodes))
 
     variants_with_barcode = query.order_by(
-        models.ProductVariant.barcode, 
+        models.ProductVariant.barcode,
         models.ProductVariant.is_barcode_primary.desc()
     ).all()
 
@@ -71,9 +70,9 @@ def get_stock_grouped_by_barcode(search: Optional[str] = Query(None), db: Sessio
                 "primary_title": variant.product.title,
                 "variants": []
             }
-        
+
         total_available = sum(level.available for level in variant.inventory_levels if level.available is not None)
-        
+
         grouped_by_barcode[barcode]["variants"].append({
             "variant_id": variant.id,
             "product_title": variant.product.title,
