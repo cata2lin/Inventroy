@@ -1,16 +1,18 @@
 # routes/stock.py
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
 from unidecode import unidecode
 import requests
+from datetime import datetime, timezone
 
 from database import get_db
 import models
 import crud.product as crud_product
 from shopify_service import ShopifyService, gid_to_id
+from services import inventory_sync_service
 
 router = APIRouter(prefix="/api/stock", tags=["Stock Management"])
 
@@ -80,21 +82,15 @@ def get_stock_grouped_by_barcode(
         variant_stock = sum(level.available for level in variant.inventory_levels if level.available is not None)
 
         grouped_by_barcode[barcode]["variants"].append({
-            "variant_id": variant.id,
-            "product_title": variant.product.title,
-            "image_url": variant.product.image_url,
-            "sku": variant.sku,
-            "store_name": variant.product.store.name,
-            "is_barcode_primary": variant.is_barcode_primary,
-            "stock": variant_stock,
-            "retail_value_ron": (variant_stock * float(variant.price or 0)) * rate,
+            "variant_id": variant.id, "product_title": variant.product.title, "image_url": variant.product.image_url,
+            "sku": variant.sku, "store_name": variant.product.store.name, "is_barcode_primary": variant.is_barcode_primary,
+            "stock": variant_stock, "retail_value_ron": (variant_stock * float(variant.price or 0)) * rate,
             "inventory_value_ron": (variant_stock * float(variant.cost_per_item or 0)) * rate,
         })
 
     final_groups = []
     for barcode, group in grouped_by_barcode.items():
         if not group["variants"]: continue
-
         representative_stock = group["variants"][0]["stock"]
         total_retail_value = sum(v["retail_value_ron"] for v in group["variants"])
         total_inventory_value = sum(v["inventory_value_ron"] for v in group["variants"])
@@ -107,13 +103,9 @@ def get_stock_grouped_by_barcode(
         primary_variant = next((v for v in group["variants"] if v["is_barcode_primary"]), group["variants"][0])
 
         final_groups.append({
-            "barcode": barcode,
-            "primary_image_url": primary_variant["image_url"],
-            "primary_title": primary_variant["product_title"],
-            "variants": group["variants"],
-            "total_stock": representative_stock,
-            "total_retail_value": round(total_retail_value, 2),
-            "total_inventory_value": round(total_inventory_value, 2),
+            "barcode": barcode, "primary_image_url": primary_variant["image_url"], "primary_title": primary_variant["product_title"],
+            "variants": group["variants"], "total_stock": representative_stock,
+            "total_retail_value": round(total_retail_value, 2), "total_inventory_value": round(total_inventory_value, 2),
             "currency": "RON"
         })
 
@@ -123,8 +115,7 @@ def get_stock_grouped_by_barcode(
 
     return {
         "metrics": {
-            "total_stock": grand_total_stock,
-            "total_retail_value": round(grand_total_retail, 2),
+            "total_stock": grand_total_stock, "total_retail_value": round(grand_total_retail, 2),
             "total_inventory_value": round(grand_total_inventory, 2)
         },
         "results": final_groups
@@ -150,66 +141,55 @@ class BulkStockUpdatePayload(BaseModel):
     quantity: int
 
 @router.post("/bulk-update")
-def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get_db)):
-    all_variants = db.query(models.ProductVariant).filter(
-        models.ProductVariant.barcode == payload.barcode
-    ).options(joinedload(models.ProductVariant.product).joinedload(models.Product.store)).all()
+def bulk_update_stock(
+    payload: BulkStockUpdatePayload,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    variant = db.query(models.ProductVariant).filter(
+        models.ProductVariant.barcode == payload.barcode,
+        models.ProductVariant.inventory_item_id != None
+    ).first()
 
-    if not all_variants:
-        raise HTTPException(status_code=404, detail="No variants found with that barcode")
+    if not variant:
+        raise HTTPException(status_code=404, detail="No trackable variant found for that barcode to initiate sync.")
 
-    variants_by_store: Dict[int, List[models.ProductVariant]] = {}
-    for v in all_variants:
-        store_id = v.product.store.id
-        if store_id not in variants_by_store: variants_by_store[store_id] = []
-        variants_by_store[store_id].append(v)
-
-    errors = []
-    success_updates = []
-
-    for store_id, variants in variants_by_store.items():
-        store = variants[0].product.store
-        if not store.sync_location_id:
-            errors.append(f"Store '{store.name}' has no sync location configured.")
-            continue
-
-        location_gid = f"gid://shopify/Location/{store.sync_location_id}"
-        service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
-
-        quantities_payload = [
-            {"inventoryItemId": f"gid://shopify/InventoryItem/{v.inventory_item_id}", "locationId": location_gid, "quantity": payload.quantity}
-            for v in variants if v.inventory_item_id
-        ]
-
-        if not quantities_payload: continue
-
-        # --- THIS IS THE CORRECTED PART ---
-        variables = {
-            "input": {
-                "name": "available",
-                "reason": "correction",
-                "ignoreCompareQuantity": True, # Ignore the old quantity for a force-set
-                "quantities": quantities_payload
-            }
+    store = db.query(models.Store).filter(models.Store.id == variant.store_id).one()
+    if not store.sync_location_id:
+        raise HTTPException(status_code=400, detail=f"The originating store '{store.name}' has no sync location configured.")
+    
+    location_gid = f"gid://shopify/Location/{store.sync_location_id}"
+    service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+    
+    variables = {
+        "input": {
+            "name": "available", "reason": "correction", "ignoreCompareQuantity": True,
+            "quantities": [{
+                "inventoryItemId": f"gid://shopify/InventoryItem/{variant.inventory_item_id}",
+                "locationId": location_gid,
+                "quantity": payload.quantity
+            }]
         }
+    }
 
-        try:
-            result = service.execute_mutation("inventorySetQuantities", variables)
-            if result.get("inventorySetQuantities", {}).get("userErrors", []):
-                errors.append(f"Store {store.name}: {result['inventorySetQuantities']['userErrors'][0]['message']}")
-            else:
-                variant_ids = [v.id for v in variants]
-                success_updates.append({"variant_ids": variant_ids, "location_id": store.sync_location_id, "quantity": payload.quantity})
-        except Exception as e:
-            errors.append(f"Store {store.name}: {str(e)}")
+    try:
+        service.execute_mutation("inventorySetQuantities", variables)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to set initial stock value: {e}")
 
-    if success_updates:
-        for update in success_updates:
-            crud_product.update_inventory_levels_for_variants(
-                db, variant_ids=update["variant_ids"], location_id=update["location_id"], new_quantity=update["quantity"]
-            )
+    simulated_payload = {
+        "inventory_item_id": variant.inventory_item_id,
+        "location_id": store.sync_location_id,
+        "available": payload.quantity,
+    }
+    
+    triggered_at = datetime.now(timezone.utc).isoformat()
 
-    if errors:
-        raise HTTPException(status_code=422, detail={"message": "Completed with errors.", "errors": errors})
-
-    return {"status": "ok", "message": "Stock updated successfully for all applicable stores."}
+    background_tasks.add_task(
+        inventory_sync_service.handle_webhook,
+        store.id,
+        simulated_payload,
+        triggered_at
+    )
+    
+    return {"status": "ok", "message": "Stock update initiated and will propagate shortly."}
