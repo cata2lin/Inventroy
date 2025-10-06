@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <hgroup>
+        <h1>Stock by Barcode</h1>
+        <h2>View and bulk-update inventory for products sharing a barcode.</h2>
+    </hgroup>
+
+    <div class="grid">
+         <select id="store-filter" required>
+            <option value="">-- Select a Store --</option>
+        </select>
+    </div>
+
+    <div id="stock-container" class="grid" aria-busy="false">
+        </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/config.js"></script>
+<script src="/static/js/stock_by_barcode.js"></script>
+{% endblock %}

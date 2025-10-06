@@ -80,6 +80,10 @@ class ProductVariant(Base):
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     
     is_primary_variant = Column(BOOLEAN, default=False, nullable=False)
+    
+    # --- THIS COLUMN IS NEW ---
+    is_barcode_primary = Column(BOOLEAN, default=False, nullable=False)
+    
     sku_normalized = Column(Text, Computed("NULLIF(BTRIM(LOWER(sku)), '')", persisted=True))
     last_seen_at = Column(DateTime(timezone=True))
 
