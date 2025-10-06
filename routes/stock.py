@@ -3,8 +3,8 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-# --- THIS IMPORT IS NEW AND FIXES THE ERROR ---
 from sqlalchemy import or_, func
+from unidecode import unidecode
 
 from database import get_db
 import models
@@ -13,9 +13,124 @@ from shopify_service import ShopifyService, gid_to_id
 
 router = APIRouter(prefix="/api/stock", tags=["Stock Management"])
 
-# --- CRUD LOGIC ---
-def set_primary_for_barcode(db: Session, variant_id_to_set: int):
-    variant = db.query(models.ProductVariant).filter(models.ProductVariant.id == variant_id_to_set).first()
+# --- Helper for Smart Search ---
+def normalize_and_split(text: str) -> List[str]:
+    # Handles cases where text might be None (e.g., SKU is null)
+    if not text:
+        return []
+    return [unidecode(word) for word in text.lower().split()]
+
+# --- API ENDPOINTS ---
+
+@router.get("/by-barcode")
+def get_stock_grouped_by_barcode(
+    search: Optional[str] = Query(None),
+    store_id: Optional[int] = Query(None),
+    min_stock: Optional[int] = Query(None),
+    max_stock: Optional[int] = Query(None),
+    min_retail: Optional[float] = Query(None),
+    max_retail: Optional[float] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns a list of products grouped by barcode from ALL stores,
+    with advanced filtering and search capabilities.
+    """
+    base_query = (
+        db.query(models.ProductVariant)
+        .filter(models.ProductVariant.barcode != None, models.ProductVariant.barcode != '')
+        .options(
+            joinedload(models.ProductVariant.product).joinedload(models.Product.store),
+            joinedload(models.ProductVariant.inventory_levels)
+        )
+    )
+
+    if store_id:
+        base_query = base_query.filter(models.ProductVariant.store_id == store_id)
+
+    # Pre-fetch all variants to perform complex filtering in Python
+    all_variants = base_query.all()
+    
+    # --- Smart Search Filtering (In-memory) ---
+    if search:
+        search_terms = normalize_and_split(search)
+        matching_barcodes = set()
+        for v in all_variants:
+            full_text = f"{v.product.title} {v.sku}"
+            normalized_full_text = normalize_and_split(full_text)
+            if all(term in normalized_full_text for term in search_terms):
+                matching_barcodes.add(v.barcode)
+        
+        all_variants = [v for v in all_variants if v.barcode in matching_barcodes]
+
+    # --- Grouping and Metrics Calculation ---
+    grouped_by_barcode: Dict[str, Dict[str, Any]] = {}
+    for variant in all_variants:
+        barcode = variant.barcode
+        if barcode not in grouped_by_barcode:
+            grouped_by_barcode[barcode] = { "barcode": barcode, "variants": [], "total_stock": 0, "total_retail_value": 0.0, "total_inventory_value": 0.0 }
+
+        variant_stock = sum(level.available for level in variant.inventory_levels if level.available is not None)
+        variant_retail_value = variant_stock * float(variant.price or 0)
+        variant_inventory_value = variant_stock * float(variant.cost_per_item or 0)
+
+        grouped_by_barcode[barcode]["variants"].append({
+            "variant_id": variant.id,
+            "product_title": variant.product.title,
+            "image_url": variant.product.image_url,
+            "sku": variant.sku,
+            "store_name": variant.product.store.name,
+            "is_barcode_primary": variant.is_barcode_primary,
+        })
+        
+        grouped_by_barcode[barcode]["total_stock"] += variant_stock
+        grouped_by_barcode[barcode]["total_retail_value"] += variant_retail_value
+        grouped_by_barcode[barcode]["total_inventory_value"] += variant_inventory_value
+
+    # --- Post-Grouping Filtering (for stock and value) ---
+    filtered_groups = list(grouped_by_barcode.values())
+    if min_stock is not None:
+        filtered_groups = [g for g in filtered_groups if g["total_stock"] >= min_stock]
+    if max_stock is not None:
+        filtered_groups = [g for g in filtered_groups if g["total_stock"] <= max_stock]
+    if min_retail is not None:
+        filtered_groups = [g for g in filtered_groups if g["total_retail_value"] >= min_retail]
+    if max_retail is not None:
+        filtered_groups = [g for g in filtered_groups if g["total_retail_value"] <= max_retail]
+        
+    # --- Final Data Structuring ---
+    final_results = []
+    for group in filtered_groups:
+        primary_variant = next((v for v in group["variants"] if v["is_barcode_primary"]), group["variants"][0])
+        final_results.append({
+            "barcode": group["barcode"],
+            "primary_image_url": primary_variant["image_url"],
+            "primary_title": primary_variant["product_title"],
+            "variants": group["variants"],
+            "total_stock": group["total_stock"],
+            "total_retail_value": round(group["total_retail_value"], 2),
+            "total_inventory_value": round(group["total_inventory_value"], 2)
+        })
+    
+    grand_total_stock = sum(g['total_stock'] for g in final_results)
+    grand_total_retail = sum(g['total_retail_value'] for g in final_results)
+    grand_total_inventory = sum(g['total_inventory_value'] for g in final_results)
+
+    return {
+        "metrics": {
+            "total_stock": grand_total_stock,
+            "total_retail_value": round(grand_total_retail, 2),
+            "total_inventory_value": round(grand_total_inventory, 2)
+        },
+        "results": final_results
+    }
+
+class PrimaryVariantPayload(BaseModel):
+    variant_id: int
+
+@router.post("/set-primary")
+def set_primary_variant(payload: PrimaryVariantPayload, db: Session = Depends(get_db)):
+    variant = db.query(models.ProductVariant).filter(models.ProductVariant.id == payload.variant_id).first()
     if not variant or not variant.barcode:
         raise HTTPException(status_code=404, detail="Variant with that barcode not found.")
     db.query(models.ProductVariant).filter(
@@ -23,78 +138,7 @@ def set_primary_for_barcode(db: Session, variant_id_to_set: int):
     ).update({"is_barcode_primary": False}, synchronize_session=False)
     variant.is_barcode_primary = True
     db.commit()
-    return variant
-
-# --- API ENDPOINTS ---
-
-@router.get("/by-barcode")
-def get_stock_grouped_by_barcode(search: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    """
-    Returns a list of products grouped by barcode from ALL stores,
-    with a smart search capability.
-    """
-    query = (
-        db.query(models.ProductVariant)
-        .filter(models.ProductVariant.barcode != None, models.ProductVariant.barcode != '')
-        .options(
-            joinedload(models.ProductVariant.product).joinedload(models.Product.store),
-            joinedload(models.ProductVariant.inventory_levels).joinedload(models.InventoryLevel.location)
-        )
-    )
-
-    if search:
-        search_term = f"%{search.lower()}%"
-        matching_barcodes = (
-            db.query(models.ProductVariant.barcode)
-            .join(models.Product)
-            .filter(or_(
-                func.lower(models.Product.title).like(search_term),
-                func.lower(models.ProductVariant.sku).like(search_term)
-            ))
-            .distinct()
-        )
-        query = query.filter(models.ProductVariant.barcode.in_(matching_barcodes))
-
-    variants_with_barcode = query.order_by(
-        models.ProductVariant.barcode,
-        models.ProductVariant.is_barcode_primary.desc()
-    ).all()
-
-    grouped_by_barcode: Dict[str, Dict[str, Any]] = {}
-    for variant in variants_with_barcode:
-        barcode = variant.barcode
-        if barcode not in grouped_by_barcode:
-            grouped_by_barcode[barcode] = {
-                "barcode": barcode,
-                "primary_image_url": variant.product.image_url,
-                "primary_title": variant.product.title,
-                "variants": []
-            }
-
-        total_available = sum(level.available for level in variant.inventory_levels if level.available is not None)
-
-        grouped_by_barcode[barcode]["variants"].append({
-            "variant_id": variant.id,
-            "product_title": variant.product.title,
-            "variant_title": variant.title,
-            "sku": variant.sku,
-            "store_name": variant.product.store.name,
-            "inventory_item_gid": f"gid://shopify/InventoryItem/{variant.inventory_item_id}",
-            "is_barcode_primary": variant.is_barcode_primary,
-            "total_available": total_available,
-        })
-    return list(grouped_by_barcode.values())
-
-class PrimaryVariantPayload(BaseModel):
-    variant_id: int
-
-@router.post("/set-primary")
-def set_primary_variant(payload: PrimaryVariantPayload, db: Session = Depends(get_db)):
-    try:
-        set_primary_for_barcode(db, payload.variant_id)
-        return {"status": "ok", "message": "Primary variant updated successfully."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "ok", "message": "Primary variant updated successfully."}
 
 class BulkStockUpdatePayload(BaseModel):
     barcode: str
@@ -102,10 +146,6 @@ class BulkStockUpdatePayload(BaseModel):
 
 @router.post("/bulk-update")
 def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get_db)):
-    """
-    Updates stock for all variants sharing a barcode across all stores,
-    using the pre-configured sync location for each store.
-    """
     all_variants = db.query(models.ProductVariant).filter(
         models.ProductVariant.barcode == payload.barcode
     ).options(joinedload(models.ProductVariant.product).joinedload(models.Product.store)).all()

@@ -7,7 +7,33 @@
         <h2>Master inventory control across all stores.</h2>
     </hgroup>
 
-    <input type="search" id="product-search-input" placeholder="Search by product name or SKU...">
+    <div id="filters" class="grid">
+        <input type="search" id="product-search-input" placeholder="Search by name or SKU...">
+        <select id="store-filter">
+            <option value="">All Stores</option>
+        </select>
+    </div>
+    <div id="value-filters" class="grid">
+        <input type="number" id="min-stock" placeholder="Min Stock">
+        <input type="number" id="max-stock" placeholder="Max Stock">
+        <input type="number" id="min-retail" placeholder="Min Retail Value">
+        <input type="number" id="max-retail" placeholder="Max Retail Value">
+    </div>
+
+    <article id="dashboard" class="grid">
+        <div>
+            <h3 id="metric-total-stock">0</h3>
+            <p>Total Units in Stock</p>
+        </div>
+        <div>
+            <h3 id="metric-total-inventory-value">$0.00</h3>
+            <p>Total Inventory Value</p>
+        </div>
+        <div>
+            <h3 id="metric-total-retail-value">$0.00</h3>
+            <p>Total Retail Value</p>
+        </div>
+    </article>
 
     <article id="stock-container" aria-busy="true" class="table-container compact">
         </article>
@@ -16,7 +42,7 @@
         <article>
             <header>
                 <button class="close" aria-label="Close"></button>
-                <strong id="modal-title">Manage Variants</strong>
+                <strong id="modal-title">Set Primary Variant</strong>
             </header>
             <div id="modal-body"></div>
         </article>
