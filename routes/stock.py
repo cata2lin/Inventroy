@@ -1,16 +1,18 @@
 # routes/stock.py
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
 from unidecode import unidecode
 import requests
+from datetime import datetime, timezone
 
 from database import get_db
 import models
 import crud.product as crud_product
 from shopify_service import ShopifyService, gid_to_id
+from services import inventory_sync_service
 
 router = APIRouter(prefix="/api/stock", tags=["Stock Management"])
 
@@ -189,8 +191,6 @@ def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get
         except Exception as e:
             errors.append(f"Store {store.name}: {str(e)}")
 
-    # --- THIS IS THE CRUCIAL FIX ---
-    # After all API calls, update the local database for the successful ones.
     if success_updates:
         for update in success_updates:
             crud_product.update_inventory_levels_for_variants(

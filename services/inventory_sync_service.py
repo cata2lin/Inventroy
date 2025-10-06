@@ -12,7 +12,6 @@ from sqlalchemy import func
 import models
 from database import SessionLocal
 from shopify_service import ShopifyService
-# --- THIS IMPORT IS NEW AND FIXES THE ERROR ---
 from crud import product as crud_product
 
 # --- Configuration ---
@@ -70,15 +69,15 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
             
         _update_authoritative_version(db, barcode, store_id, current_store_total, source_timestamp)
         
-        target_stores = _get_propagation_targets(db, store_id, barcode)
-        if not target_stores:
+        target_stores = _get_propagation_targets(db, barcode)
+        if not target_stores or len(target_stores) < 2:
             print(f"[SYNC] No propagation needed for {barcode}.")
             return
             
         barcode_version_obj = db.query(models.BarcodeVersion).filter(models.BarcodeVersion.barcode == barcode).one()
         _create_write_intents(db, barcode, current_store_total, barcode_version_obj.version, target_stores)
         
-        print(f"[SYNC] Propagating {barcode} from store {store_id} to {len(target_stores)} other stores.")
+        print(f"[SYNC] Propagating '{barcode}' to all {len(target_stores)} member stores.")
         
         _execute_propagation(db, barcode, current_store_total, target_stores)
 
@@ -86,25 +85,17 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
         lock.release()
         db.close()
 
-# --- NEW FUNCTION FOR CATALOG WEBHOOKS ---
 def handle_catalog_webhook(store_id: int, topic: str, payload: Dict[str, Any]):
-    """
-    Handles webhooks related to product catalog changes (create, update, delete).
-    """
     db: Session = SessionLocal()
     try:
         if topic == "products/create" or topic == "products/update":
             crud_product.create_or_update_product_from_webhook(db, store_id, payload)
-        
         elif topic == "products/delete":
             crud_product.delete_product_from_webhook(db, payload)
-            
         elif topic == "inventory_items/update":
             crud_product.update_variant_from_webhook(db, payload)
-            
         elif topic == "inventory_items/delete":
             crud_product.delete_inventory_item_from_webhook(db, payload)
-            
     except Exception as e:
         print(f"[SYNC-ERROR] Failed to process catalog webhook '{topic}': {e}")
     finally:
@@ -125,31 +116,21 @@ def _get_store_total_for_barcode(db: Session, store_id: int, barcode: str) -> in
 
 def _is_duplicate_webhook(db: Session, store_id: int, barcode: str, total: int, timestamp: datetime) -> bool:
     db.query(models.ProcessedWebhook).filter(models.ProcessedWebhook.expires_at < datetime.now(timezone.utc)).delete()
-    
     event_id = hashlib.sha256(f"{store_id}-{barcode}-{total}-{timestamp.isoformat()}".encode()).hexdigest()
-    
     if db.query(models.ProcessedWebhook).filter(models.ProcessedWebhook.id == event_id).first():
         return True
-    
-    new_record = models.ProcessedWebhook(
-        id=event_id,
-        expires_at=datetime.now(timezone.utc) + timedelta(seconds=DUPLICATE_TTL_SECONDS)
-    )
+    new_record = models.ProcessedWebhook(id=event_id, expires_at=datetime.now(timezone.utc) + timedelta(seconds=DUPLICATE_TTL_SECONDS))
     db.add(new_record)
     db.commit()
     return False
 
 def _is_echo(db: Session, store_id: int, barcode: str, observed_total: int) -> bool:
-    intent = (
-        db.query(models.WriteIntent)
-        .filter(
-            models.WriteIntent.target_store_id == store_id,
-            models.WriteIntent.barcode == barcode,
-            models.WriteIntent.quantity == observed_total,
-            models.WriteIntent.expires_at > datetime.now(timezone.utc)
-        )
-        .first()
-    )
+    intent = db.query(models.WriteIntent).filter(
+        models.WriteIntent.target_store_id == store_id,
+        models.WriteIntent.barcode == barcode,
+        models.WriteIntent.quantity == observed_total,
+        models.WriteIntent.expires_at > datetime.now(timezone.utc)
+    ).first()
     if intent:
         db.delete(intent)
         db.commit()
@@ -170,24 +151,21 @@ def _update_authoritative_version(db: Session, barcode: str, store_id: int, quan
         current_version.source_timestamp = timestamp
         current_version.version += 1
     else:
-        new_version = models.BarcodeVersion(
-            barcode=barcode,
-            authoritative_store_id=store_id,
-            quantity=quantity,
-            source_timestamp=timestamp,
-            version=1
-        )
+        new_version = models.BarcodeVersion(barcode=barcode, authoritative_store_id=store_id, quantity=quantity, source_timestamp=timestamp, version=1)
         db.add(new_version)
     db.commit()
 
-def _get_propagation_targets(db: Session, source_store_id: int, barcode: str) -> List[models.Store]:
+# --- THIS FUNCTION IS CORRECTED ---
+def _get_propagation_targets(db: Session, barcode: str) -> List[models.Store]:
+    """Finds ALL stores that sell this barcode."""
     member_store_ids = (
         db.query(models.ProductVariant.store_id)
         .filter(models.ProductVariant.barcode == barcode)
         .distinct()
         .all()
     )
-    target_ids = [sid[0] for sid in member_store_ids if sid[0] != source_store_id]
+    # The logic no longer excludes the source store.
+    target_ids = [sid[0] for sid in member_store_ids]
     
     if not target_ids:
         return []
@@ -199,13 +177,7 @@ def _create_write_intents(db: Session, barcode: str, quantity: int, version: int
     expires = now + timedelta(seconds=INTENT_TTL_SECONDS)
     
     for store in target_stores:
-        intent = models.WriteIntent(
-            barcode=barcode,
-            target_store_id=store.id,
-            quantity=quantity,
-            barcode_version=version,
-            expires_at=expires
-        )
+        intent = models.WriteIntent(barcode=barcode, target_store_id=store.id, quantity=quantity, barcode_version=version, expires_at=expires)
         db.add(intent)
     db.commit()
 
@@ -237,8 +209,7 @@ def _execute_propagation(db: Session, barcode: str, desired_total: int, target_s
             service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
             variables = {
                 "input": {
-                    "name": "available",
-                    "reason": "correction",
+                    "name": "available", "reason": "correction", "ignoreCompareQuantity": True,
                     "quantities": quantities_payload,
                 }
             }
