@@ -165,3 +165,46 @@ class Webhook(Base):
     topic = Column(String(255), nullable=False)
     address = Column(String(2048), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+# --- NEW MODELS FOR REAL-TIME SYNC ---
+
+class BarcodeVersion(Base):
+    """
+    Stores the authoritative version and quantity for each barcode.
+    This acts as the central source of truth for inventory levels.
+    """
+    __tablename__ = "barcode_versions"
+    barcode = Column(String(255), primary_key=True)
+    authoritative_store_id = Column(Integer, ForeignKey("stores.id"), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    source_timestamp = Column(DateTime(timezone=True), nullable=False)
+    version = Column(BIGINT, nullable=False, default=1)
+    last_updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
+
+class WriteIntent(Base):
+    """
+    Records an intent to write a new quantity to a target store.
+    This is used for echo suppression.
+    """
+    __tablename__ = "write_intents"
+    id = Column(BIGINT, primary_key=True, autoincrement=True)
+    barcode = Column(String(255), nullable=False, index=True)
+    target_store_id = Column(Integer, ForeignKey("stores.id"), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    barcode_version = Column(BIGINT, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    
+    __table_args__ = (
+        Index('ix_write_intents_lookup', 'barcode', 'target_store_id', 'quantity'),
+    )
+
+class ProcessedWebhook(Base):
+    """
+    A short-term cache to record recently processed webhooks to prevent
+    duplicate processing from rapid redeliveries.
+    """
+    __tablename__ = "processed_webhooks"
+    id = Column(String(255), primary_key=True) # A unique hash of the payload
+    received_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)

@@ -17,9 +17,17 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
+# --- UPDATED: Full list of necessary webhooks ---
 ESSENTIAL_WEBHOOK_TOPICS = [
-    "products/create", "products/update", "products/delete",
+    # For real-time inventory sync
     "inventory_levels/update",
+    
+    # For keeping product catalog and barcode mappings up-to-date
+    "products/create",
+    "products/update",
+    "products/delete",
+    "inventory_items/update",
+    "inventory_items/delete"
 ]
 
 @router.get("/stores", response_model=List[schemas.Store])

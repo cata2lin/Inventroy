@@ -16,7 +16,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
 from database import engine, Base, get_db
-from routes import sync_control, config, products, mutations, stock
+from routes import sync_control, config, products, mutations, stock, webhooks
 
 load_dotenv()
 
@@ -42,7 +42,8 @@ async def login(username: str = Form(...), password: str = Form(...), db: Sessio
 
 @app.middleware("http")
 async def add_login_middleware(request: Request, call_next):
-    public_paths = ["/login", "/static/", "/login_page"]
+    # UPDATED: Added /api/webhooks/ to public_paths
+    public_paths = ["/login", "/static/", "/login_page", "/api/webhooks/"]
     if any(request.url.path.startswith(path) for path in public_paths):
         return await call_next(request)
     token = request.cookies.get("access_token_8002")
@@ -81,7 +82,6 @@ async def get_products_page(request: Request):
 async def get_mutations_page(request: Request):
     return templates.TemplateResponse("mutations.html", {"request": request, "title": "Mutations"})
 
-# --- NEW PAGE ROUTE ---
 @app.get("/stock-by-barcode", response_class=HTMLResponse, include_in_schema=False)
 async def get_stock_by_barcode_page(request: Request):
     return templates.TemplateResponse("stock_by_barcode.html", {"request": request, "title": "Stock by Barcode"})
@@ -91,5 +91,6 @@ app.include_router(sync_control.router)
 app.include_router(config.router)
 app.include_router(products.router)
 app.include_router(mutations.router)
-# --- NEW ROUTER INCLUDED ---
 app.include_router(stock.router)
+# UPDATED: Included the webhooks router
+app.include_router(webhooks.router)

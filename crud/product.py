@@ -231,7 +231,7 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
             db.rollback()
             log_dead_letter(db, store_id, run_id, bundle, f"A general error occurred: {e}")
             continue
-        
+
 # --- ADD THIS NEW FUNCTION AT THE END OF THE FILE ---
 def update_inventory_levels_for_variants(
     db: Session, variant_ids: List[int], location_id: int, new_quantity: int
@@ -253,3 +253,43 @@ def update_inventory_levels_for_variants(
     }, synchronize_session=False)
 
     db.commit()
+
+# --- NEW FUNCTIONS FOR WEBHOOK PROCESSING ---
+
+def create_or_update_product_from_webhook(db: Session, store_id: int, payload: Dict[str, Any]):
+    """Creates or updates a single product and its variants from a webhook payload."""
+    now = datetime.now(timezone.utc)
+    # The webhook payload for products/create and products/update is the full product object
+    create_or_update_products(db, store_id, run_id=0, items=[payload], last_seen_at=now)
+    print(f"[DB-UPDATE] Created/Updated product '{payload.get('title')}' from webhook.")
+
+def delete_product_from_webhook(db: Session, payload: Dict[str, Any]):
+    """Deletes a product using its ID from a webhook payload."""
+    product_id = payload.get("id")
+    if not product_id:
+        return
+    db.query(models.Product).filter(models.Product.id == product_id).delete()
+    db.commit()
+    print(f"[DB-UPDATE] Deleted product ID {product_id} from webhook.")
+
+def update_variant_from_webhook(db: Session, payload: Dict[str, Any]):
+    """Updates a variant's details, specifically for barcode changes."""
+    inventory_item_id = payload.get("id")
+    variant = db.query(models.ProductVariant).filter(models.ProductVariant.inventory_item_id == inventory_item_id).first()
+    if not variant:
+        return
+        
+    # Check for barcode changes
+    if 'barcode' in payload and variant.barcode != payload['barcode']:
+        variant.barcode = payload['barcode']
+        db.commit()
+        print(f"[DB-UPDATE] Updated barcode for variant SKU {variant.sku} to {variant.barcode}.")
+
+def delete_inventory_item_from_webhook(db: Session, payload: Dict[str, Any]):
+    """Deletes a variant based on an inventory_item/delete webhook."""
+    inventory_item_id = payload.get("id")
+    if not inventory_item_id:
+        return
+    db.query(models.ProductVariant).filter(models.ProductVariant.inventory_item_id == inventory_item_id).delete()
+    db.commit()
+    print(f"[DB-UPDATE] Deleted variant with inventory_item_id {inventory_item_id} from webhook.")
