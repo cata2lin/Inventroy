@@ -46,9 +46,24 @@ def create_snapshot_for_store(db: Session, store_id: int):
         })
 
     if snapshot_entries:
-        db.bulk_insert_mappings(models.InventorySnapshot, snapshot_entries)
+        # Use bulk_insert_mappings for efficiency, ensuring to handle potential duplicates on the same day
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        
+        stmt = pg_insert(models.InventorySnapshot).values(snapshot_entries)
+        
+        # On conflict (same date, variant, store), update the on_hand, price, and cost
+        update_dict = {
+            'on_hand': stmt.excluded.on_hand,
+            'price': stmt.excluded.price,
+            'cost_per_item': stmt.excluded.cost_per_item,
+        }
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['date', 'product_variant_id', 'store_id'],
+            set_=update_dict
+        )
+        db.execute(stmt)
         db.commit()
-        print(f"[SNAPSHOT] Successfully created snapshot for store {store_id} with {len(snapshot_entries)} entries.")
+        print(f"[SNAPSHOT] Successfully created/updated snapshot for store {store_id} with {len(snapshot_entries)} entries.")
 
 
 def get_snapshots(
@@ -56,6 +71,7 @@ def get_snapshots(
 ) -> Tuple[List[models.InventorySnapshot], int]:
     """
     Retrieves paginated and filterable inventory snapshots.
+    THIS FUNCTION NOW CORRECTLY ACCEPTS 'snapshot_date'.
     """
     query = db.query(models.InventorySnapshot).options(
         joinedload(models.InventorySnapshot.product_variant).joinedload(models.ProductVariant.product)
@@ -67,7 +83,7 @@ def get_snapshots(
         query = query.filter(models.InventorySnapshot.date == snapshot_date)
 
     total_count = query.count()
-    snapshots = query.order_by(models.InventorySnapshot.date.desc()).offset(skip).limit(limit).all()
+    snapshots = query.order_by(models.InventorySnapshot.date.desc(), models.InventorySnapshot.id).offset(skip).limit(limit).all()
 
     return snapshots, total_count
 
@@ -78,7 +94,6 @@ def get_snapshot_metrics(db: Session, variant_id: int, start_date: date, end_dat
     over a date range using a raw SQL query for performance.
     """
     
-    # This query is a direct implementation of your provided specification.
     sql_query = text("""
     WITH lagged AS (
       SELECT
@@ -106,18 +121,18 @@ def get_snapshot_metrics(db: Session, variant_id: int, start_date: date, end_dat
       (MAX(quantity) - MIN(quantity)) AS stock_range,
       STDDEV_SAMP(quantity) AS stock_stddev,
       COUNT(*) FILTER (WHERE quantity = 0) AS days_out_of_stock,
-      100.0 * COUNT(*) FILTER (WHERE quantity = 0) / COUNT(*) AS stockout_rate,
+      100.0 * COUNT(*) FILTER (WHERE quantity = 0) / NULLIF(COUNT(*), 0) AS stockout_rate,
       COUNT(*) FILTER (WHERE quantity_change > 0) AS replenishment_days,
       COUNT(*) FILTER (WHERE quantity_change < 0) AS depletion_days,
       SUM(GREATEST(prev_quantity - quantity, 0)) AS total_outflow,
       SUM(GREATEST(prev_quantity - quantity, 0)) / NULLIF(AVG(quantity), 0) AS stock_turnover,
       COUNT(DISTINCT date) / NULLIF(SUM(GREATEST(prev_quantity - quantity, 0)) / NULLIF(AVG(quantity), 0), 0) AS avg_days_in_inventory,
       COUNT(*) FILTER (WHERE quantity_change = 0) AS dead_stock_days,
-      100.0 * COUNT(*) FILTER (WHERE quantity_change = 0) / COUNT(*) AS dead_stock_ratio,
+      100.0 * COUNT(*) FILTER (WHERE quantity_change = 0) / NULLIF(COUNT(*), 0) AS dead_stock_ratio,
       AVG(inventory_value) AS avg_inventory_value,
       AVG(sales_value) AS avg_sales_value,
       AVG(gross_margin_value) AS avg_gross_margin_value,
-      100.0 * AVG(CASE WHEN ABS((quantity - prev_quantity) / NULLIF(prev_quantity, 0)) < 0.05 THEN 1 ELSE 0 END) AS stability_index,
+      100.0 * AVG(CASE WHEN prev_quantity IS NOT NULL AND prev_quantity != 0 THEN (CASE WHEN ABS((quantity - prev_quantity) / prev_quantity) < 0.05 THEN 1 ELSE 0 END) ELSE 0 END) AS stability_index,
       (1 - (100.0 * COUNT(*) FILTER (WHERE quantity = 0) / COUNT(*)) / 100) * (1 - (100.0 * COUNT(*) FILTER (WHERE quantity_change = 0) / COUNT(*)) / 100) AS stock_health_index
     FROM derived;
     """)
@@ -129,6 +144,5 @@ def get_snapshot_metrics(db: Session, variant_id: int, start_date: date, end_dat
     }).fetchone()
 
     if result:
-        # The result is a Row object, convert it to a dictionary
         return dict(result._mapping)
     return None
