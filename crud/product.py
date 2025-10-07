@@ -86,13 +86,11 @@ def _extract_product_fields(p_data: Any, store_id: int, last_seen_at: datetime) 
     pid = gid_to_id(p_data.get("id"))
     if not pid: raise ValueError("Missing product ID")
     tags = p_data.get("tags", [])
-    
-    # --- THIS IS THE CORRECTED PART for Product Category ---
     return {
         "id": pid, "store_id": store_id, "shopify_gid": p_data.get("id"),
         "title": p_data.get("title"), "body_html": p_data.get("bodyHtml"),
         "vendor": p_data.get("vendor"), "product_type": p_data.get("productType"),
-        "product_category": _get(p_data, "category", "name"), # Extracts the category name
+        "product_category": _get(p_data, "category", "name"),
         "status": p_data.get("status"), "handle": p_data.get("handle"),
         "tags": ",".join(tags if tags is not None else []),
         "image_url": _first_image_url(p_data),
@@ -141,15 +139,15 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
             )
             db.execute(product_stmt)
             
-            # --- THIS IS THE CORRECTED PART for Inventory/Locations ---
-            # Correctly handle the nested 'edges' structure for variants
-            v_data_list = _get(p_data, "variants", "edges", default=[])
+            # --- THIS IS THE CORRECTED PART ---
+            # The shopify_service already flattens the 'edges' structure,
+            # so we can iterate directly over the list of variants.
+            v_data_list = p_data.get("variants", [])
             if v_data_list:
                 loc_rows_map = {}
                 inv_level_rows = []
                 
-                for v_edge in v_data_list:
-                    v_data = v_edge.get("node", {}) # Get the variant data from the 'node'
+                for v_data in v_data_list: # No longer need to get 'node'
                     v_row = _extract_variant_fields(v_data, p_row["id"], store_id, last_seen_at)
                     
                     variant_stmt = pg_insert(models.ProductVariant).values(v_row)
@@ -159,10 +157,9 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
                     )
                     db.execute(variant_stmt)
                     
-                    # Correctly handle the nested 'edges' structure for inventory levels
-                    inventory_levels = _get(v_data, "inventoryItem", "inventoryLevels", "edges", default=[])
-                    for lvl_edge in inventory_levels:
-                        lvl = lvl_edge.get("node", {}) # Get the level data from the 'node'
+                    # Also iterate directly over the flattened list of inventory levels
+                    inventory_levels = _get(v_data, "inventoryItem", "inventoryLevels", default=[])
+                    for lvl in inventory_levels: # No longer need to get 'node'
                         loc_gid = _get(lvl, "location", "id")
                         loc_id = gid_to_id(loc_gid)
                         if not loc_id or not loc_gid: continue
