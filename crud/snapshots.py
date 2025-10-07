@@ -227,4 +227,3 @@ def get_snapshots_with_metrics(
         data.append(snapshot)
 
     return data, total_count
-```
