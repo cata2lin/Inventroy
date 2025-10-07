@@ -75,7 +75,6 @@ def get_snapshots_with_metrics(
     if start_date is None:
         start_date = end_date - timedelta(days=30)
 
-    # --- METRICS QUERY (raw SQL) ---
     metrics_sql = text("""
         WITH lagged AS (
           SELECT
@@ -120,33 +119,13 @@ def get_snapshots_with_metrics(
         GROUP BY product_variant_id
     """)
 
-    # --- EXECUTABLE SUBQUERY WRAPPER ---
-    metrics_subquery = (
-        db.query(
-            literal_column("product_variant_id"),
-            literal_column("average_stock_level"),
-            literal_column("min_stock_level"),
-            literal_column("max_stock_level"),
-            literal_column("stock_range"),
-            literal_column("stock_stddev"),
-            literal_column("days_out_of_stock"),
-            literal_column("stockout_rate"),
-            literal_column("replenishment_days"),
-            literal_column("depletion_days"),
-            literal_column("total_outflow"),
-            literal_column("stock_turnover"),
-            literal_column("avg_days_in_inventory"),
-            literal_column("dead_stock_days"),
-            literal_column("dead_stock_ratio"),
-            literal_column("avg_inventory_value"),
-            literal_column("stock_health_index"),
-        )
-        .from_statement(metrics_sql)
-        .params(start_date=start_date, end_date=end_date, store_id=store_id)
-        .subquery("metrics")
-    )
+    query_params = {"start_date": start_date, "end_date": end_date, "store_id": store_id}
 
-    # --- LATEST SNAPSHOT PER VARIANT ---
+    # Execute the raw SQL and convert to dictionary keyed by variant_id
+    metrics_result = db.execute(metrics_sql, query_params).mappings().all()
+    metrics_by_variant = {row["product_variant_id"]: dict(row) for row in metrics_result}
+
+    # Latest snapshot per variant
     latest_snapshot_subquery = (
         db.query(
             models.InventorySnapshot.product_variant_id,
@@ -157,35 +136,12 @@ def get_snapshots_with_metrics(
         .subquery("latest")
     )
 
-    # --- MAIN QUERY ---
     base_query = (
-        db.query(
-            models.InventorySnapshot,
-            metrics_subquery.c.average_stock_level,
-            metrics_subquery.c.min_stock_level,
-            metrics_subquery.c.max_stock_level,
-            metrics_subquery.c.stock_range,
-            metrics_subquery.c.stock_stddev,
-            metrics_subquery.c.days_out_of_stock,
-            metrics_subquery.c.stockout_rate,
-            metrics_subquery.c.replenishment_days,
-            metrics_subquery.c.depletion_days,
-            metrics_subquery.c.total_outflow,
-            metrics_subquery.c.stock_turnover,
-            metrics_subquery.c.avg_days_in_inventory,
-            metrics_subquery.c.dead_stock_days,
-            metrics_subquery.c.dead_stock_ratio,
-            metrics_subquery.c.avg_inventory_value,
-            metrics_subquery.c.stock_health_index,
-        )
+        db.query(models.InventorySnapshot)
         .join(
             latest_snapshot_subquery,
-            (models.InventorySnapshot.product_variant_id == latest_snapshot_subquery.c.product_variant_id) &
-            (models.InventorySnapshot.date == latest_snapshot_subquery.c.max_date)
-        )
-        .outerjoin(
-            metrics_subquery,
-            metrics_subquery.c.product_variant_id == models.InventorySnapshot.product_variant_id
+            (models.InventorySnapshot.product_variant_id == latest_snapshot_subquery.c.product_variant_id)
+            & (models.InventorySnapshot.date == latest_snapshot_subquery.c.max_date)
         )
         .options(
             joinedload(models.InventorySnapshot.product_variant)
@@ -196,33 +152,11 @@ def get_snapshots_with_metrics(
     if store_id:
         base_query = base_query.filter(models.InventorySnapshot.store_id == store_id)
 
-    # --- COUNT + PAGINATION ---
-    total_count = base_query.order_by(None).count()
+    total_count = base_query.count()
     results = base_query.order_by(models.InventorySnapshot.date.desc()).offset(skip).limit(limit).all()
 
-    # --- ASSEMBLE RESULTS ---
-    data = []
-    for row in results:
-        snapshot = row[0]
-        metrics = {
-            "average_stock_level": row[1],
-            "min_stock_level": row[2],
-            "max_stock_level": row[3],
-            "stock_range": row[4],
-            "stock_stddev": row[5],
-            "days_out_of_stock": row[6],
-            "stockout_rate": row[7],
-            "replenishment_days": row[8],
-            "depletion_days": row[9],
-            "total_outflow": row[10],
-            "stock_turnover": row[11],
-            "avg_days_in_inventory": row[12],
-            "dead_stock_days": row[13],
-            "dead_stock_ratio": row[14],
-            "avg_inventory_value": row[15],
-            "stock_health_index": row[16],
-        }
-        setattr(snapshot, "metrics", metrics)
-        data.append(snapshot)
+    # Attach metrics
+    for snapshot in results:
+        snapshot.metrics = metrics_by_variant.get(snapshot.product_variant_id, {})
 
-    return data, total_count
+    return results, total_count
