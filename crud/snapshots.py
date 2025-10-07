@@ -1,5 +1,5 @@
 # crud/snapshots.py
-from datetime import datetime, date
+from datetime import datetime, date, timezone # <-- Import timezone
 from typing import List, Optional, Tuple, Dict, Any
 
 from sqlalchemy.orm import Session, joinedload
@@ -13,7 +13,8 @@ def create_snapshot_for_store(db: Session, store_id: int):
     Creates a snapshot of all current inventory levels for a given store,
     including price and cost at the time of the snapshot.
     """
-    now = datetime.now(date.today().tzinfo)
+    # --- THIS IS THE CORRECTED LINE ---
+    now = datetime.now(timezone.utc)
 
     inventory_data = (
         db.query(
@@ -57,9 +58,7 @@ def create_snapshot_for_store(db: Session, store_id: int):
         db.commit()
         print(f"[SNAPSHOT] Successfully created/updated snapshot for store {store_id} with {len(snapshot_entries)} entries.")
 
-#
-# --- THIS IS THE CORRECTED FUNCTION SIGNATURE ---
-#
+
 def get_snapshots(
     db: Session, skip: int = 0, limit: int = 100, store_id: Optional[int] = None, date: Optional[date] = None
 ) -> Tuple[List[models.InventorySnapshot], int]:
@@ -72,7 +71,6 @@ def get_snapshots(
 
     if store_id:
         query = query.filter(models.InventorySnapshot.store_id == store_id)
-    # This block now works because the 'date' parameter is accepted by the function
     if date:
         query = query.filter(models.InventorySnapshot.date == date)
 
