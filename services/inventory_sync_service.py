@@ -104,8 +104,12 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
 def handle_catalog_webhook(store_id: int, topic: str, payload: Dict[str, Any]):
     db: Session = SessionLocal()
     try:
-        if topic == "products/create" or topic == "products/update":
+        if topic == "products/create":
             crud_product.create_or_update_product_from_webhook(db, store_id, payload)
+        elif topic == "products/update":
+            # --- THIS IS THE CRITICAL CHANGE ---
+            # Use the 'patch' function for updates to avoid data loss from partial payloads.
+            crud_product.patch_product_from_webhook(db, store_id, payload)
         elif topic == "products/delete":
             crud_product.delete_product_from_webhook(db, payload)
         elif topic == "inventory_items/update":

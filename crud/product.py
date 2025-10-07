@@ -199,11 +199,64 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
             db.rollback()
             log_dead_letter(db, store_id, run_id, bundle, f"A general error occurred: {e}")
 
-# --- WEBHOOK PROCESSING FUNCTIONS ---
+# --- START: NEW AND MODIFIED WEBHOOK FUNCTIONS ---
+
+def patch_product_from_webhook(db: Session, store_id: int, payload: Dict[str, Any]):
+    """
+    Safely updates a product record from a webhook payload by only
+    updating the fields that are present in the payload. This prevents
+    overwriting complete data with partial data.
+    """
+    product_id = payload.get("id")
+    if not product_id:
+        return
+
+    db_product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not db_product:
+        # If the product doesn't exist, we can fall back to the full create/update.
+        create_or_update_product_from_webhook(db, store_id, payload)
+        return
+
+    updates = {}
+    if "title" in payload:
+        updates[models.Product.title] = payload["title"]
+    if "bodyHtml" in payload:
+        updates[models.Product.body_html] = payload["bodyHtml"]
+    if "vendor" in payload:
+        updates[models.Product.vendor] = payload["vendor"]
+    if "productType" in payload:
+        updates[models.Product.product_type] = payload["productType"]
+    if "status" in payload:
+        updates[models.Product.status] = payload["status"]
+    if "tags" in payload:
+        tags = payload.get("tags", [])
+        updates[models.Product.tags] = ",".join(tags if tags is not None else [])
+    if "updatedAt" in payload:
+        updates[models.Product.updated_at] = _to_dt(payload["updatedAt"])
+
+    if updates:
+        (db.query(models.Product)
+           .filter(models.Product.id == product_id)
+           .update(updates, synchronize_session=False))
+        db.commit()
+        print(f"[DB-UPDATE] Patched product ID {product_id} from webhook.")
+
+    # Note: We deliberately DO NOT process variants here, as the `products/update`
+    # webhook often omits them, which would wipe out our existing variant data.
+    # Variant-specific webhooks should handle variant updates.
+
 def create_or_update_product_from_webhook(db: Session, store_id: int, payload: Dict[str, Any]):
+    """
+    Handles the 'products/create' webhook. For 'products/update', the new
+    patch function should be used to avoid data loss.
+    """
     now = datetime.now(timezone.utc)
+    # This function is now primarily for *creating* products from webhooks
     create_or_update_products(db, store_id, run_id=0, items=[payload], last_seen_at=now)
     print(f"[DB-UPDATE] Created/Updated product '{payload.get('title')}' from webhook.")
+
+# --- END: NEW AND MODIFIED WEBHOOK FUNCTIONS ---
+
 
 def delete_product_from_webhook(db: Session, payload: Dict[str, Any]):
     product_id = payload.get("id")
@@ -216,10 +269,24 @@ def update_variant_from_webhook(db: Session, payload: Dict[str, Any]):
     inventory_item_id = payload.get("id")
     variant = db.query(models.ProductVariant).filter(models.ProductVariant.inventory_item_id == inventory_item_id).first()
     if not variant: return
+    
+    # Update barcode if present and changed
     if 'barcode' in payload and variant.barcode != payload['barcode']:
         variant.barcode = payload['barcode']
-        db.commit()
-        print(f"[DB-UPDATE] Updated barcode for variant SKU {variant.sku} to {variant.barcode}.")
+    
+    # Update cost if present and changed
+    cost_info = payload.get('cost')
+    if cost_info is not None and variant.cost_per_item != cost_info:
+        variant.cost_per_item = cost_info
+
+    # Update SKU if present and changed
+    sku_info = payload.get('sku')
+    if sku_info is not None and variant.sku != sku_info:
+        variant.sku = sku_info
+
+    db.commit()
+    print(f"[DB-UPDATE] Updated variant details for inventory_item_id {inventory_item_id} from webhook.")
+
 
 def delete_inventory_item_from_webhook(db: Session, payload: Dict[str, Any]):
     inventory_item_id = payload.get("id")
