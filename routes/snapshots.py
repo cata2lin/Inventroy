@@ -1,6 +1,7 @@
 # routes/snapshots.py
 from datetime import date
-from typing import Optional, List
+from decimal import Decimal
+from typing import Optional
 from fastapi import APIRouter, Depends, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 
@@ -14,45 +15,37 @@ router = APIRouter(
     tags=["Snapshots"],
 )
 
-# -------------------------------
-# Trigger Snapshot Endpoint
-# -------------------------------
+# Trigger snapshot
 @router.post("/trigger", summary="Trigger manual snapshot")
 def trigger_snapshot(background_tasks: BackgroundTasks):
-    """
-    Manually trigger the daily inventory snapshot process.
-    Runs in the background to avoid blocking the request.
-    """
     background_tasks.add_task(snapshot_runner.run_daily_snapshot)
     return {
         "status": "ok",
         "message": "Inventory snapshot process triggered. It will run in the background."
     }
 
-# -------------------------------
-# List Snapshots Endpoint
-# -------------------------------
+# Helper: convert Decimal -> float
+def convert_metrics(metrics: dict):
+    converted = {}
+    for k, v in metrics.items():
+        if isinstance(v, Decimal):
+            converted[k] = float(v)
+        else:
+            converted[k] = v
+    return converted
+
+# List snapshots
 @router.get("/", response_model=SnapshotWithMetricsResponse, summary="Retrieve snapshots with metrics")
 def read_snapshots_with_metrics(
     db: Session = Depends(get_db),
-    skip: int = Query(0, ge=0, description="Number of records to skip (pagination)"),
-    limit: int = Query(25, ge=1, le=100, description="Number of records to return"),
-    store_id: Optional[int] = Query(None, description="Filter snapshots by store ID"),
-    start_date: Optional[date] = Query(None, description="Start date filter (YYYY-MM-DD)"),
-    end_date: Optional[date] = Query(None, description="End date filter (YYYY-MM-DD)"),
-    sort_field: Optional[str] = Query("date", description="Field or metric to sort by"),
-    sort_order: Optional[str] = Query("desc", regex="^(asc|desc)$", description="Sort order: asc or desc"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+    store_id: Optional[int] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    sort_field: Optional[str] = Query("date"),
+    sort_order: Optional[str] = Query("desc", regex="^(asc|desc)$"),
 ):
-    """
-    Retrieve inventory snapshots along with performance metrics.
-
-    Supports:
-    - Filtering by store
-    - Filtering by date range
-    - Sorting by any metric or snapshot field (ascending/descending)
-    - Pagination
-    """
-    # Fetch snapshots from CRUD
     result = crud_snapshots.get_snapshots_with_metrics(
         db=db,
         skip=skip,
@@ -63,52 +56,40 @@ def read_snapshots_with_metrics(
     )
 
     snapshots = result["snapshots"]
-    total_count = int(result["total_count"])  # ensure integer for Pydantic
+    total_count = int(result["total_count"])
 
-    # -------------------------------
     # Sorting
-    # -------------------------------
     reverse = sort_order == "desc"
-
-    def get_sort_value(snap):
-        """
-        Return the value for sorting. Supports:
-        - top-level snapshot fields
-        - metrics dictionary fields
-        - None is treated as smallest value
-        """
-        if isinstance(snap, dict):
-            return snap.get(sort_field) or snap.get("metrics", {}).get(sort_field) or 0
-        else:  # SQLAlchemy object
-            value = getattr(snap, sort_field, None)
-            if value is None and hasattr(snap, "metrics"):
-                value = snap.metrics.get(sort_field)
-            return value if value is not None else 0
-
+    def get_sort_value(s):
+        val = s.get(sort_field) or s.get("metrics", {}).get(sort_field)
+        if isinstance(val, Decimal):
+            return float(val)
+        return val if val is not None else 0
     snapshots_sorted = sorted(snapshots, key=get_sort_value, reverse=reverse)
 
-    # -------------------------------
-    # Convert SQLAlchemy objects to dicts
-    # -------------------------------
+    # Map to exact Pydantic model structure
     snapshots_serializable = []
     for s in snapshots_sorted:
-        if isinstance(s, dict):
-            snapshots_serializable.append(s)
-        else:
-            snapshots_serializable.append(
-                {**s.__dict__, "metrics": getattr(s, "metrics", {})}
-            )
+        snapshot_dict = {
+            "id": s.get("id"),
+            "date": s.get("date"),  # Must exist
+            "store_id": s.get("store_id"),
+            "product_variant_id": s.get("product_variant_id"),
+            "on_hand": s.get("on_hand"),
+            "metrics": convert_metrics(s.get("metrics", {})),
+            "product_variant": {
+                "shopify_gid": s.get("product_variant", {}).get("shopify_gid"),
+                "sku": s.get("product_variant", {}).get("sku"),
+                "product": s.get("product_variant", {}).get("product"),
+            }
+        }
+        snapshots_serializable.append(snapshot_dict)
 
     return {"total_count": total_count, "snapshots": snapshots_serializable}
 
-# -------------------------------
-# Optional: List Available Metrics
-# -------------------------------
+# List available metrics
 @router.get("/metrics", summary="List all available metrics")
 def list_metrics():
-    """
-    Returns a list of available metrics for filtering or sorting in the frontend.
-    """
     metrics = [
         "on_hand",
         "average_stock_level",
