@@ -78,17 +78,22 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
             
         _update_authoritative_version(db, barcode, store_id, authoritative_quantity, source_timestamp)
         
-        target_stores = _get_propagation_targets(db, barcode)
-        if not target_stores or len(target_stores) < 2:
+        target_stores = _get_propagation_targets(db, barcode, store_id)
+        if not target_stores:
             # Still update the local DB for the single store even if not propagating
             print(f"[SYNC] No propagation needed for {barcode}, updating local DB for source store.")
-            _execute_propagation(db, barcode, authoritative_quantity, [db.query(models.Store).get(store_id)])
+            crud_product.update_inventory_levels_for_variants(
+                db, 
+                variant_ids=[variant.id], 
+                location_id=payload.get("location_id"), # Assuming location_id is in payload
+                new_quantity=authoritative_quantity
+            )
             return
             
         barcode_version_obj = db.query(models.BarcodeVersion).filter(models.BarcodeVersion.barcode == barcode).one()
         _create_write_intents(db, barcode, authoritative_quantity, barcode_version_obj.version, target_stores)
         
-        print(f"[SYNC] Propagating '{barcode}' to all {len(target_stores)} member stores with quantity {authoritative_quantity}.")
+        print(f"[SYNC] Propagating '{barcode}' to {len(target_stores)} target stores with quantity {authoritative_quantity}.")
         
         _execute_propagation(db, barcode, authoritative_quantity, target_stores)
 
@@ -138,7 +143,7 @@ def _is_echo(db: Session, store_id: int, barcode: str, observed_total: int) -> b
 
 def _is_new_authoritative_version(db: Session, barcode: str, timestamp: datetime) -> bool:
     current_version = db.query(models.BarcodeVersion).filter(models.BarcodeVersion.barcode == barcode).first()
-    if not current_version or timestamp > current_version.source_timestamp:
+    if not current_version or timestamp >= current_version.source_timestamp:
         return True
     return False
 
@@ -154,10 +159,10 @@ def _update_authoritative_version(db: Session, barcode: str, store_id: int, quan
         db.add(new_version)
     db.commit()
 
-def _get_propagation_targets(db: Session, barcode: str) -> List[models.Store]:
+def _get_propagation_targets(db: Session, barcode: str, source_store_id: int) -> List[models.Store]:
     member_store_ids = (
         db.query(models.ProductVariant.store_id)
-        .filter(models.ProductVariant.barcode == barcode)
+        .filter(models.ProductVariant.barcode == barcode, models.ProductVariant.store_id != source_store_id)
         .distinct()
         .all()
     )
@@ -209,7 +214,10 @@ def _execute_propagation(db: Session, barcode: str, desired_total: int, target_s
                     "quantities": quantities_payload,
                 }
             }
-            service.execute_mutation("inventorySetQuantities", variables)
+            result = service.execute_mutation("inventorySetQuantities", variables)
+            if result.get("inventorySetQuantities", {}).get("userErrors"):
+                 raise Exception(str(result["inventorySetQuantities"]["userErrors"]))
+
             print(f"[SYNC] Successfully wrote quantity {desired_total} for barcode {barcode} to store '{store.name}'.")
 
             variant_ids = [v.id for v in variants_to_update]

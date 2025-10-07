@@ -89,7 +89,11 @@ def get_stock_grouped_by_barcode(
     final_groups = []
     for barcode, group in grouped_by_barcode.items():
         if not group["variants"]: continue
-        representative_stock = group["variants"][0]["stock"]
+        
+        # Calculate total stock based on the primary variant or the first one if none is primary
+        primary_variant = next((v for v in group["variants"] if v["is_barcode_primary"]), group["variants"][0])
+        representative_stock = primary_variant["stock"]
+        
         total_retail_value = sum(v["retail_value_ron"] for v in group["variants"])
         total_inventory_value = sum(v["inventory_value_ron"] for v in group["variants"])
 
@@ -97,8 +101,6 @@ def get_stock_grouped_by_barcode(
         if max_stock is not None and representative_stock > max_stock: continue
         if min_retail is not None and total_retail_value < min_retail: continue
         if max_retail is not None and total_retail_value > max_retail: continue
-
-        primary_variant = next((v for v in group["variants"] if v["is_barcode_primary"]), group["variants"][0])
 
         final_groups.append({
             "barcode": barcode, "primary_image_url": primary_variant["image_url"], "primary_title": primary_variant["product_title"],
@@ -189,6 +191,8 @@ def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get
         except Exception as e:
             errors.append(f"Store {store.name}: {str(e)}")
 
+    # --- THIS IS THE CRITICAL FIX ---
+    # After all API calls, update the local database for the successful ones.
     if success_updates:
         for update in success_updates:
             crud_product.update_inventory_levels_for_variants(
