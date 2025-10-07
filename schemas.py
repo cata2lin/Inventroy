@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, date  # <--- FIX: Added 'date' import
 from pydantic import BaseModel, Field, HttpUrl, ConfigDict, model_validator
 
 # =========================
@@ -95,6 +95,19 @@ class ProductResponse(BaseModel):
     total_count: int
     products: List[Product]
 
+# --- Schemas for Inventory Snapshots (from your added code) ---
+class InventorySnapshot(ORMBase):
+    id: int
+    date: date
+    product_variant_id: int
+    store_id: int
+    on_hand: int
+    product_variant: ProductVariant # Reuse existing variant schema
+
+class InventorySnapshotResponse(BaseModel):
+    total_count: int
+    snapshots: List[InventorySnapshot]
+
 # ======================================================
 # Shopify GraphQL Ingest Models (from previous working version)
 # ======================================================
@@ -184,14 +197,9 @@ class ShopifyOrder(APIBase):
     line_items: Optional[List[LineItemModel]] = Field(None, alias="lineItems")
     fulfillments: Optional[List[FulfillmentModel]] = None
 
-class InventorySnapshot(ORMBase):
-    id: int
-    date: date
-    product_variant_id: int
-    store_id: int
-    on_hand: int
-    product_variant: ProductVariant # Reuse existing variant schema
 
-class InventorySnapshotResponse(BaseModel):
-    total_count: int
-    snapshots: List[InventorySnapshot]
+# --- FIX FOR FORWARD REFERENCES ---
+# This tells Pydantic to resolve the nested model references now that all
+# classes have been defined, fixing the "not fully defined" error.
+InventorySnapshot.model_rebuild()
+InventorySnapshotResponse.model_rebuild()
