@@ -3,41 +3,60 @@
 {% block content %}
 <div class="container">
     <hgroup>
-        <h1>Inventory Snapshots</h1>
-        <h2>Review historical end-of-day stock levels and performance metrics.</h2>
+        <h1>Inventory Analytics</h1>
+        <h2>Review historical stock levels and performance metrics.</h2>
     </hgroup>
 
     <article>
+        <header><strong>Filters</strong></header>
         <div class="grid">
-            <input type="date" id="date-filter">
-            <select id="store-filter">
-                <option value="">All Stores</option>
-            </select>
-            <button id="trigger-snapshot-btn">Trigger Snapshot Now</button>
+            <label for="start-date-filter">
+                Start Date
+                <input type="date" id="start-date-filter">
+            </label>
+            <label for="end-date-filter">
+                End Date
+                <input type="date" id="end-date-filter">
+            </label>
+            <label for="store-filter">
+                Store
+                <select id="store-filter">
+                    <option value="">All Stores</option>
+                </select>
+            </label>
         </div>
+        <button id="trigger-snapshot-btn" class="secondary outline">Trigger Snapshot Now</button>
     </article>
 
-    <article id="snapshots-container" aria-busy="true">
-        <p>Loading snapshots...</p>
-    </article>
+    <div id="snapshots-container" aria-busy="true">
+        <p>Loading analytics...</p>
+    </div>
 
     <div class="pagination-controls grid">
         <button id="prev-button" disabled>Previous</button>
         <span id="page-indicator">Page 1 of 1</span>
         <button id="next-button" disabled>Next</button>
     </div>
-
-    <dialog id="metrics-modal">
+    
+    <details>
+        <summary>Legendă Metrică (Explicații)</summary>
         <article>
-            <header>
-                <button class="close" aria-label="Close"></button>
-                <strong id="modal-title">Inventory Metrics</strong>
-            </header>
-            <div id="modal-body" aria-busy="true">
-                <p>Loading metrics...</p>
-            </div>
+            <p>Această secțiune explică semnificația fiecărui indicator de performanță (metrică) din tabelul de mai sus.</p>
+            <ul>
+                <li><strong>Stoc Mediu (buc):</strong> Cantitatea medie de produse deținute în stoc în perioada selectată. <em>Calcul: AVG(cantitate)</em></li>
+                <li><strong>Stoc Min/Max (buc):</strong> Cea mai mică și cea mai mare cantitate înregistrată în stoc în perioada selectată. <em>Calcul: MIN(cantitate), MAX(cantitate)</em></li>
+                <li><strong>Variație Stoc (buc):</strong> Diferența dintre stocul maxim și cel minim, indicând fluctuația stocului. <em>Calcul: MAX(cantitate) - MIN(cantitate)</em></li>
+                <li><strong>Zile Fără Stoc:</strong> Numărul total de zile în care produsul a avut stoc zero. <em>Calcul: COUNT(*) WHERE cantitate = 0</em></li>
+                <li><strong>Rată Stoc Epuizat (%):</strong> Procentajul de timp în care produsul nu a fost disponibil pentru vânzare. <em>Calcul: (Zile Fără Stoc / Total Zile) * 100</em></li>
+                <li><strong>Rulaj Stoc:</strong> De câte ori stocul a fost vândut și înlocuit complet în perioada selectată. O valoare mai mare indică o viteză de vânzare bună. <em>Calcul: Total Ieșiri / Stoc Mediu</em></li>
+                <li><strong>Zile Medii în Stoc:</strong> Numărul mediu de zile necesare pentru a vinde întregul stoc. O valoare mai mică este de preferat. <em>Calcul: Total Zile / Rulaj Stoc</em></li>
+                <li><strong>Zile Stoc Mort:</strong> Numărul de zile în care cantitatea în stoc nu s-a schimbat, indicând lipsa de mișcare. <em>Calcul: COUNT(*) WHERE schimbare_cantitate = 0</em></li>
+                <li><strong>Rată Stoc Mort (%):</strong> Procentajul de zile în care produsul nu a avut nicio mișcare (nici vânzare, nici aprovizionare). <em>Calcul: (Zile Stoc Mort / Total Zile) * 100</em></li>
+                <li><strong>Valoare Medie Stoc (RON):</strong> Valoarea medie a stocului deținut, calculată la prețul de cost. <em>Calcul: AVG(cantitate * preț_de_cost)</em></li>
+                <li><strong>Index Sănătate Stoc (%):</strong> Un indicator compozit care măsoară sănătatea generală a stocului. O valoare apropiată de 100% este ideală. <em>Calcul: (1 - Rată Stoc Epuizat) * (1 - Rată Stoc Mort)</em></li>
+            </ul>
         </article>
-    </dialog>
+    </details>
 </div>
 {% endblock %}
 

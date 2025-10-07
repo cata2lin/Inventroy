@@ -91,21 +91,8 @@ class ProductResponse(BaseModel):
     total_count: int
     products: List[Product]
 
-# --- Schemas for Inventory Snapshots ---
+# --- NEW AND UPDATED SCHEMAS FOR SNAPSHOTS WITH METRICS ---
 
-class InventorySnapshot(ORMBase):
-    id: int
-    date: date
-    product_variant_id: int
-    store_id: int
-    on_hand: int
-    product_variant: ProductVariant
-
-class InventorySnapshotResponse(BaseModel):
-    total_count: int
-    snapshots: List[InventorySnapshot]
-
-# --- NEW SCHEMA FOR SNAPSHOT METRICS ---
 class SnapshotMetrics(BaseModel):
     average_stock_level: Optional[float] = None
     min_stock_level: Optional[float] = None
@@ -122,10 +109,20 @@ class SnapshotMetrics(BaseModel):
     dead_stock_days: Optional[int] = None
     dead_stock_ratio: Optional[float] = None
     avg_inventory_value: Optional[float] = None
-    avg_sales_value: Optional[float] = None
-    avg_gross_margin_value: Optional[float] = None
-    stability_index: Optional[float] = None
     stock_health_index: Optional[float] = None
+
+class SnapshotWithMetrics(ORMBase):
+    id: int
+    date: date
+    product_variant_id: int
+    store_id: int
+    on_hand: int
+    product_variant: ProductVariant
+    metrics: Optional[SnapshotMetrics] = None
+
+class SnapshotWithMetricsResponse(BaseModel):
+    total_count: int
+    snapshots: List[SnapshotWithMetrics]
 
 # ======================================================
 # Shopify GraphQL Ingest Models
@@ -217,5 +214,5 @@ class ShopifyOrder(APIBase):
     fulfillments: Optional[List[FulfillmentModel]] = None
 
 # --- FIX FOR FORWARD REFERENCES ---
-InventorySnapshot.model_rebuild()
-InventorySnapshotResponse.model_rebuild()
+SnapshotWithMetrics.model_rebuild()
+SnapshotWithMetricsResponse.model_rebuild()

@@ -2,23 +2,22 @@
 document.addEventListener('DOMContentLoaded', () => {
     const elements = {
         container: document.getElementById('snapshots-container'),
-        dateFilter: document.getElementById('date-filter'),
+        startDateFilter: document.getElementById('start-date-filter'),
+        endDateFilter: document.getElementById('end-date-filter'),
         storeFilter: document.getElementById('store-filter'),
         triggerBtn: document.getElementById('trigger-snapshot-btn'),
         prevButton: document.getElementById('prev-button'),
         nextButton: document.getElementById('next-button'),
         pageIndicator: document.getElementById('page-indicator'),
-        modal: document.getElementById('metrics-modal'),
-        modalTitle: document.getElementById('modal-title'),
-        modalBody: document.getElementById('modal-body'),
     };
 
     let state = {
         page: 1,
-        limit: 50,
+        limit: 25, // Lower limit for a wider table
         totalCount: 0,
         storeId: '',
-        snapshotDate: '',
+        startDate: '',
+        endDate: '',
     };
 
     const debounce = (func, delay) => {
@@ -36,14 +35,15 @@ document.addEventListener('DOMContentLoaded', () => {
             limit: state.limit,
         });
         if (state.storeId) params.set('store_id', state.storeId);
-        if (state.snapshotDate) params.set('snapshot_date', state.snapshotDate);
+        if (state.startDate) params.set('start_date', state.startDate);
+        if (state.endDate) params.set('end_date', state.endDate);
 
         try {
             const response = await fetch(`/api/snapshots/?${params.toString()}`);
-            if (!response.ok) throw new Error('Failed to fetch snapshots.');
+            if (!response.ok) throw new Error('Failed to fetch analytics.');
             const data = await response.json();
             state.totalCount = data.total_count;
-            renderSnapshots(data.snapshots);
+            renderTable(data.snapshots);
             updatePagination();
         } catch (error) {
             elements.container.innerHTML = `<p style="color: red;">${error.message}</p>`;
@@ -52,60 +52,82 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    const renderSnapshots = (snapshots) => {
+    const formatMetric = (value, decimals = 2, unit = '') => {
+        if (value === null || value === undefined) return 'N/A';
+        const num = parseFloat(value);
+        if (isNaN(num)) return 'N/A';
+        return `${num.toFixed(decimals)}${unit}`;
+    };
+
+    const renderTable = (snapshots) => {
         if (snapshots.length === 0) {
-            elements.container.innerHTML = '<p>No snapshots found matching your criteria.</p>';
+            elements.container.innerHTML = '<p>No snapshot data found for the selected criteria.</p>';
             return;
         }
 
+        const tableHead = `
+            <thead>
+                <tr>
+                    <th>Produs</th>
+                    <th>Stoc Curent</th>
+                    <th>Stoc Mediu</th>
+                    <th>Stoc Min/Max</th>
+                    <th>Variație Stoc</th>
+                    <th>Zile Fără Stoc</th>
+                    <th>Rată Epuizare</th>
+                    <th>Rulaj Stoc</th>
+                    <th>Zile Medii Stoc</th>
+                    <th>Zile Stoc Mort</th>
+                    <th>Rată Stoc Mort</th>
+                    <th>Valoare Medie</th>
+                    <th>Index Sănătate</th>
+                </tr>
+            </thead>
+        `;
+
         const tableRows = snapshots.map(s => {
-            // --- THIS IS THE FIX ---
-            // Safely access nested properties, providing fallback values if data is missing.
             const variant = s.product_variant;
             const product = variant ? variant.product : null;
+            const metrics = s.metrics || {};
 
             const imageUrl = product ? product.image_url : '/static/img/placeholder.png';
-            const productTitle = product ? product.title : '[Deleted Product]';
-            const variantTitle = variant ? variant.title : '[Deleted Variant]';
-            const variantId = variant ? variant.id : 'N/A';
+            const productTitle = product ? product.title : '[Produs Șters]';
             const sku = variant ? variant.sku : 'N/A';
-            
+
             return `
                 <tr>
-                    <td>${s.date}</td>
                     <td>
-                        <img src="${imageUrl}" class="product-image-compact" alt="Product image">
+                        <div style="display: flex; align-items: center; gap: 1rem;">
+                            <img src="${imageUrl}" class="product-image-compact" alt="Product image">
+                            <div>
+                                <strong>${productTitle}</strong><br>
+                                <small>SKU: <code>${sku || 'N/A'}</code></small>
+                            </div>
+                        </div>
                     </td>
-                    <td>
-                        <strong>${productTitle}</strong><br>
-                        <small>${variantTitle} (ID: ${variantId})</small>
-                    </td>
-                    <td><code>${sku || 'N/A'}</code></td>
-                    <td>${s.on_hand}</td>
-                    <td>
-                        ${variant ? `<button class="outline" data-variant-id="${variantId}" data-product-title="${productTitle}">View Metrics</button>` : 'N/A'}
-                    </td>
+                    <td>${s.on_hand} buc</td>
+                    <td>${formatMetric(metrics.average_stock_level, 1)} buc</td>
+                    <td>${formatMetric(metrics.min_stock_level, 0)} / ${formatMetric(metrics.max_stock_level, 0)} buc</td>
+                    <td>${formatMetric(metrics.stock_range, 0)} buc</td>
+                    <td>${metrics.days_out_of_stock}</td>
+                    <td>${formatMetric(metrics.stockout_rate, 2, '%')}</td>
+                    <td>${formatMetric(metrics.stock_turnover, 2)}</td>
+                    <td>${formatMetric(metrics.avg_days_in_inventory, 1)}</td>
+                    <td>${metrics.dead_stock_days}</td>
+                    <td>${formatMetric(metrics.dead_stock_ratio, 2, '%')}</td>
+                    <td>${formatMetric(metrics.avg_inventory_value, 2, ' RON')}</td>
+                    <td style="font-weight: bold;">${formatMetric(metrics.stock_health_index * 100, 1, '%')}</td>
                 </tr>
             `;
         }).join('');
 
         elements.container.innerHTML = `
-            <table>
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th>Image</th>
-                        <th>Product</th>
-                        <th>SKU</th>
-                        <th>On Hand</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>${tableRows}</tbody>
-            </table>
+            <figure>
+                <table role="grid">${tableHead}<tbody>${tableRows}</tbody></table>
+            </figure>
         `;
     };
-
+    
     const updatePagination = () => {
         const totalPages = Math.ceil(state.totalCount / state.limit) || 1;
         elements.pageIndicator.textContent = `Page ${state.page} of ${totalPages}`;
@@ -124,86 +146,29 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Failed to load stores for filter.');
         }
     };
-    
-    const fetchAndShowMetrics = async (variantId, productTitle) => {
-        elements.modalTitle.textContent = `Metrics for: ${productTitle}`;
-        elements.modalBody.setAttribute('aria-busy', 'true');
-        elements.modalBody.innerHTML = '<p>Loading metrics...</p>';
-        elements.modal.showModal();
 
-        try {
-            const endDate = new Date().toISOString().split('T')[0];
-            const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const setupInitialDates = () => {
+        const endDate = new Date();
+        const startDate = new Date();
+        startDate.setDate(endDate.getDate() - 30);
 
-            const response = await fetch(`/api/snapshots/metrics/${variantId}?start_date=${startDate}&end_date=${endDate}`);
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.detail || 'Failed to fetch metrics.');
-            }
-            const metrics = await response.json();
-            renderMetrics(metrics);
-        } catch (error) {
-            elements.modalBody.innerHTML = `<p style="color:red;">${error.message}</p>`;
-        } finally {
-            elements.modalBody.removeAttribute('aria-busy');
-        }
+        elements.endDateFilter.value = endDate.toISOString().split('T')[0];
+        elements.startDateFilter.value = startDate.toISOString().split('T')[0];
+        state.endDate = elements.endDateFilter.value;
+        state.startDate = elements.startDateFilter.value;
     };
 
-    const formatMetric = (value, decimals = 2, unit = '') => {
-        if (value === null || value === undefined) return 'N/A';
-        return `${parseFloat(value).toFixed(decimals)}${unit}`;
-    };
-
-    const renderMetrics = (metrics) => {
-        elements.modalBody.innerHTML = `
-            <div class="grid">
-                <article>
-                    <header><strong>Stock Levels</strong></header>
-                    <p><strong>Avg Stock:</strong> ${formatMetric(metrics.average_stock_level)} units</p>
-                    <p><strong>Min Stock:</strong> ${formatMetric(metrics.min_stock_level, 0)} units</p>
-                    <p><strong>Max Stock:</strong> ${formatMetric(metrics.max_stock_level, 0)} units</p>
-                    <p><strong>Stock Range:</strong> ${formatMetric(metrics.stock_range, 0)} units</p>
-                    <p><strong>Std Deviation:</strong> ${formatMetric(metrics.stock_stddev)}</p>
-                </article>
-                <article>
-                    <header><strong>Availability</strong></header>
-                    <p><strong>Days Out of Stock:</strong> ${metrics.days_out_of_stock}</p>
-                    <p><strong>Stockout Rate:</strong> ${formatMetric(metrics.stockout_rate, 2, '%')}</p>
-                    <p><strong>Health Index:</strong> ${formatMetric(metrics.stock_health_index * 100, 2, '%')}</p>
-                    <p><strong>Stability Index:</strong> ${formatMetric(metrics.stability_index, 2, '%')}</p>
-                </article>
-            </div>
-            <div class="grid">
-                <article>
-                    <header><strong>Movement</strong></header>
-                    <p><strong>Replenishment Days:</strong> ${metrics.replenishment_days}</p>
-                    <p><strong>Depletion Days:</strong> ${metrics.depletion_days}</p>
-                    <p><strong>Total Outflow (Sold):</strong> ${formatMetric(metrics.total_outflow, 0)} units</p>
-                    <p><strong>Stock Turnover:</strong> ${formatMetric(metrics.stock_turnover)}</p>
-                    <p><strong>Avg Days in Inventory:</strong> ${formatMetric(metrics.avg_days_in_inventory)}</p>
-                </article>
-                <article>
-                    <header><strong>Stagnation</strong></header>
-                    <p><strong>Dead Stock Days:</strong> ${metrics.dead_stock_days}</p>
-                    <p><strong>Dead Stock Ratio:</strong> ${formatMetric(metrics.dead_stock_ratio, 2, '%')}</p>
-                </article>
-            </div>
-             <div class="grid">
-                <article>
-                    <header><strong>Financials (Avg)</strong></header>
-                    <p><strong>Inventory Value:</strong> ${formatMetric(metrics.avg_inventory_value)} RON</p>
-                    <p><strong>Potential Sales Value:</strong> ${formatMetric(metrics.avg_sales_value)} RON</p>
-                    <p><strong>Potential Gross Margin:</strong> ${formatMetric(metrics.avg_gross_margin_value)} RON</p>
-                </article>
-            </div>
-        `;
-    };
-
-    elements.dateFilter.addEventListener('change', () => {
-        state.snapshotDate = elements.dateFilter.value;
+    elements.startDateFilter.addEventListener('change', debounce(() => {
+        state.startDate = elements.startDateFilter.value;
         state.page = 1;
         fetchSnapshots();
-    });
+    }, 400));
+    
+    elements.endDateFilter.addEventListener('change', debounce(() => {
+        state.endDate = elements.endDateFilter.value;
+        state.page = 1;
+        fetchSnapshots();
+    }, 400));
 
     elements.storeFilter.addEventListener('change', () => {
         state.storeId = elements.storeFilter.value;
@@ -227,33 +192,20 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     elements.triggerBtn.addEventListener('click', async () => {
-        if (!confirm('Are you sure you want to trigger a manual snapshot now?')) return;
+        if (!confirm('Sunteți sigur că doriți să declanșați manual un snapshot acum?')) return;
         elements.triggerBtn.setAttribute('aria-busy', 'true');
         try {
             const response = await fetch('/api/snapshots/trigger', { method: 'POST' });
             if (!response.ok) throw new Error('Failed to trigger snapshot.');
-            alert('Snapshot process started successfully. It will run in the background.');
+            alert('Procesul de snapshot a început. Acesta va rula în fundal.');
         } catch (error) {
-            alert(`Error: ${error.message}`);
+            alert(`Eroare: ${error.message}`);
         } finally {
             elements.triggerBtn.removeAttribute('aria-busy');
         }
     });
-    
-    elements.container.addEventListener('click', (e) => {
-        if (e.target.matches('button[data-variant-id]')) {
-            const variantId = e.target.dataset.variantId;
-            const productTitle = e.target.dataset.productTitle;
-            fetchAndShowMetrics(variantId, productTitle);
-        }
-    });
-
-    elements.modal.addEventListener('click', (e) => {
-        if (e.target.matches('.close') || e.target === elements.modal) {
-            elements.modal.close();
-        }
-    });
 
     loadStores();
+    setupInitialDates();
     fetchSnapshots();
 });

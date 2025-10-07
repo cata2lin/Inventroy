@@ -1,5 +1,5 @@
 # crud/snapshots.py
-from datetime import datetime, date, timezone # <-- Import timezone
+from datetime import datetime, date, timedelta
 from typing import List, Optional, Tuple, Dict, Any
 
 from sqlalchemy.orm import Session, joinedload
@@ -13,8 +13,7 @@ def create_snapshot_for_store(db: Session, store_id: int):
     Creates a snapshot of all current inventory levels for a given store,
     including price and cost at the time of the snapshot.
     """
-    # --- THIS IS THE CORRECTED LINE ---
-    now = datetime.now(timezone.utc)
+    now = datetime.now(date.today().tzinfo)
 
     inventory_data = (
         db.query(
@@ -59,82 +58,119 @@ def create_snapshot_for_store(db: Session, store_id: int):
         print(f"[SNAPSHOT] Successfully created/updated snapshot for store {store_id} with {len(snapshot_entries)} entries.")
 
 
-def get_snapshots(
-    db: Session, skip: int = 0, limit: int = 100, store_id: Optional[int] = None, date: Optional[date] = None
-) -> Tuple[List[models.InventorySnapshot], int]:
+def get_snapshots_with_metrics(
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    store_id: Optional[int] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+) -> Tuple[List[Dict[str, Any]], int]:
     """
-    Retrieves paginated and filterable inventory snapshots.
+    Calculates all snapshots and their corresponding metrics in a single, efficient query.
+    This replaces the previous separate functions.
     """
-    query = db.query(models.InventorySnapshot).options(
-        joinedload(models.InventorySnapshot.product_variant).joinedload(models.ProductVariant.product)
+    if end_date is None:
+        end_date = date.today()
+    if start_date is None:
+        start_date = end_date - timedelta(days=30)
+
+    # This CTE calculates all metrics per variant over the date range
+    metrics_cte = text("""
+        WITH lagged AS (
+          SELECT
+            s.product_variant_id,
+            s.date,
+            s.on_hand AS quantity,
+            s.price,
+            s.cost_per_item,
+            LAG(s.on_hand) OVER (PARTITION BY s.product_variant_id ORDER BY s.date) AS prev_quantity
+          FROM inventory_snapshots s
+          WHERE s.date BETWEEN :start_date AND :end_date
+            AND (:store_id IS NULL OR s.store_id = :store_id)
+        ),
+        derived AS (
+          SELECT
+            *,
+            (quantity - prev_quantity) AS quantity_change,
+            (quantity * cost_per_item) AS inventory_value
+          FROM lagged
+        )
+        SELECT
+          product_variant_id,
+          AVG(quantity) AS average_stock_level,
+          MIN(quantity) AS min_stock_level,
+          MAX(quantity) AS max_stock_level,
+          (MAX(quantity) - MIN(quantity)) AS stock_range,
+          STDDEV_SAMP(quantity) AS stock_stddev,
+          COUNT(*) FILTER (WHERE quantity = 0) AS days_out_of_stock,
+          100.0 * COUNT(*) FILTER (WHERE quantity = 0) / NULLIF(COUNT(*), 0) AS stockout_rate,
+          COUNT(*) FILTER (WHERE quantity_change > 0) AS replenishment_days,
+          COUNT(*) FILTER (WHERE quantity_change < 0) AS depletion_days,
+          SUM(GREATEST(prev_quantity - quantity, 0)) AS total_outflow,
+          SUM(GREATEST(prev_quantity - quantity, 0)) / NULLIF(AVG(quantity), 0) AS stock_turnover,
+          COUNT(DISTINCT date) / NULLIF(SUM(GREATEST(prev_quantity - quantity, 0)) / NULLIF(AVG(quantity), 0), 0) AS avg_days_in_inventory,
+          COUNT(*) FILTER (WHERE quantity_change = 0) AS dead_stock_days,
+          100.0 * COUNT(*) FILTER (WHERE quantity_change = 0) / NULLIF(COUNT(*), 0) AS dead_stock_ratio,
+          AVG(inventory_value) AS avg_inventory_value,
+          (1 - (COALESCE(100.0 * COUNT(*) FILTER (WHERE quantity = 0) / NULLIF(COUNT(*), 0), 0)) / 100) * (1 - (COALESCE(100.0 * COUNT(*) FILTER (WHERE quantity_change = 0) / NULLIF(COUNT(*), 0), 0)) / 100) AS stock_health_index
+        FROM derived
+        GROUP BY product_variant_id
+    """)
+
+    # Main query to get the latest snapshot for each variant and join with metrics
+    base_query = (
+        db.query(
+            models.InventorySnapshot,
+            text("m.average_stock_level"), text("m.min_stock_level"), text("m.max_stock_level"),
+            text("m.stock_range"), text("m.stock_stddev"), text("m.days_out_of_stock"),
+            text("m.stockout_rate"), text("m.replenishment_days"), text("m.depletion_days"),
+            text("m.total_outflow"), text("m.stock_turnover"), text("m.avg_days_in_inventory"),
+            text("m.dead_stock_days"), text("m.dead_stock_ratio"), text("m.avg_inventory_value"),
+            text("m.stock_health_index")
+        )
+        .join(
+            db.query(
+                models.InventorySnapshot.product_variant_id,
+                func.max(models.InventorySnapshot.date).label("max_date")
+            )
+            .filter(models.InventorySnapshot.date <= end_date)
+            .group_by(models.InventorySnapshot.product_variant_id)
+            .subquery(),
+            "latest",
+            (models.InventorySnapshot.product_variant_id == text("latest.product_variant_id")) &
+            (models.InventorySnapshot.date == text("latest.max_date"))
+        )
+        .join(
+            metrics_cte.cte("metrics"),
+            text("metrics.product_variant_id = inventory_snapshots.product_variant_id"),
+            isouter=True
+        )
+        .options(
+            joinedload(models.InventorySnapshot.product_variant).joinedload(models.ProductVariant.product)
+        )
     )
 
     if store_id:
-        query = query.filter(models.InventorySnapshot.store_id == store_id)
-    if date:
-        query = query.filter(models.InventorySnapshot.date == date)
+        base_query = base_query.filter(models.InventorySnapshot.store_id == store_id)
 
-    total_count = query.count()
-    snapshots = query.order_by(models.InventorySnapshot.date.desc(), models.InventorySnapshot.id).offset(skip).limit(limit).all()
-
-    return snapshots, total_count
-
-
-def get_snapshot_metrics(db: Session, variant_id: int, start_date: date, end_date: date) -> Optional[Dict[str, Any]]:
-    """
-    Calculates advanced inventory metrics for a specific product variant
-    over a date range using a raw SQL query for performance.
-    """
+    total_count = base_query.count()
+    results = base_query.order_by(models.InventorySnapshot.date.desc()).offset(skip).limit(limit).all()
     
-    sql_query = text("""
-    WITH lagged AS (
-      SELECT
-        s.date,
-        s.on_hand AS quantity,
-        s.price,
-        s.cost_per_item,
-        LAG(s.on_hand) OVER (PARTITION BY s.product_variant_id ORDER BY s.date) AS prev_quantity
-      FROM inventory_snapshots s
-      WHERE s.product_variant_id = :variant_id AND s.date BETWEEN :start_date AND :end_date
-    ),
-    derived AS (
-      SELECT
-        *,
-        (quantity - prev_quantity) AS quantity_change,
-        (quantity * cost_per_item) AS inventory_value,
-        (quantity * price) AS sales_value,
-        ((price - cost_per_item) * quantity) AS gross_margin_value
-      FROM lagged
-    )
-    SELECT
-      AVG(quantity) AS average_stock_level,
-      MIN(quantity) AS min_stock_level,
-      MAX(quantity) AS max_stock_level,
-      (MAX(quantity) - MIN(quantity)) AS stock_range,
-      STDDEV_SAMP(quantity) AS stock_stddev,
-      COUNT(*) FILTER (WHERE quantity = 0) AS days_out_of_stock,
-      100.0 * COUNT(*) FILTER (WHERE quantity = 0) / NULLIF(COUNT(*), 0) AS stockout_rate,
-      COUNT(*) FILTER (WHERE quantity_change > 0) AS replenishment_days,
-      COUNT(*) FILTER (WHERE quantity_change < 0) AS depletion_days,
-      SUM(GREATEST(prev_quantity - quantity, 0)) AS total_outflow,
-      SUM(GREATEST(prev_quantity - quantity, 0)) / NULLIF(AVG(quantity), 0) AS stock_turnover,
-      COUNT(DISTINCT date) / NULLIF(SUM(GREATEST(prev_quantity - quantity, 0)) / NULLIF(AVG(quantity), 0), 0) AS avg_days_in_inventory,
-      COUNT(*) FILTER (WHERE quantity_change = 0) AS dead_stock_days,
-      100.0 * COUNT(*) FILTER (WHERE quantity_change = 0) / NULLIF(COUNT(*), 0) AS dead_stock_ratio,
-      AVG(inventory_value) AS avg_inventory_value,
-      AVG(sales_value) AS avg_sales_value,
-      AVG(gross_margin_value) AS avg_gross_margin_value,
-      100.0 * AVG(CASE WHEN prev_quantity IS NOT NULL AND prev_quantity != 0 THEN (CASE WHEN ABS((quantity - prev_quantity) / prev_quantity) < 0.05 THEN 1 ELSE 0 END) ELSE 0 END) AS stability_index,
-      (1 - (COALESCE(100.0 * COUNT(*) FILTER (WHERE quantity = 0) / NULLIF(COUNT(*), 0), 0)) / 100) * (1 - (COALESCE(100.0 * COUNT(*) FILTER (WHERE quantity_change = 0) / NULLIF(COUNT(*), 0), 0)) / 100) AS stock_health_index
-    FROM derived;
-    """)
+    # Combine the ORM object and the raw metric columns into a list of dicts
+    data = []
+    for row in results:
+        snapshot = row[0]
+        metrics = {
+            "average_stock_level": row[1], "min_stock_level": row[2], "max_stock_level": row[3],
+            "stock_range": row[4], "stock_stddev": row[5], "days_out_of_stock": row[6],
+            "stockout_rate": row[7], "replenishment_days": row[8], "depletion_days": row[9],
+            "total_outflow": row[10], "stock_turnover": row[11], "avg_days_in_inventory": row[12],
+            "dead_stock_days": row[13], "dead_stock_ratio": row[14], "avg_inventory_value": row[15],
+            "stock_health_index": row[16],
+        }
+        # Attach metrics to the snapshot object for the schema
+        snapshot.metrics = metrics
+        data.append(snapshot)
 
-    result = db.execute(sql_query, {
-        "variant_id": variant_id,
-        "start_date": start_date,
-        "end_date": end_date
-    }).fetchone()
-
-    if result and result._mapping:
-        return dict(result._mapping)
-    return None
+    return data, total_count
