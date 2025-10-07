@@ -4,7 +4,7 @@
 <div class="container">
     <hgroup>
         <h1>Inventory Snapshots</h1>
-        <h2>Review historical end-of-day stock levels.</h2>
+        <h2>Review historical end-of-day stock levels and performance metrics.</h2>
     </hgroup>
 
     <article>
@@ -26,6 +26,18 @@
         <span id="page-indicator">Page 1 of 1</span>
         <button id="next-button" disabled>Next</button>
     </div>
+
+    <dialog id="metrics-modal">
+        <article>
+            <header>
+                <button class="close" aria-label="Close"></button>
+                <strong id="modal-title">Inventory Metrics</strong>
+            </header>
+            <div id="modal-body" aria-busy="true">
+                <p>Loading metrics...</p>
+            </div>
+        </article>
+    </dialog>
 </div>
 {% endblock %}
 

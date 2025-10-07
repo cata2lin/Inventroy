@@ -1,6 +1,6 @@
 # models.py
 from sqlalchemy import (Column, Integer, String, DateTime, Text,
-                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index, Computed, UniqueConstraint)
+                        ForeignKey, BIGINT, NUMERIC, BOOLEAN, Index, Computed, UniqueConstraint, Date)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from passlib.context import CryptContext
@@ -29,7 +29,6 @@ class Store(Base):
     api_secret = Column(String(255), nullable=True)
     webhook_secret = Column(String(255), nullable=True)
     
-    # --- THIS COLUMN IS NEW ---
     currency = Column(String(10), nullable=False, server_default="RON")
     
     sync_location_id = Column(BIGINT)
@@ -123,10 +122,14 @@ class InventoryLevel(Base):
 class InventorySnapshot(Base):
     __tablename__ = "inventory_snapshots"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    date = Column(DateTime(timezone=True), nullable=False)
+    date = Column(Date, nullable=False)
     product_variant_id = Column(BIGINT, ForeignKey("product_variants.id", ondelete="CASCADE"), nullable=False, index=True)
     store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     on_hand = Column(Integer, nullable=False)
+
+    # --- NEW FIELDS FOR METRICS ---
+    price = Column(NUMERIC(10, 2), nullable=True)
+    cost_per_item = Column(NUMERIC(18, 6), nullable=True)
 
     product_variant = relationship("ProductVariant", back_populates="inventory_snapshots")
     store = relationship("Store", back_populates="inventory_snapshots")
@@ -166,13 +169,7 @@ class Webhook(Base):
     address = Column(String(2048), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-# --- NEW MODELS FOR REAL-TIME SYNC ---
-
 class BarcodeVersion(Base):
-    """
-    Stores the authoritative version and quantity for each barcode.
-    This acts as the central source of truth for inventory levels.
-    """
     __tablename__ = "barcode_versions"
     barcode = Column(String(255), primary_key=True)
     authoritative_store_id = Column(Integer, ForeignKey("stores.id"), nullable=False)
@@ -182,10 +179,6 @@ class BarcodeVersion(Base):
     last_updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
 class WriteIntent(Base):
-    """
-    Records an intent to write a new quantity to a target store.
-    This is used for echo suppression.
-    """
     __tablename__ = "write_intents"
     id = Column(BIGINT, primary_key=True, autoincrement=True)
     barcode = Column(String(255), nullable=False, index=True)
@@ -200,10 +193,6 @@ class WriteIntent(Base):
     )
 
 class ProcessedWebhook(Base):
-    """
-    A short-term cache to record recently processed webhooks to prevent
-    duplicate processing from rapid redeliveries.
-    """
     __tablename__ = "processed_webhooks"
     id = Column(String(255), primary_key=True) # A unique hash of the payload
     received_at = Column(DateTime(timezone=True), server_default=func.now())

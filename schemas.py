@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
-from datetime import datetime, date  # <--- FIX: Added 'date' import
+from datetime import datetime, date
 from pydantic import BaseModel, Field, HttpUrl, ConfigDict, model_validator
 
 # =========================
@@ -25,10 +25,7 @@ class StoreBase(BaseModel):
     name: str
     shopify_url: str
     api_token: str
-    
-    # --- THIS FIELD IS NEW ---
     currency: str = Field("RON", max_length=10)
-    
     api_secret: Optional[str] = None
     webhook_secret: Optional[str] = None
 
@@ -64,7 +61,7 @@ class ProductVariant(ORMBase):
     id: int
     shopify_gid: str
     inventory_item_id: Optional[int] = None
-    inventory_item_gid: Optional[str] = None  # derived below
+    inventory_item_gid: Optional[str] = None
     title: Optional[str] = None
     sku: Optional[str] = None
     barcode: Optional[str] = None
@@ -76,7 +73,6 @@ class ProductVariant(ORMBase):
 
     @model_validator(mode="after")
     def _derive_inventory_item_gid(self):
-        # If server returns only legacy numeric id, synthesize the GID for UI mutations.
         if not self.inventory_item_gid and self.inventory_item_id:
             self.inventory_item_gid = f"gid://shopify/InventoryItem/{self.inventory_item_id}"
         return self
@@ -95,21 +91,44 @@ class ProductResponse(BaseModel):
     total_count: int
     products: List[Product]
 
-# --- Schemas for Inventory Snapshots (from your added code) ---
+# --- Schemas for Inventory Snapshots ---
+
 class InventorySnapshot(ORMBase):
     id: int
     date: date
     product_variant_id: int
     store_id: int
     on_hand: int
-    product_variant: ProductVariant # Reuse existing variant schema
+    product_variant: ProductVariant
 
 class InventorySnapshotResponse(BaseModel):
     total_count: int
     snapshots: List[InventorySnapshot]
 
+# --- NEW SCHEMA FOR SNAPSHOT METRICS ---
+class SnapshotMetrics(BaseModel):
+    average_stock_level: Optional[float] = None
+    min_stock_level: Optional[float] = None
+    max_stock_level: Optional[float] = None
+    stock_range: Optional[float] = None
+    stock_stddev: Optional[float] = None
+    days_out_of_stock: Optional[int] = None
+    stockout_rate: Optional[float] = None
+    replenishment_days: Optional[int] = None
+    depletion_days: Optional[int] = None
+    total_outflow: Optional[float] = None
+    stock_turnover: Optional[float] = None
+    avg_days_in_inventory: Optional[float] = None
+    dead_stock_days: Optional[int] = None
+    dead_stock_ratio: Optional[float] = None
+    avg_inventory_value: Optional[float] = None
+    avg_sales_value: Optional[float] = None
+    avg_gross_margin_value: Optional[float] = None
+    stability_index: Optional[float] = None
+    stock_health_index: Optional[float] = None
+
 # ======================================================
-# Shopify GraphQL Ingest Models (from previous working version)
+# Shopify GraphQL Ingest Models
 # ======================================================
 
 class Money(APIBase):
@@ -197,9 +216,6 @@ class ShopifyOrder(APIBase):
     line_items: Optional[List[LineItemModel]] = Field(None, alias="lineItems")
     fulfillments: Optional[List[FulfillmentModel]] = None
 
-
 # --- FIX FOR FORWARD REFERENCES ---
-# This tells Pydantic to resolve the nested model references now that all
-# classes have been defined, fixing the "not fully defined" error.
 InventorySnapshot.model_rebuild()
 InventorySnapshotResponse.model_rebuild()

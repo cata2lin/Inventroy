@@ -8,6 +8,9 @@ document.addEventListener('DOMContentLoaded', () => {
         prevButton: document.getElementById('prev-button'),
         nextButton: document.getElementById('next-button'),
         pageIndicator: document.getElementById('page-indicator'),
+        modal: document.getElementById('metrics-modal'),
+        modalTitle: document.getElementById('modal-title'),
+        modalBody: document.getElementById('modal-body'),
     };
 
     let state = {
@@ -63,10 +66,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 </td>
                 <td>
                     <strong>${s.product_variant.product.title}</strong><br>
-                    <small>${s.product_variant.title}</small>
+                    <small>${s.product_variant.title} (ID: ${s.product_variant.id})</small>
                 </td>
                 <td><code>${s.product_variant.sku || 'N/A'}</code></td>
                 <td>${s.on_hand}</td>
+                <td>
+                    <button class="outline" data-variant-id="${s.product_variant.id}" data-product-title="${s.product_variant.product.title}">View Metrics</button>
+                </td>
             </tr>
         `).join('');
 
@@ -79,6 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <th>Product</th>
                         <th>SKU</th>
                         <th>On Hand</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>${tableRows}</tbody>
@@ -103,6 +110,80 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('Failed to load stores for filter.');
         }
+    };
+    
+    const fetchAndShowMetrics = async (variantId, productTitle) => {
+        elements.modalTitle.textContent = `Metrics for: ${productTitle}`;
+        elements.modalBody.setAttribute('aria-busy', 'true');
+        elements.modalBody.innerHTML = '<p>Loading metrics...</p>';
+        elements.modal.showModal();
+
+        try {
+            const endDate = new Date().toISOString().split('T')[0];
+            const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+            const response = await fetch(`/api/snapshots/metrics/${variantId}?start_date=${startDate}&end_date=${endDate}`);
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.detail || 'Failed to fetch metrics.');
+            }
+            const metrics = await response.json();
+            renderMetrics(metrics);
+        } catch (error) {
+            elements.modalBody.innerHTML = `<p style="color:red;">${error.message}</p>`;
+        } finally {
+            elements.modalBody.removeAttribute('aria-busy');
+        }
+    };
+
+    const formatMetric = (value, decimals = 2, unit = '') => {
+        if (value === null || value === undefined) return 'N/A';
+        return `${parseFloat(value).toFixed(decimals)}${unit}`;
+    };
+
+    const renderMetrics = (metrics) => {
+        elements.modalBody.innerHTML = `
+            <div class="grid">
+                <article>
+                    <header><strong>Stock Levels</strong></header>
+                    <p><strong>Avg Stock:</strong> ${formatMetric(metrics.average_stock_level)} units</p>
+                    <p><strong>Min Stock:</strong> ${formatMetric(metrics.min_stock_level, 0)} units</p>
+                    <p><strong>Max Stock:</strong> ${formatMetric(metrics.max_stock_level, 0)} units</p>
+                    <p><strong>Stock Range:</strong> ${formatMetric(metrics.stock_range, 0)} units</p>
+                    <p><strong>Std Deviation:</strong> ${formatMetric(metrics.stock_stddev)}</p>
+                </article>
+                <article>
+                    <header><strong>Availability</strong></header>
+                    <p><strong>Days Out of Stock:</strong> ${metrics.days_out_of_stock}</p>
+                    <p><strong>Stockout Rate:</strong> ${formatMetric(metrics.stockout_rate, 2, '%')}</p>
+                    <p><strong>Health Index:</strong> ${formatMetric(metrics.stock_health_index * 100, 2, '%')}</p>
+                    <p><strong>Stability Index:</strong> ${formatMetric(metrics.stability_index, 2, '%')}</p>
+                </article>
+            </div>
+            <div class="grid">
+                <article>
+                    <header><strong>Movement</strong></header>
+                    <p><strong>Replenishment Days:</strong> ${metrics.replenishment_days}</p>
+                    <p><strong>Depletion Days:</strong> ${metrics.depletion_days}</p>
+                    <p><strong>Total Outflow (Sold):</strong> ${formatMetric(metrics.total_outflow, 0)} units</p>
+                    <p><strong>Stock Turnover:</strong> ${formatMetric(metrics.stock_turnover)}</p>
+                    <p><strong>Avg Days in Inventory:</strong> ${formatMetric(metrics.avg_days_in_inventory)}</p>
+                </article>
+                <article>
+                    <header><strong>Stagnation</strong></header>
+                    <p><strong>Dead Stock Days:</strong> ${metrics.dead_stock_days}</p>
+                    <p><strong>Dead Stock Ratio:</strong> ${formatMetric(metrics.dead_stock_ratio, 2, '%')}</p>
+                </article>
+            </div>
+             <div class="grid">
+                <article>
+                    <header><strong>Financials (Avg)</strong></header>
+                    <p><strong>Inventory Value:</strong> ${formatMetric(metrics.avg_inventory_value)} RON</p>
+                    <p><strong>Potential Sales Value:</strong> ${formatMetric(metrics.avg_sales_value)} RON</p>
+                    <p><strong>Potential Gross Margin:</strong> ${formatMetric(metrics.avg_gross_margin_value)} RON</p>
+                </article>
+            </div>
+        `;
     };
 
     elements.dateFilter.addEventListener('change', () => {
@@ -143,6 +224,20 @@ document.addEventListener('DOMContentLoaded', () => {
             alert(`Error: ${error.message}`);
         } finally {
             elements.triggerBtn.removeAttribute('aria-busy');
+        }
+    });
+    
+    elements.container.addEventListener('click', (e) => {
+        if (e.target.matches('button[data-variant-id]')) {
+            const variantId = e.target.dataset.variantId;
+            const productTitle = e.target.dataset.productTitle;
+            fetchAndShowMetrics(variantId, productTitle);
+        }
+    });
+
+    elements.modal.addEventListener('click', (e) => {
+        if (e.target.matches('.close') || e.target === elements.modal) {
+            elements.modal.close();
         }
     });
 
