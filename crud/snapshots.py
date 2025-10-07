@@ -3,7 +3,7 @@ from datetime import datetime, date, timedelta
 from typing import List, Optional, Tuple, Dict, Any
 
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import text, func
+from sqlalchemy import text, func, select, literal_column
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import models
@@ -13,7 +13,7 @@ def create_snapshot_for_store(db: Session, store_id: int):
     Creates a snapshot of all current inventory levels for a given store,
     including price and cost at the time of the snapshot.
     """
-    now = datetime.now(date.today().tzinfo)
+    now = datetime.now(timezone.utc)
 
     inventory_data = (
         db.query(
@@ -75,9 +75,9 @@ def get_snapshots_with_metrics(
         start_date = end_date - timedelta(days=30)
 
     # --- THIS IS THE CORRECTED SYNTAX ---
-    # Define the raw SQL for the metrics CTE
-    metrics_sql = text("""
-        WITH lagged AS (
+    # The raw SQL text is aliased as a subquery, which can then be used in joins.
+    metrics_subquery = text("""
+        (WITH lagged AS (
           SELECT
             s.product_variant_id,
             s.date,
@@ -115,11 +115,8 @@ def get_snapshots_with_metrics(
           AVG(inventory_value) AS avg_inventory_value,
           (1 - (COALESCE(100.0 * COUNT(*) FILTER (WHERE quantity = 0) / NULLIF(COUNT(*), 0), 0)) / 100) * (1 - (COALESCE(100.0 * COUNT(*) FILTER (WHERE quantity_change = 0) / NULLIF(COUNT(*), 0), 0)) / 100) AS stock_health_index
         FROM derived
-        GROUP BY product_variant_id
+        GROUP BY product_variant_id) AS metrics
     """)
-    # Create the CTE object correctly
-    metrics_cte = metrics_sql.cte("metrics")
-
 
     latest_snapshot_subquery = (
         db.query(
@@ -131,15 +128,26 @@ def get_snapshots_with_metrics(
         .subquery("latest")
     )
 
+    # Construct the final query by joining the main table with the subqueries
     base_query = (
         db.query(
             models.InventorySnapshot,
-            metrics_cte.c.average_stock_level, metrics_cte.c.min_stock_level, metrics_cte.c.max_stock_level,
-            metrics_cte.c.stock_range, metrics_cte.c.stock_stddev, metrics_cte.c.days_out_of_stock,
-            metrics_cte.c.stockout_rate, metrics_cte.c.replenishment_days, metrics_cte.c.depletion_days,
-            metrics_cte.c.total_outflow, metrics_cte.c.stock_turnover, metrics_cte.c.avg_days_in_inventory,
-            metrics_cte.c.dead_stock_days, metrics_cte.c.dead_stock_ratio, metrics_cte.c.avg_inventory_value,
-            metrics_cte.c.stock_health_index
+            literal_column("metrics.average_stock_level"),
+            literal_column("metrics.min_stock_level"),
+            literal_column("metrics.max_stock_level"),
+            literal_column("metrics.stock_range"),
+            literal_column("metrics.stock_stddev"),
+            literal_column("metrics.days_out_of_stock"),
+            literal_column("metrics.stockout_rate"),
+            literal_column("metrics.replenishment_days"),
+            literal_column("metrics.depletion_days"),
+            literal_column("metrics.total_outflow"),
+            literal_column("metrics.stock_turnover"),
+            literal_column("metrics.avg_days_in_inventory"),
+            literal_column("metrics.dead_stock_days"),
+            literal_column("metrics.dead_stock_ratio"),
+            literal_column("metrics.avg_inventory_value"),
+            literal_column("metrics.stock_health_index")
         )
         .join(
             latest_snapshot_subquery,
@@ -147,8 +155,8 @@ def get_snapshots_with_metrics(
             (models.InventorySnapshot.date == latest_snapshot_subquery.c.max_date)
         )
         .outerjoin(
-            metrics_cte,
-            metrics_cte.c.product_variant_id == models.InventorySnapshot.product_variant_id
+            text(str(metrics_subquery)), # Use the text representation of the subquery in the join
+            text("metrics.product_variant_id = inventory_snapshots.product_variant_id")
         )
         .options(
             joinedload(models.InventorySnapshot.product_variant).joinedload(models.ProductVariant.product)
@@ -158,15 +166,15 @@ def get_snapshots_with_metrics(
     if store_id:
         base_query = base_query.filter(models.InventorySnapshot.store_id == store_id)
 
-    # Bind parameters before counting
-    count_query = base_query.params(
-        start_date=start_date,
-        end_date=end_date,
-        store_id=store_id
-    )
-    total_count = count_query.count()
-
-    results = count_query.order_by(models.InventorySnapshot.date.desc()).offset(skip).limit(limit).all()
+    # Bind parameters for execution
+    query_params = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "store_id": store_id
+    }
+    
+    total_count = base_query.params(**query_params).count()
+    results = base_query.params(**query_params).order_by(models.InventorySnapshot.date.desc()).offset(skip).limit(limit).all()
     
     data = []
     for row in results:
