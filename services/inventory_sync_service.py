@@ -32,11 +32,8 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
     db: Session = SessionLocal()
     
     inventory_item_id = payload.get("inventory_item_id")
-    # --- THIS IS THE CRITICAL FIX ---
-    # We must use the 'available' quantity from the webhook payload itself as the source of truth.
     authoritative_quantity = payload.get("available")
     
-    # If the quantity is missing from the payload, we cannot proceed.
     if authoritative_quantity is None:
         print(f"[SYNC-ERROR] Webhook is missing 'available' quantity for inventory_item_id {inventory_item_id}")
         db.close()
@@ -62,7 +59,6 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
         return
 
     try:
-        # The 'total' for duplicate and echo checks MUST be the new value from the payload.
         if _is_duplicate_webhook(db, store_id, barcode, authoritative_quantity, source_timestamp):
             print(f"[SYNC] Ignored: Duplicate webhook for {barcode} at store {store_id}.")
             return
@@ -76,26 +72,37 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
             print(f"[SYNC] Ignored: Stale event for {barcode} from store {store_id}.")
             return
             
+        # 1. Update the authoritative version (the master record for the barcode)
         _update_authoritative_version(db, barcode, store_id, authoritative_quantity, source_timestamp)
-        
-        target_stores = _get_propagation_targets(db, barcode, store_id)
-        if not target_stores:
-            # Still update the local DB for the single store even if not propagating
-            print(f"[SYNC] No propagation needed for {barcode}, updating local DB for source store.")
+
+        # 2. --- THIS IS THE CRITICAL FIX ---
+        #    Immediately update the local database for the SOURCE store. This ensures
+        #    the change that triggered the webhook is always saved locally.
+        source_location_id = payload.get("location_id")
+        if source_location_id:
+            print(f"[DB-UPDATE] Saving incoming change for source store {store_id}, barcode {barcode}.")
             crud_product.update_inventory_levels_for_variants(
-                db, 
-                variant_ids=[variant.id], 
-                location_id=payload.get("location_id"), # Assuming location_id is in payload
+                db,
+                variant_ids=[variant.id],
+                location_id=source_location_id,
                 new_quantity=authoritative_quantity
             )
-            return
+        else:
+             print(f"[SYNC-WARN] No location_id in webhook payload for inventory_item_id {inventory_item_id}. Cannot update source DB.")
+
+        # 3. Find OTHER stores to propagate the change to.
+        target_stores = _get_propagation_targets(db, barcode, store_id)
+        
+        # 4. If other stores exist, propagate the change.
+        if target_stores:
+            barcode_version_obj = db.query(models.BarcodeVersion).filter(models.BarcodeVersion.barcode == barcode).one()
+            _create_write_intents(db, barcode, authoritative_quantity, barcode_version_obj.version, target_stores)
             
-        barcode_version_obj = db.query(models.BarcodeVersion).filter(models.BarcodeVersion.barcode == barcode).one()
-        _create_write_intents(db, barcode, authoritative_quantity, barcode_version_obj.version, target_stores)
-        
-        print(f"[SYNC] Propagating '{barcode}' to {len(target_stores)} target stores with quantity {authoritative_quantity}.")
-        
-        _execute_propagation(db, barcode, authoritative_quantity, target_stores)
+            print(f"[SYNC] Propagating '{barcode}' to {len(target_stores)} target stores with quantity {authoritative_quantity}.")
+            _execute_propagation(db, barcode, authoritative_quantity, target_stores)
+        else:
+            print(f"[SYNC] No other stores to propagate to for barcode {barcode}.")
+
 
     finally:
         lock.release()
@@ -107,8 +114,6 @@ def handle_catalog_webhook(store_id: int, topic: str, payload: Dict[str, Any]):
         if topic == "products/create":
             crud_product.create_or_update_product_from_webhook(db, store_id, payload)
         elif topic == "products/update":
-            # --- THIS IS THE CRITICAL CHANGE ---
-            # Use the 'patch' function for updates to avoid data loss from partial payloads.
             crud_product.patch_product_from_webhook(db, store_id, payload)
         elif topic == "products/delete":
             crud_product.delete_product_from_webhook(db, payload)
