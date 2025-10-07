@@ -69,7 +69,7 @@ def get_snapshots_with_metrics(
     end_date: Optional[date] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """
-    Calculates all snapshots and their corresponding metrics using a two-step query for robustness.
+    Calculates all snapshots and their corresponding metrics using a robust two-step query.
     """
     if end_date is None:
         end_date = date.today()
