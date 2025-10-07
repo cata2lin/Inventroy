@@ -3,7 +3,8 @@ from datetime import datetime, date, timedelta, timezone
 from typing import List, Optional, Tuple, Dict, Any
 
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import text, func, literal_column
+from sqlalchemy import text, func
+
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import models
@@ -68,13 +69,14 @@ def get_snapshots_with_metrics(
     end_date: Optional[date] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """
-    Calculates all snapshots and their corresponding metrics in a single, efficient query.
+    Calculates all snapshots and their corresponding metrics using a two-step query for robustness.
     """
     if end_date is None:
         end_date = date.today()
     if start_date is None:
         start_date = end_date - timedelta(days=30)
 
+    # Step 1: Execute the raw SQL for all metrics and load into a dictionary.
     metrics_sql = text("""
         WITH lagged AS (
           SELECT
@@ -120,12 +122,10 @@ def get_snapshots_with_metrics(
     """)
 
     query_params = {"start_date": start_date, "end_date": end_date, "store_id": store_id}
-
-    # Execute the raw SQL and convert to dictionary keyed by variant_id
     metrics_result = db.execute(metrics_sql, query_params).mappings().all()
     metrics_by_variant = {row["product_variant_id"]: dict(row) for row in metrics_result}
 
-    # Latest snapshot per variant
+    # Step 2: Get the latest snapshot for each variant using a clean ORM query.
     latest_snapshot_subquery = (
         db.query(
             models.InventorySnapshot.product_variant_id,
@@ -155,7 +155,7 @@ def get_snapshots_with_metrics(
     total_count = base_query.count()
     results = base_query.order_by(models.InventorySnapshot.date.desc()).offset(skip).limit(limit).all()
 
-    # Attach metrics
+    # Step 3: Attach the pre-calculated metrics to the snapshot objects.
     for snapshot in results:
         snapshot.metrics = metrics_by_variant.get(snapshot.product_variant_id, {})
 
