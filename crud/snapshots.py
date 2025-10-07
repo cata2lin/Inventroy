@@ -1,4 +1,3 @@
-```python
 # crud/snapshots.py
 from datetime import datetime, date, timedelta, timezone
 from typing import List, Optional, Tuple, Dict, Any
