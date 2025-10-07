@@ -3,7 +3,7 @@ from datetime import datetime, date, timedelta
 from typing import List, Optional, Tuple, Dict, Any
 
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import text, func, select, literal_column
+from sqlalchemy import text, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import models
@@ -74,8 +74,8 @@ def get_snapshots_with_metrics(
     if start_date is None:
         start_date = end_date - timedelta(days=30)
 
-    # This is a raw SQL string for the complex metrics calculation.
-    # It is wrapped in a subquery below.
+    # --- THIS IS THE CORRECTED SYNTAX ---
+    # Define the raw SQL for the metrics CTE
     metrics_sql = text("""
         WITH lagged AS (
           SELECT
@@ -117,24 +117,8 @@ def get_snapshots_with_metrics(
         FROM derived
         GROUP BY product_variant_id
     """)
-
-    # --- THIS IS THE CORRECTED SYNTAX ---
-    # Create a subquery from the raw SQL text statement
-    metrics_subquery = db.query(
-        literal_column("product_variant_id"),
-        literal_column("average_stock_level"), literal_column("min_stock_level"),
-        literal_column("max_stock_level"), literal_column("stock_range"),
-        literal_column("stock_stddev"), literal_column("days_out_of_stock"),
-        literal_column("stockout_rate"), literal_column("replenishment_days"),
-        literal_column("depletion_days"), literal_column("total_outflow"),
-        literal_column("stock_turnover"), literal_column("avg_days_in_inventory"),
-        literal_column("dead_stock_days"), literal_column("dead_stock_ratio"),
-        literal_column("avg_inventory_value"), literal_column("stock_health_index")
-    ).from_statement(metrics_sql).params(
-        start_date=start_date,
-        end_date=end_date,
-        store_id=store_id
-    ).subquery("metrics")
+    # Create the CTE object correctly
+    metrics_cte = metrics_sql.cte("metrics")
 
 
     latest_snapshot_subquery = (
@@ -150,14 +134,12 @@ def get_snapshots_with_metrics(
     base_query = (
         db.query(
             models.InventorySnapshot,
-            metrics_subquery.c.average_stock_level, metrics_subquery.c.min_stock_level,
-            metrics_subquery.c.max_stock_level, metrics_subquery.c.stock_range,
-            metrics_subquery.c.stock_stddev, metrics_subquery.c.days_out_of_stock,
-            metrics_subquery.c.stockout_rate, metrics_subquery.c.replenishment_days,
-            metrics_subquery.c.depletion_days, metrics_subquery.c.total_outflow,
-            metrics_subquery.c.stock_turnover, metrics_subquery.c.avg_days_in_inventory,
-            metrics_subquery.c.dead_stock_days, metrics_subquery.c.dead_stock_ratio,
-            metrics_subquery.c.avg_inventory_value, metrics_subquery.c.stock_health_index
+            metrics_cte.c.average_stock_level, metrics_cte.c.min_stock_level, metrics_cte.c.max_stock_level,
+            metrics_cte.c.stock_range, metrics_cte.c.stock_stddev, metrics_cte.c.days_out_of_stock,
+            metrics_cte.c.stockout_rate, metrics_cte.c.replenishment_days, metrics_cte.c.depletion_days,
+            metrics_cte.c.total_outflow, metrics_cte.c.stock_turnover, metrics_cte.c.avg_days_in_inventory,
+            metrics_cte.c.dead_stock_days, metrics_cte.c.dead_stock_ratio, metrics_cte.c.avg_inventory_value,
+            metrics_cte.c.stock_health_index
         )
         .join(
             latest_snapshot_subquery,
@@ -165,8 +147,8 @@ def get_snapshots_with_metrics(
             (models.InventorySnapshot.date == latest_snapshot_subquery.c.max_date)
         )
         .outerjoin(
-            metrics_subquery,
-            metrics_subquery.c.product_variant_id == models.InventorySnapshot.product_variant_id
+            metrics_cte,
+            metrics_cte.c.product_variant_id == models.InventorySnapshot.product_variant_id
         )
         .options(
             joinedload(models.InventorySnapshot.product_variant).joinedload(models.ProductVariant.product)
@@ -176,8 +158,15 @@ def get_snapshots_with_metrics(
     if store_id:
         base_query = base_query.filter(models.InventorySnapshot.store_id == store_id)
 
-    total_count = base_query.count()
-    results = base_query.order_by(models.InventorySnapshot.date.desc()).offset(skip).limit(limit).all()
+    # Bind parameters before counting
+    count_query = base_query.params(
+        start_date=start_date,
+        end_date=end_date,
+        store_id=store_id
+    )
+    total_count = count_query.count()
+
+    results = count_query.order_by(models.InventorySnapshot.date.desc()).offset(skip).limit(limit).all()
     
     data = []
     for row in results:
