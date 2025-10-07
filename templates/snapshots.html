@@ -4,56 +4,85 @@
 <div class="container">
     <hgroup>
         <h1>Inventory Analytics</h1>
-        <h2>Review historical stock levels and performance metrics.</h2>
+        <h2>Review historical stock levels and performance metrics</h2>
     </hgroup>
 
-    <article>
+    <!-- Filters -->
+    <article class="filters">
         <header><strong>Filters</strong></header>
-        <div class="grid">
-            <label for="start-date-filter">
+        <div class="grid grid-cols-3 gap-4 mb-4">
+            <label>
                 Start Date
                 <input type="date" id="start-date-filter">
             </label>
-            <label for="end-date-filter">
+            <label>
                 End Date
                 <input type="date" id="end-date-filter">
             </label>
-            <label for="store-filter">
+            <label>
                 Store
                 <select id="store-filter">
                     <option value="">All Stores</option>
                 </select>
             </label>
         </div>
-        <button id="trigger-snapshot-btn" class="secondary outline">Trigger Snapshot Now</button>
+
+        <div class="grid grid-cols-3 gap-4 mb-4" id="metric-filters">
+            <!-- Metric filters will be dynamically generated here -->
+        </div>
+
+        <button id="trigger-snapshot-btn" class="secondary outline mb-4">Trigger Snapshot Now</button>
     </article>
 
-    <div id="snapshots-container" aria-busy="true">
-        <p>Loading analytics...</p>
+    <!-- Table -->
+    <div class="table-container overflow-auto">
+        <table id="snapshots-table" class="w-full border-collapse">
+            <thead id="table-head">
+                <tr>
+                    <th>Product</th>
+                    <th data-sort="on_hand" class="sortable">Stoc Curent</th>
+                    <th data-sort="average_stock_level" class="sortable">Stoc Mediu</th>
+                    <th data-sort="min_stock_level" class="sortable">Stoc Min/Max</th>
+                    <th data-sort="stock_range" class="sortable">Variație Stoc</th>
+                    <th data-sort="days_out_of_stock" class="sortable">Zile Fără Stoc</th>
+                    <th data-sort="stockout_rate" class="sortable">Rată Epuizare</th>
+                    <th data-sort="stock_turnover" class="sortable">Rulaj Stoc</th>
+                    <th data-sort="avg_days_in_inventory" class="sortable">Zile Medii Stoc</th>
+                    <th data-sort="dead_stock_days" class="sortable">Zile Stoc Mort</th>
+                    <th data-sort="dead_stock_ratio" class="sortable">Rată Stoc Mort</th>
+                    <th data-sort="avg_inventory_value" class="sortable">Valoare Medie</th>
+                    <th data-sort="stock_health_index" class="sortable">Index Sănătate</th>
+                </tr>
+            </thead>
+            <tbody id="snapshots-container">
+                <tr><td colspan="13" class="text-center">Loading analytics...</td></tr>
+            </tbody>
+        </table>
     </div>
 
-    <div class="pagination-controls grid">
+    <!-- Pagination -->
+    <div class="pagination-controls grid grid-cols-3 gap-4 mt-4">
         <button id="prev-button" disabled>Previous</button>
         <span id="page-indicator">Page 1 of 1</span>
         <button id="next-button" disabled>Next</button>
     </div>
-    
-    <details>
+
+    <!-- Legend -->
+    <details class="mt-6">
         <summary>Legendă Metrică (Explicații)</summary>
         <article>
-            <p>Această secțiune explică semnificația fiecărui indicator de performanță (metrică) din tabelul de mai sus.</p>
             <ul>
-                <li><strong>Stoc Mediu (buc):</strong> Cantitatea medie de produse deținute în stoc în perioada selectată. <em>Calcul: AVG(cantitate)</em></li>
-                <li><strong>Stoc Min/Max (buc):</strong> Cea mai mică și cea mai mare cantitate înregistrată în stoc în perioada selectată. <em>Calcul: MIN(cantitate), MAX(cantitate)</em></li>
-                <li><strong>Variație Stoc (buc):</strong> Diferența dintre stocul maxim și cel minim, indicând fluctuația stocului. <em>Calcul: MAX(cantitate) - MIN(cantitate)</em></li>
-                <li><strong>Zile Fără Stoc:</strong> Numărul total de zile în care produsul a avut stoc zero. <em>Calcul: COUNT(*) WHERE cantitate = 0</em></li>
-                <li><strong>Rată Stoc Epuizat (%):</strong> Procentajul de timp în care produsul nu a fost disponibil pentru vânzare. <em>Calcul: (Zile Fără Stoc / Total Zile) * 100</em></li>
-                <li><strong>Rulaj Stoc:</strong> De câte ori stocul a fost vândut și înlocuit complet în perioada selectată. O valoare mai mare indică o viteză de vânzare bună. <em>Calcul: Total Ieșiri / Stoc Mediu</em></li>
-                <li><strong>Zile Medii în Stoc:</strong> Numărul mediu de zile necesare pentru a vinde întregul stoc. O valoare mai mică este de preferat. <em>Calcul: Total Zile / Rulaj Stoc</em></li>
-                <li><strong>Zile Stoc Mort:</strong> Numărul de zile în care cantitatea în stoc nu s-a schimbat, indicând lipsa de mișcare. <em>Calcul: COUNT(*) WHERE schimbare_cantitate = 0</em></li>
-                <li><strong>Rată Stoc Mort (%):</strong> Procentajul de zile în care produsul nu a avut nicio mișcare (nici vânzare, nici aprovizionare). <em>Calcul: (Zile Stoc Mort / Total Zile) * 100</em></li>
-                <li><strong>Valoare Medie Stoc (RON):</strong> Valoarea medie a stocului deținut, calculată la prețul de cost. <em>Calcul: AVG(cantitate * preț_de_cost)</em></li>
-                <li><strong>Index Sănătate Stoc (%):</strong> Un indicator compozit care măsoară sănătatea generală a stocului. O valoare apropiată de 100% este ideală. <em>Calcul: (1 - Rată Stoc Epuizat) * (1 - Rată Stoc Mort)</em></li>
+                <li><strong>Stoc Mediu (buc):</strong> Cantitatea medie în perioada selectată.</li>
+                <li><strong>Stoc Min/Max (buc):</strong> Valori minime și maxime.</li>
+                <li><strong>Variație Stoc (buc):</strong> Diferența dintre min și max.</li>
+                <li><strong>Zile Fără Stoc:</strong> Zile în care produsul a avut stoc zero.</li>
+                <li><strong>Rată Epuizare (%):</strong> Procentajul timpului fără stoc.</li>
+                <li><strong>Rulaj Stoc:</strong> De câte ori stocul a fost vândut și reumplut.</li>
+                <li><strong>Zile Medii Stoc:</strong> Zile medii necesare pentru a vinde întregul stoc.</li>
+                <li><strong>Zile Stoc Mort:</strong> Zile fără schimbare în stoc.</li>
+                <li><strong>Rată Stoc Mort (%):</strong> Procentaj zile fără mișcare.</li>
+                <li><strong>Valoare Medie (RON):</strong> Valoarea medie a stocului la preț de cost.</li>
+                <li><strong>Index Sănătate (%):</strong> Indicator compozit al sănătății stocului.</li>
             </ul>
         </article>
     </details>

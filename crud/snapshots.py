@@ -4,17 +4,12 @@ from typing import List, Optional, Tuple, Dict, Any
 
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text, func
-
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import models
 
 
 def create_snapshot_for_store(db: Session, store_id: int):
-    """
-    Creates a snapshot of all current inventory levels for a given store,
-    including price and cost at the time of the snapshot.
-    """
     now = datetime.now(timezone.utc)
 
     inventory_data = (
@@ -67,16 +62,13 @@ def get_snapshots_with_metrics(
     store_id: Optional[int] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-) -> Tuple[List[Dict[str, Any]], int]:
-    """
-    Calculates all snapshots and their corresponding metrics using a robust two-step query.
-    """
+) -> Dict[str, Any]:
     if end_date is None:
         end_date = date.today()
     if start_date is None:
         start_date = end_date - timedelta(days=30)
 
-    # Step 1: Execute the raw SQL for all metrics and load into a dictionary.
+    # Step 1: Calculate metrics
     metrics_sql = text("""
         WITH lagged AS (
           SELECT
@@ -121,11 +113,10 @@ def get_snapshots_with_metrics(
         GROUP BY product_variant_id
     """)
 
-    query_params = {"start_date": start_date, "end_date": end_date, "store_id": store_id}
-    metrics_result = db.execute(metrics_sql, query_params).mappings().all()
+    metrics_result = db.execute(metrics_sql, {"start_date": start_date, "end_date": end_date, "store_id": store_id}).mappings().all()
     metrics_by_variant = {row["product_variant_id"]: dict(row) for row in metrics_result}
 
-    # Step 2: Get the latest snapshot for each variant using a clean ORM query.
+    # Step 2: Get latest snapshot per variant
     latest_snapshot_subquery = (
         db.query(
             models.InventorySnapshot.product_variant_id,
@@ -155,8 +146,29 @@ def get_snapshots_with_metrics(
     total_count = base_query.count()
     results = base_query.order_by(models.InventorySnapshot.date.desc()).offset(skip).limit(limit).all()
 
-    # Step 3: Attach the pre-calculated metrics to the snapshot objects.
+    # Step 3: Attach metrics
     for snapshot in results:
         snapshot.metrics = metrics_by_variant.get(snapshot.product_variant_id, {})
 
-    return results, total_count
+    # Step 4: Serialize snapshots for JSON
+    def serialize_snapshot(snapshot):
+        variant = snapshot.product_variant
+        product = variant.product if variant else None
+        return {
+            "id": snapshot.id,
+            "on_hand": snapshot.on_hand,
+            "product_variant": {
+                "id": variant.id if variant else None,
+                "sku": variant.sku if variant else None,
+                "product": {
+                    "id": product.id if product else None,
+                    "title": product.title if product else None,
+                    "image_url": product.image_url if product else None
+                } if product else None
+            } if variant else None,
+            "metrics": snapshot.metrics
+        }
+
+    serialized_snapshots = [serialize_snapshot(s) for s in results]
+
+    return {"snapshots": serialized_snapshots, "total_count": total_count}
