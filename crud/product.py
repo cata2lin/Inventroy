@@ -42,6 +42,7 @@ def get_product(db: Session, product_id: int) -> Optional[models.Product]:
         joinedload(models.Product.variants).joinedload(models.ProductVariant.inventory_levels).joinedload(models.InventoryLevel.location)
     ).filter(models.Product.id == product_id).first()
 
+
 # --- Helper functions ---
 def _get(obj: Any, *path: str, default=None):
     cur = obj
@@ -72,7 +73,8 @@ def log_dead_letter(db: Session, store_id: int, run_id: int, payload: Dict, reas
     try:
         payload_str = json.dumps(payload, default=json_serial, indent=2)
         payload_json = json.loads(payload_str)
-        dead_letter = models.SyncDeadLetter(store_id=store_id, run_id=run_id, payload=payload_json, reason=reason)
+        db_run_id = run_id if run_id != 0 else None
+        dead_letter = models.SyncDeadLetter(store_id=store_id, run_id=db_run_id, payload=payload_json, reason=reason)
         db.add(dead_letter)
         db.commit()
     except Exception as e:
@@ -104,8 +106,6 @@ def _extract_variant_fields(v_data: Any, product_id: int, store_id: int, last_se
     if sku is not None and not sku.strip():
         sku = None
 
-    # --- THIS IS THE CORRECTED PART ---
-    # This now correctly finds the inventory_item_id from different possible payload structures.
     inventory_item = v_data.get("inventoryItem", {})
     inventory_item_id = gid_to_id(_get(inventory_item, "id")) or v_data.get("inventory_item_id")
 
@@ -139,10 +139,11 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
             )
             db.execute(product_stmt)
             
-            # This now correctly handles both flattened lists and nested 'edges' structures
             v_data_list = p_data.get("variants", [])
             if isinstance(v_data_list, dict) and "edges" in v_data_list:
                  v_data_list = [edge['node'] for edge in v_data_list['edges']]
+            
+            if not isinstance(v_data_list, list): v_data_list = []
 
             if v_data_list:
                 loc_rows_map = {}
@@ -158,9 +159,11 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
                     )
                     db.execute(variant_stmt)
                     
-                    inventory_levels = _get(v_data, "inventoryItem", "inventoryLevels", []) # Works with flattened structure
+                    inventory_levels = _get(v_data, "inventoryItem", "inventoryLevels", default=[])
                     if isinstance(inventory_levels, dict) and "edges" in inventory_levels:
                         inventory_levels = [edge['node'] for edge in inventory_levels['edges']]
+
+                    if not isinstance(inventory_levels, list): inventory_levels = []
 
                     for lvl in inventory_levels:
                         loc_gid = _get(lvl, "location", "id")
@@ -180,10 +183,7 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
                 if loc_rows_map:
                     loc_rows = list(loc_rows_map.values())
                     loc_stmt = pg_insert(models.Location).values(loc_rows)
-                    loc_stmt = loc_stmt.on_conflict_do_update(
-                        index_elements=['id'], 
-                        set_={ "name": loc_stmt.excluded.name, "shopify_gid": loc_stmt.excluded.shopify_gid }
-                    )
+                    loc_stmt = loc_stmt.on_conflict_do_update(index_elements=['id'], set_={ "name": loc_stmt.excluded.name, "shopify_gid": loc_stmt.excluded.shopify_gid })
                     db.execute(loc_stmt)
                 if inv_level_rows:
                     inv_stmt = pg_insert(models.InventoryLevel).values(inv_level_rows).on_conflict_do_update(

@@ -1,18 +1,16 @@
 # routes/stock.py
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
 from unidecode import unidecode
 import requests
-from datetime import datetime, timezone
 
 from database import get_db
 import models
 import crud.product as crud_product
 from shopify_service import ShopifyService, gid_to_id
-from services import inventory_sync_service
 
 router = APIRouter(prefix="/api/stock", tags=["Stock Management"])
 
