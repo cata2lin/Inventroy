@@ -3,7 +3,7 @@ from datetime import datetime, date, timedelta
 from typing import List, Optional, Tuple, Dict, Any
 
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import text, func, select 
+from sqlalchemy import text, func, select, literal_column
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import models
