@@ -15,7 +15,6 @@ def create_snapshot_for_store(db: Session, store_id: int):
     """
     now = datetime.now(date.today().tzinfo)
 
-    # Join InventoryLevel with ProductVariant to get all necessary data in one query
     inventory_data = (
         db.query(
             models.InventoryLevel.variant_id,
@@ -24,10 +23,7 @@ def create_snapshot_for_store(db: Session, store_id: int):
             models.ProductVariant.cost_per_item
         )
         .join(models.ProductVariant, models.InventoryLevel.variant_id == models.ProductVariant.id)
-        .filter(
-            models.ProductVariant.store_id == store_id
-            # We snapshot all levels, even zero, to track out-of-stock days
-        )
+        .filter(models.ProductVariant.store_id == store_id)
         .all()
     )
 
@@ -47,10 +43,7 @@ def create_snapshot_for_store(db: Session, store_id: int):
         })
 
     if snapshot_entries:
-        # Use bulk upsert for efficiency
         stmt = pg_insert(models.InventorySnapshot).values(snapshot_entries)
-        
-        # On conflict (same date, variant, store), update the values
         update_dict = {
             'on_hand': stmt.excluded.on_hand,
             'price': stmt.excluded.price,
@@ -64,13 +57,14 @@ def create_snapshot_for_store(db: Session, store_id: int):
         db.commit()
         print(f"[SNAPSHOT] Successfully created/updated snapshot for store {store_id} with {len(snapshot_entries)} entries.")
 
-
+#
+# --- THIS IS THE CORRECTED FUNCTION SIGNATURE ---
+#
 def get_snapshots(
     db: Session, skip: int = 0, limit: int = 100, store_id: Optional[int] = None, date: Optional[date] = None
 ) -> Tuple[List[models.InventorySnapshot], int]:
     """
     Retrieves paginated and filterable inventory snapshots.
-    THIS IS THE CORRECTED FUNCTION DEFINITION.
     """
     query = db.query(models.InventorySnapshot).options(
         joinedload(models.InventorySnapshot.product_variant).joinedload(models.ProductVariant.product)
@@ -78,6 +72,7 @@ def get_snapshots(
 
     if store_id:
         query = query.filter(models.InventorySnapshot.store_id == store_id)
+    # This block now works because the 'date' parameter is accepted by the function
     if date:
         query = query.filter(models.InventorySnapshot.date == date)
 
