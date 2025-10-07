@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple, Dict, Any
 
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text, func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import models
 
@@ -24,8 +25,8 @@ def create_snapshot_for_store(db: Session, store_id: int):
         )
         .join(models.ProductVariant, models.InventoryLevel.variant_id == models.ProductVariant.id)
         .filter(
-            models.ProductVariant.store_id == store_id,
-            models.InventoryLevel.on_hand > 0
+            models.ProductVariant.store_id == store_id
+            # We snapshot all levels, even zero, to track out-of-stock days
         )
         .all()
     )
@@ -46,12 +47,10 @@ def create_snapshot_for_store(db: Session, store_id: int):
         })
 
     if snapshot_entries:
-        # Use bulk_insert_mappings for efficiency, ensuring to handle potential duplicates on the same day
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
-        
+        # Use bulk upsert for efficiency
         stmt = pg_insert(models.InventorySnapshot).values(snapshot_entries)
         
-        # On conflict (same date, variant, store), update the on_hand, price, and cost
+        # On conflict (same date, variant, store), update the values
         update_dict = {
             'on_hand': stmt.excluded.on_hand,
             'price': stmt.excluded.price,
@@ -67,11 +66,11 @@ def create_snapshot_for_store(db: Session, store_id: int):
 
 
 def get_snapshots(
-    db: Session, skip: int = 0, limit: int = 100, store_id: Optional[int] = None, snapshot_date: Optional[date] = None
+    db: Session, skip: int = 0, limit: int = 100, store_id: Optional[int] = None, date: Optional[date] = None
 ) -> Tuple[List[models.InventorySnapshot], int]:
     """
     Retrieves paginated and filterable inventory snapshots.
-    THIS FUNCTION NOW CORRECTLY ACCEPTS 'snapshot_date'.
+    THIS IS THE CORRECTED FUNCTION DEFINITION.
     """
     query = db.query(models.InventorySnapshot).options(
         joinedload(models.InventorySnapshot.product_variant).joinedload(models.ProductVariant.product)
@@ -79,8 +78,8 @@ def get_snapshots(
 
     if store_id:
         query = query.filter(models.InventorySnapshot.store_id == store_id)
-    if snapshot_date:
-        query = query.filter(models.InventorySnapshot.date == snapshot_date)
+    if date:
+        query = query.filter(models.InventorySnapshot.date == date)
 
     total_count = query.count()
     snapshots = query.order_by(models.InventorySnapshot.date.desc(), models.InventorySnapshot.id).offset(skip).limit(limit).all()
@@ -133,7 +132,7 @@ def get_snapshot_metrics(db: Session, variant_id: int, start_date: date, end_dat
       AVG(sales_value) AS avg_sales_value,
       AVG(gross_margin_value) AS avg_gross_margin_value,
       100.0 * AVG(CASE WHEN prev_quantity IS NOT NULL AND prev_quantity != 0 THEN (CASE WHEN ABS((quantity - prev_quantity) / prev_quantity) < 0.05 THEN 1 ELSE 0 END) ELSE 0 END) AS stability_index,
-      (1 - (100.0 * COUNT(*) FILTER (WHERE quantity = 0) / COUNT(*)) / 100) * (1 - (100.0 * COUNT(*) FILTER (WHERE quantity_change = 0) / COUNT(*)) / 100) AS stock_health_index
+      (1 - (COALESCE(100.0 * COUNT(*) FILTER (WHERE quantity = 0) / NULLIF(COUNT(*), 0), 0)) / 100) * (1 - (COALESCE(100.0 * COUNT(*) FILTER (WHERE quantity_change = 0) / NULLIF(COUNT(*), 0), 0)) / 100) AS stock_health_index
     FROM derived;
     """)
 
@@ -143,6 +142,6 @@ def get_snapshot_metrics(db: Session, variant_id: int, start_date: date, end_dat
         "end_date": end_date
     }).fetchone()
 
-    if result:
+    if result and result._mapping:
         return dict(result._mapping)
     return None
