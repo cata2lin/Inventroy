@@ -58,23 +58,36 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const tableRows = snapshots.map(s => `
-            <tr>
-                <td>${s.date}</td>
-                <td>
-                    <img src="${s.product_variant.product.image_url || '/static/img/placeholder.png'}" class="product-image-compact" alt="Product image">
-                </td>
-                <td>
-                    <strong>${s.product_variant.product.title}</strong><br>
-                    <small>${s.product_variant.title} (ID: ${s.product_variant.id})</small>
-                </td>
-                <td><code>${s.product_variant.sku || 'N/A'}</code></td>
-                <td>${s.on_hand}</td>
-                <td>
-                    <button class="outline" data-variant-id="${s.product_variant.id}" data-product-title="${s.product_variant.product.title}">View Metrics</button>
-                </td>
-            </tr>
-        `).join('');
+        const tableRows = snapshots.map(s => {
+            // --- THIS IS THE FIX ---
+            // Safely access nested properties, providing fallback values if data is missing.
+            const variant = s.product_variant;
+            const product = variant ? variant.product : null;
+
+            const imageUrl = product ? product.image_url : '/static/img/placeholder.png';
+            const productTitle = product ? product.title : '[Deleted Product]';
+            const variantTitle = variant ? variant.title : '[Deleted Variant]';
+            const variantId = variant ? variant.id : 'N/A';
+            const sku = variant ? variant.sku : 'N/A';
+            
+            return `
+                <tr>
+                    <td>${s.date}</td>
+                    <td>
+                        <img src="${imageUrl}" class="product-image-compact" alt="Product image">
+                    </td>
+                    <td>
+                        <strong>${productTitle}</strong><br>
+                        <small>${variantTitle} (ID: ${variantId})</small>
+                    </td>
+                    <td><code>${sku || 'N/A'}</code></td>
+                    <td>${s.on_hand}</td>
+                    <td>
+                        ${variant ? `<button class="outline" data-variant-id="${variantId}" data-product-title="${productTitle}">View Metrics</button>` : 'N/A'}
+                    </td>
+                </tr>
+            `;
+        }).join('');
 
         elements.container.innerHTML = `
             <table>
