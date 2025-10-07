@@ -20,8 +20,16 @@ encoded_password = quote_plus(DB_PASSWORD)
 # Construct the final, safe database URL
 DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}/{DB_NAME}"
 
-# Create the SQLAlchemy engine
-engine = create_engine(DATABASE_URL)
+# --- MODIFIED ENGINE CREATION WITH CONNECTION POOLING ---
+# Create the SQLAlchemy engine with specific pool settings.
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=10,  # The number of connections to keep open in the pool.
+    max_overflow=20, # The maximum number of connections to allow in addition to pool_size.
+    pool_recycle=3600, # Recycle connections after 1 hour to prevent timeout issues.
+    pool_pre_ping=True # Check if the connection is alive before using it.
+)
+# --- END OF MODIFICATION ---
 
 # Create a SessionLocal class for creating new Session objects
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
