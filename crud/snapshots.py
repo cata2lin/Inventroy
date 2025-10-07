@@ -68,14 +68,12 @@ def get_snapshots_with_metrics(
 ) -> Tuple[List[Dict[str, Any]], int]:
     """
     Calculates all snapshots and their corresponding metrics in a single, efficient query.
-    This replaces the previous separate functions.
     """
     if end_date is None:
         end_date = date.today()
     if start_date is None:
         start_date = end_date - timedelta(days=30)
 
-    # This CTE calculates all metrics per variant over the date range
     metrics_cte = text("""
         WITH lagged AS (
           SELECT
@@ -118,7 +116,16 @@ def get_snapshots_with_metrics(
         GROUP BY product_variant_id
     """)
 
-    # Main query to get the latest snapshot for each variant and join with metrics
+    latest_snapshot_subquery = (
+        db.query(
+            models.InventorySnapshot.product_variant_id,
+            func.max(models.InventorySnapshot.date).label("max_date")
+        )
+        .filter(models.InventorySnapshot.date <= end_date)
+        .group_by(models.InventorySnapshot.product_variant_id)
+        .subquery("latest")
+    )
+
     base_query = (
         db.query(
             models.InventorySnapshot,
@@ -129,17 +136,11 @@ def get_snapshots_with_metrics(
             text("m.dead_stock_days"), text("m.dead_stock_ratio"), text("m.avg_inventory_value"),
             text("m.stock_health_index")
         )
+        # --- THIS IS THE CORRECTED JOIN SYNTAX ---
         .join(
-            db.query(
-                models.InventorySnapshot.product_variant_id,
-                func.max(models.InventorySnapshot.date).label("max_date")
-            )
-            .filter(models.InventorySnapshot.date <= end_date)
-            .group_by(models.InventorySnapshot.product_variant_id)
-            .subquery(),
-            "latest",
-            (models.InventorySnapshot.product_variant_id == text("latest.product_variant_id")) &
-            (models.InventorySnapshot.date == text("latest.max_date"))
+            latest_snapshot_subquery,
+            (models.InventorySnapshot.product_variant_id == latest_snapshot_subquery.c.product_variant_id) &
+            (models.InventorySnapshot.date == latest_snapshot_subquery.c.max_date)
         )
         .join(
             metrics_cte.cte("metrics"),
@@ -157,7 +158,6 @@ def get_snapshots_with_metrics(
     total_count = base_query.count()
     results = base_query.order_by(models.InventorySnapshot.date.desc()).offset(skip).limit(limit).all()
     
-    # Combine the ORM object and the raw metric columns into a list of dicts
     data = []
     for row in results:
         snapshot = row[0]
@@ -169,8 +169,7 @@ def get_snapshots_with_metrics(
             "dead_stock_days": row[13], "dead_stock_ratio": row[14], "avg_inventory_value": row[15],
             "stock_health_index": row[16],
         }
-        # Attach metrics to the snapshot object for the schema
-        snapshot.metrics = metrics
+        setattr(snapshot, 'metrics', metrics)
         data.append(snapshot)
 
     return data, total_count
