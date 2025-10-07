@@ -10,17 +10,29 @@ from dotenv import load_dotenv
 from jose import jwt, JOSEError
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
+# --- NEW IMPORTS ---
+from apscheduler.schedulers.background import BackgroundScheduler
 import models
 
 ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
+# --- IMPORT NEW ROUTE AND SERVICE ---
 from database import engine, Base, get_db
-from routes import sync_control, config, products, mutations, stock, webhooks
+from routes import sync_control, config, products, mutations, stock, webhooks, snapshots
+from services import snapshot_runner
 
 load_dotenv()
 
 app = FastAPI(title="Inventory Suite")
+
+# --- SCHEDULER SETUP ---
+# Initializes a background scheduler using UTC timezone for consistency.
+scheduler = BackgroundScheduler(timezone="utc")
+# Schedules the 'run_daily_snapshot' function to run every day at 23:55 UTC.
+scheduler.add_job(snapshot_runner.run_daily_snapshot, 'cron', hour=23, minute=55)
+scheduler.start()
+# --- END SCHEDULER SETUP ---
 
 app.mount("/static", StaticFiles(directory=str(ROOT_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(ROOT_DIR / "templates"))
@@ -78,6 +90,11 @@ async def get_config_page(request: Request):
 async def get_products_page(request: Request):
     return templates.TemplateResponse("products.html", {"request": request, "title": "Products"})
 
+# --- ADD NEW HTML ROUTE FOR SNAPSHOTS PAGE ---
+@app.get("/snapshots", response_class=HTMLResponse, include_in_schema=False)
+async def get_snapshots_page(request: Request):
+    return templates.TemplateResponse("snapshots.html", {"request": request, "title": "Snapshots"})
+
 @app.get("/mutations", response_class=HTMLResponse, include_in_schema=False)
 async def get_mutations_page(request: Request):
     return templates.TemplateResponse("mutations.html", {"request": request, "title": "Mutations"})
@@ -92,5 +109,11 @@ app.include_router(config.router)
 app.include_router(products.router)
 app.include_router(mutations.router)
 app.include_router(stock.router)
-# UPDATED: Included the webhooks router
 app.include_router(webhooks.router)
+# --- INCLUDE THE NEW SNAPSHOTS ROUTER ---
+app.include_router(snapshots.router)
+
+# Ensure the scheduler shuts down gracefully when the app stops
+@app.on_event("shutdown")
+def shutdown_event():
+    scheduler.shutdown()

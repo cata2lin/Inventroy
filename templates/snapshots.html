@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <hgroup>
+        <h1>Inventory Snapshots</h1>
+        <h2>Review historical end-of-day stock levels.</h2>
+    </hgroup>
+
+    <article>
+        <div class="grid">
+            <input type="date" id="date-filter">
+            <select id="store-filter">
+                <option value="">All Stores</option>
+            </select>
+            <button id="trigger-snapshot-btn">Trigger Snapshot Now</button>
+        </div>
+    </article>
+
+    <article id="snapshots-container" aria-busy="true">
+        <p>Loading snapshots...</p>
+    </article>
+
+    <div class="pagination-controls grid">
+        <button id="prev-button" disabled>Previous</button>
+        <span id="page-indicator">Page 1 of 1</span>
+        <button id="next-button" disabled>Next</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/snapshots.js"></script>
+{% endblock %}

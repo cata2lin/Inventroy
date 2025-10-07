@@ -183,3 +183,15 @@ class ShopifyOrder(APIBase):
     currency: Optional[str] = Field(None, alias="currencyCode")
     line_items: Optional[List[LineItemModel]] = Field(None, alias="lineItems")
     fulfillments: Optional[List[FulfillmentModel]] = None
+
+class InventorySnapshot(ORMBase):
+    id: int
+    date: date
+    product_variant_id: int
+    store_id: int
+    on_hand: int
+    product_variant: ProductVariant # Reuse existing variant schema
+
+class InventorySnapshotResponse(BaseModel):
+    total_count: int
+    snapshots: List[InventorySnapshot]
