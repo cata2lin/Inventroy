@@ -18,7 +18,7 @@ def run_product_sync_for_store(store_id: int, task_id: Optional[str] = None):
     db: Session = SessionLocal()
     run = None
     try:
-        # --- 1. Check for an active run for this store ---
+        # de adaugat partea de partial or complete sync, facem tot ce trebe 
         active_run = db.query(models.SyncRun).filter(
             models.SyncRun.store_id == store_id,
             models.SyncRun.status.in_(['running', 'partial'])
