@@ -232,14 +232,29 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/config/stores');
             const stores = await res.json();
             stores.forEach(s => elements.storeFilter.add(new Option(s.name, s.id)));
+
+            // FIX: Set the initial storeId to the first store in the list
+            if (stores.length > 0) {
+                state.storeId = stores[0].id; // Set default store
+                elements.storeFilter.value = stores[0].id; // Update the dropdown to reflect the state
+            }
+
         } catch {
             console.error('Failed to load stores.');
+            elements.container.innerHTML = `<tr><td colspan="7" class="text-center" style="color: var(--pico-color-red-500);">Failed to load stores. Cannot fetch analytics.</td></tr>`;
+            return; // Exit if we can't load stores
         }
 
         renderMetricFilters();
         attachSortHandlers();
         setupEventListeners();
-        fetchSnapshots();
+
+        // FIX: Only fetch snapshots if a storeId is set
+        if (state.storeId) {
+            fetchSnapshots();
+        } else {
+            elements.container.innerHTML = `<tr><td colspan="7" class="text-center">Please add a store in the configuration to see analytics.</td></tr>`;
+        }
     };
 
     init();
