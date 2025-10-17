@@ -46,7 +46,7 @@ def create_snapshot_for_store(db: Session, store_id: int) -> None:
             {"store_id": int(store_id)},
         ).fetchall()
 
-    onhand_by_variant = {int(r["variant_id"]): int(r["on_hand"]) for r in onhand_rows}
+    onhand_by_variant = {int(r.variant_id): int(r.on_hand) for r in onhand_rows}
 
     # Latest price/cost from variants
     vrows = db.execute(
@@ -57,7 +57,7 @@ def create_snapshot_for_store(db: Session, store_id: int) -> None:
         """),
         {"store_id": int(store_id)},
     ).fetchall()
-    pc_map = {int(r["variant_id"]): (r["price"], r["cost_per_item"]) for r in vrows}
+    pc_map = {int(r.variant_id): (r.price, r.cost_per_item) for r in vrows}
 
     rows: List[Dict[str, Any]] = []
     for vid, onh in onhand_by_variant.items():
@@ -399,40 +399,44 @@ WHERE pv.store_id = :store_id {(" AND (pv.sku ILIKE :q OR p.title ILIKE :q)" if 
         return {"snapshots": [], "total_count": int(total)}
 
     out: List[Dict[str, Any]] = []
+    # --- THIS IS THE FIX ---
+    # Access row data using attribute style (r.column_name) instead of
+    # dictionary style (r["column_name"]) to prevent the TypeError.
     for r in rows:
         out.append({
-            "id": None,
-            "date": None,
-            "store_id": int(r["store_id"]),
-            "product_variant_id": int(r["variant_id"]),
-            "on_hand": int(r["on_hand"]) if r["on_hand"] is not None else None,
+            "id": None, # Snapshots themselves don't have a unique ID in this view
+            "date": r.latest_date, # Use the date of the latest snapshot in the range
+            "store_id": int(r.store_id),
+            "product_variant_id": int(r.variant_id),
+            "on_hand": int(r.on_hand) if r.on_hand is not None else None,
             "product_variant": {
-                "id": int(r["variant_id"]),
-                "sku": r["sku"],
+                "id": int(r.variant_id),
+                "sku": r.sku,
                 "product": {
                     "id": None,
-                    "title": r["title"],
-                    "image_url": r["image_url"],
+                    "title": r.title,
+                    "image_url": r.image_url,
                 },
             },
             "metrics": {
-                "average_stock_level": r["average_stock_level"],
-                "min_stock_level": r["min_stock_level"],
-                "max_stock_level": r["max_stock_level"],
-                "stock_range": r["stock_range"],
-                "stock_stddev": r["stock_stddev"],
-                "days_out_of_stock": r["days_out_of_stock"],
-                "stockout_rate": r["stockout_rate"],
-                "replenishment_days": r["replenishment_days"],
-                "depletion_days": r["depletion_days"],
-                "total_outflow": r["total_outflow"],
-                "stock_turnover": r["stock_turnover"],
-                "avg_days_in_inventory": r["avg_days_in_inventory"],
-                "dead_stock_days": r["dead_stock_days"],
-                "dead_stock_ratio": r["dead_stock_ratio"],
-                "avg_inventory_value": r["avg_inventory_value"],
-                "stock_health_index": r["stock_health_index"],
+                "average_stock_level": r.average_stock_level,
+                "min_stock_level": r.min_stock_level,
+                "max_stock_level": r.max_stock_level,
+                "stock_range": r.stock_range,
+                "stock_stddev": r.stock_stddev,
+                "days_out_of_stock": r.days_out_of_stock,
+                "stockout_rate": r.stockout_rate,
+                "replenishment_days": r.replenishment_days,
+                "depletion_days": r.depletion_days,
+                "total_outflow": r.total_outflow,
+                "stock_turnover": r.stock_turnover,
+                "avg_days_in_inventory": r.avg_days_in_inventory,
+                "dead_stock_days": r.dead_stock_days,
+                "dead_stock_ratio": r.dead_stock_ratio,
+                "avg_inventory_value": r.avg_inventory_value,
+                "stock_health_index": r.stock_health_index,
             },
         })
+    # --- END OF FIX ---
 
     return {"snapshots": out, "total_count": int(total)}
