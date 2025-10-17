@@ -51,7 +51,9 @@ def read_snapshots_with_metrics(
     db: Session = Depends(get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=200),
-    store_id: int = Query(..., ge=1),
+    # --- THIS IS THE FIX ---
+    # The store_id is now optional to allow for the "All Stores" view.
+    store_id: Optional[int] = Query(None, ge=1),
     start_date: Optional[date] = Query(None, description="YYYY-MM-DD"),
     end_date: Optional[date] = Query(None, description="YYYY-MM-DD"),
     q: Optional[str] = Query(None, description="Search by SKU or title"),

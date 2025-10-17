@@ -148,11 +148,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
 
+    // --- THIS IS THE FIX ---
+    // The HTML for the metric filters is updated for a cleaner layout.
     const renderMetricFilters = () => {
         elements.metricFilters.innerHTML = METRICS_FOR_FILTERS.map(([key, label]) => `
-            <div>
-                <label for="${key}-filter" class="text-sm font-medium">${label}</label>
-                <div class="grid grid-cols-2 gap-2">
+            <div class="metric-filter-group">
+                <label for="${key}-min">${label}</label>
+                <div class="grid">
                     <input id="${key}-min" type="number" placeholder="Min" data-key="${key}" class="metric-filter-input">
                     <input id="${key}-max" type="number" placeholder="Max" data-key="${key}" class="metric-filter-input">
                 </div>
@@ -233,28 +235,22 @@ document.addEventListener('DOMContentLoaded', () => {
             const stores = await res.json();
             stores.forEach(s => elements.storeFilter.add(new Option(s.name, s.id)));
 
-            // FIX: Set the initial storeId to the first store in the list
             if (stores.length > 0) {
-                state.storeId = stores[0].id; // Set default store
-                elements.storeFilter.value = stores[0].id; // Update the dropdown to reflect the state
+                state.storeId = stores[0].id;
+                elements.storeFilter.value = stores[0].id;
             }
 
         } catch {
             console.error('Failed to load stores.');
             elements.container.innerHTML = `<tr><td colspan="7" class="text-center" style="color: var(--pico-color-red-500);">Failed to load stores. Cannot fetch analytics.</td></tr>`;
-            return; // Exit if we can't load stores
+            return;
         }
 
         renderMetricFilters();
         attachSortHandlers();
         setupEventListeners();
 
-        // FIX: Only fetch snapshots if a storeId is set
-        if (state.storeId) {
-            fetchSnapshots();
-        } else {
-            elements.container.innerHTML = `<tr><td colspan="7" class="text-center">Please add a store in the configuration to see analytics.</td></tr>`;
-        }
+        fetchSnapshots();
     };
 
     init();
