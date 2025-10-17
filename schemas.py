@@ -102,7 +102,9 @@ class SnapshotMetrics(BaseModel):
     days_out_of_stock: Optional[int] = None
     stockout_rate: Optional[float] = None
     replenishment_days: Optional[int] = None
-    depletion_days: Optional[int] = None
+    # --- THIS IS THE FIX ---
+    # The depletion_days can be a float, so we change its type.
+    depletion_days: Optional[float] = None
     total_outflow: Optional[float] = None
     stock_turnover: Optional[float] = None
     avg_days_in_inventory: Optional[float] = None
@@ -112,8 +114,6 @@ class SnapshotMetrics(BaseModel):
     stock_health_index: Optional[float] = None
 
 class SnapshotWithMetrics(ORMBase):
-    # --- THIS IS THE FIX ---
-    # The ID is not guaranteed in this context, so we make it optional.
     id: Optional[int] = None
     date: date
     product_variant_id: int
