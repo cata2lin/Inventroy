@@ -55,7 +55,15 @@ class Location(ORMBase):
 class InventoryLevel(ORMBase):
     location_id: int
     available: Optional[int] = None
+    on_hand: Optional[int] = None
+    updated_at: Optional[datetime] = None
     location: Optional[Location] = None
+
+class ProductLite(ORMBase):
+    """Light product payload used inside ProductVariant for UI (image, title)."""
+    id: int
+    title: Optional[str] = None
+    image_url: Optional[str] = None
 
 class ProductVariant(ORMBase):
     id: int
@@ -70,6 +78,8 @@ class ProductVariant(ORMBase):
     cost_per_item: Optional[float] = None
     inventory_quantity: Optional[int] = None
     inventory_levels: List[InventoryLevel] = Field(default_factory=list)
+    # Needed for images in snapshots table
+    product: Optional[ProductLite] = None
 
     @model_validator(mode="after")
     def _derive_inventory_item_gid(self):
@@ -91,7 +101,7 @@ class ProductResponse(BaseModel):
     total_count: int
     products: List[Product]
 
-# --- NEW AND UPDATED SCHEMAS FOR SNAPSHOTS WITH METRICS ---
+# --- Schemas for snapshots with metrics ---
 
 class SnapshotMetrics(BaseModel):
     average_stock_level: Optional[float] = None
@@ -102,9 +112,7 @@ class SnapshotMetrics(BaseModel):
     days_out_of_stock: Optional[int] = None
     stockout_rate: Optional[float] = None
     replenishment_days: Optional[int] = None
-    # --- THIS IS THE FIX ---
-    # The depletion_days can be a float, so we change its type.
-    depletion_days: Optional[float] = None
+    depletion_days: Optional[float] = None  # float to allow fractional days
     total_outflow: Optional[float] = None
     stock_turnover: Optional[float] = None
     avg_days_in_inventory: Optional[float] = None

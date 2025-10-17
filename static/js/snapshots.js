@@ -14,6 +14,13 @@ document.addEventListener('DOMContentLoaded', () => {
         thead: document.getElementById('table-head'),
     };
 
+    const formatMetric = (val, digits = 2, suffix = '') => {
+        if (val === null || val === undefined) return '—';
+        const n = typeof val === 'number' ? val : Number(val);
+        if (Number.isNaN(n)) return '—';
+        return `${n.toFixed(digits)}${suffix}`;
+    };
+
     let state = {
         page: 1,
         limit: 25,
@@ -45,7 +52,66 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     };
 
-    const fetchSnapshots = async () => {
+    const buildHead = () => {
+        elements.thead.innerHTML = `
+            <tr>
+                <th>Product</th>
+                <th class="sortable" data-sort="on_hand">Current Stock</th>
+                <th class="sortable" data-sort="avg_inventory_value">Avg. Inv. Value</th>
+                <th class="sortable" data-sort="stockout_rate">Stockout Rate</th>
+                <th class="sortable" data-sort="stock_turnover">Turnover</th>
+                <th class="sortable" data-sort="avg_days_in_inventory">Avg. Days in Inv.</th>
+                <th class="sortable" data-sort="stock_health_index">Health</th>
+            </tr>
+        `;
+    };
+
+    const renderTable = (snapshots) => {
+        if (!snapshots || snapshots.length === 0) {
+            elements.container.innerHTML = `<tr><td colspan="7" class="text-center">No data found for the selected filters.</td></tr>`;
+            return;
+        }
+
+        const rows = snapshots.map(s => {
+            const m = s.metrics || {};
+            const variant = s.product_variant || {};
+            const product = variant.product || {};
+            const imageUrl = product.image_url || 'https://via.placeholder.com/48';
+            const title = product.title || '—';
+            const sku = variant.sku || '—';
+
+            return `
+                <tr>
+                    <td>
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
+                            <img src="${imageUrl}" style="width:48px; height:48px; object-fit:cover; border-radius: 8px;" alt="${title}">
+                            <div>
+                                <strong>${title}</strong><br>
+                                <small>SKU: ${sku}</small>
+                            </div>
+                        </div>
+                    </td>
+                    <td data-label="Current Stock">${s.on_hand ?? '—'} units</td>
+                    <td data-label="Avg. Inv. Value">${formatMetric(m.avg_inventory_value, 2, ' RON')}</td>
+                    <td data-label="Stockout Rate">${formatMetric(m.stockout_rate, 2, '%')}</td>
+                    <td data-label="Turnover">${formatMetric(m.stock_turnover, 2)}</td>
+                    <td data-label="Avg. Days in Inv.">${formatMetric(m.avg_days_in_inventory, 2)}</td>
+                    <td data-label="Health">${formatMetric(m.stock_health_index, 2)}</td>
+                </tr>
+            `;
+        }).join('');
+
+        elements.container.innerHTML = rows;
+    };
+
+    const updatePagination = () => {
+        const totalPages = Math.max(1, Math.ceil(state.totalCount / state.limit));
+        elements.pageIndicator.textContent = `Page ${state.page} of ${totalPages}`;
+        elements.prevButton.disabled = state.page <= 1;
+        elements.nextButton.disabled = state.page >= totalPages;
+    };
+
+    let fetchSnapshots = async () => {
         elements.container.innerHTML = `<tr><td colspan="7" class="text-center" aria-busy="true">Loading analytics...</td></tr>`;
 
         const params = new URLSearchParams({
@@ -70,59 +136,9 @@ document.addEventListener('DOMContentLoaded', () => {
             renderTable(data.snapshots);
             updatePagination();
         } catch (err) {
-            elements.container.innerHTML = `<tr><td colspan="7" class="text-center" style="color: var(--pico-color-red-500);">${err.message}</td></tr>`;
+            console.error(err);
+            elements.container.innerHTML = `<tr><td colspan="7" class="text-center">Failed to load data.</td></tr>`;
         }
-    };
-
-    const formatMetric = (value, decimals = 2, unit = '') => {
-        if (value === null || value === undefined) return 'N/A';
-        const num = parseFloat(value);
-        return isNaN(num) ? 'N/A' : `${num.toFixed(decimals)}${unit}`;
-    };
-
-    const renderTable = (snapshots) => {
-        if (!snapshots || snapshots.length === 0) {
-            elements.container.innerHTML = `<tr><td colspan="7" class="text-center">No data found for the selected filters.</td></tr>`;
-            return;
-        }
-
-        const rows = snapshots.map(s => {
-            const m = s.metrics || {};
-            const variant = s.product_variant || {};
-            const product = variant.product || {};
-            const imageUrl = product.image_url || 'https://via.placeholder.com/48';
-            const title = product.title || '—';
-            const sku = variant.sku || '—';
-
-            return `
-                <tr>
-                    <td>
-                        <div style="display: flex; align-items: center; gap: 0.75rem;">
-                            <img src="${imageUrl}" style="width: 48px; height: 48px; object-fit: cover; border-radius: var(--pico-border-radius);" alt="${title}">
-                            <div>
-                                <strong>${title}</strong><br>
-                                <small>SKU: ${sku}</small>
-                            </div>
-                        </div>
-                    </td>
-                    <td data-label="Current Stock">${s.on_hand ?? '—'} units</td>
-                    <td data-label="Avg. Inv. Value">${formatMetric(m.avg_inventory_value, 2, ' RON')}</td>
-                    <td data-label="Stockout Rate">${formatMetric(m.stockout_rate, 2, '%')}</td>
-                    <td data-label="Dead Stock Ratio">${formatMetric(m.dead_stock_ratio, 2, '%')}</td>
-                    <td data-label="Turnover">${formatMetric(m.stock_turnover, 2)}</td>
-                    <td data-label="Health Index">${m.stock_health_index != null ? formatMetric((m.stock_health_index * 100), 1, '%') : 'N/A'}</td>
-                </tr>
-            `;
-        }).join('');
-
-        elements.container.innerHTML = rows;
-    };
-
-    const updatePagination = () => {
-        const totalPages = Math.max(1, Math.ceil(state.totalCount / state.limit));
-        elements.pageIndicator.textContent = `Page ${state.page} of ${totalPages}`;
-        elements.prevButton.disabled = state.page <= 1;
-        elements.nextButton.disabled = state.page >= totalPages;
     };
 
     const attachSortHandlers = () => {
@@ -141,15 +157,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     header.classList.remove('sorted-asc', 'sorted-desc');
                 });
                 th.classList.add(state.sortOrder === 'asc' ? 'sorted-asc' : 'sorted-desc');
-                
+
                 state.page = 1;
                 fetchSnapshots();
             });
         });
     };
 
-    // --- THIS IS THE FIX ---
-    // The HTML for the metric filters is updated for a cleaner layout.
     const renderMetricFilters = () => {
         elements.metricFilters.innerHTML = METRICS_FOR_FILTERS.map(([key, label]) => `
             <div class="metric-filter-group">
@@ -172,7 +186,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }, 400));
         });
     };
-    
+
     const setupEventListeners = () => {
         elements.startDateFilter.addEventListener('change', () => {
             state.startDate = elements.startDateFilter.value;
@@ -196,14 +210,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             elements.triggerBtn.setAttribute('aria-busy', 'true');
             try {
-                const res = await fetch(`/api/snapshots/trigger?store_id=${state.storeId}`, { method: 'POST' });
-                if (!res.ok) throw new Error('Failed to trigger snapshot.');
-                alert('Snapshot triggered successfully! The data will be updated shortly.');
-                setTimeout(fetchSnapshots, 2000); // Refresh data after a delay
-            } catch (e) {
-                alert(e.message);
+                const res = await fetch(`/api/snapshots/trigger?store_id=${encodeURIComponent(state.storeId)}`, { method: 'POST' });
+                if (!res.ok) throw new Error();
+                await fetchSnapshots();
+            } catch {
+                alert('Failed to trigger snapshot.');
             } finally {
-                elements.triggerBtn.removeAttribute('aria-busy', 'false');
+                elements.triggerBtn.removeAttribute('aria-busy');
             }
         });
         elements.prevButton.addEventListener('click', () => {
@@ -213,7 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
         elements.nextButton.addEventListener('click', () => {
-            const totalPages = Math.ceil(state.totalCount / state.limit);
+            const totalPages = Math.max(1, Math.ceil(state.totalCount / state.limit));
             if (state.page < totalPages) {
                 state.page++;
                 fetchSnapshots();
@@ -222,27 +235,22 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const init = async () => {
-        const today = new Date();
-        const past = new Date();
-        past.setDate(today.getDate() - 30);
-        elements.endDateFilter.value = today.toISOString().split('T')[0];
-        elements.startDateFilter.value = past.toISOString().split('T')[0];
-        state.startDate = elements.startDateFilter.value;
-        state.endDate = elements.endDateFilter.value;
+        buildHead();
 
+        // Load stores
         try {
-            const res = await fetch('/api/config/stores');
+            const res = await fetch('/api/stores');
+            if (!res.ok) throw new Error('Failed to load stores');
             const stores = await res.json();
             stores.forEach(s => elements.storeFilter.add(new Option(s.name, s.id)));
 
-            if (stores.length > 0) {
-                state.storeId = stores[0].id;
-                elements.storeFilter.value = stores[0].id;
-            }
+            // Keep default "All Stores"
+            elements.storeFilter.value = '';
+            state.storeId = '';
 
         } catch {
             console.error('Failed to load stores.');
-            elements.container.innerHTML = `<tr><td colspan="7" class="text-center" style="color: var(--pico-color-red-500);">Failed to load stores. Cannot fetch analytics.</td></tr>`;
+            elements.container.innerHTML = `<tr><td colspan="7" class="text-center">Failed to load stores. Cannot fetch analytics.</td></tr>`;
             return;
         }
 
