@@ -108,19 +108,25 @@
             color: var(--pico-color-white);
         }
 
-        .metric-filter-group label {
-        font-size: 0.875rem;
+.metric-filter-group label {
+        font-size: 0.8rem; /* Smaller label font */
         font-weight: 500;
-        margin-bottom: 0.25rem;
+        margin-bottom: 0.2rem;
+        display: block;
     }
     .metric-filter-group .grid {
-        gap: 0.5rem;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.25rem;
     }
     .metric-filter-input {
-        padding: 0.5rem;
-        font-size: 0.875rem;
+        padding: 0.3rem !important; /* Smaller padding */
+        font-size: 0.8rem !important; /* Smaller input font */
+        height: auto !important; /* Adjust height automatically */
     }
-    </style>
+    #metric-filters {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); /* Responsive columns */
+    }
+</style>
 </head>
 <body>
     <aside class="sidebar">

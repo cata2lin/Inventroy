@@ -114,7 +114,7 @@ def get_snapshots_with_metrics(
     if store_id:
         where.append("s.store_id = :store_id")
         params["store_id"] = int(store_id)
-    
+
     if params["start_ts"]:
         where.append("s.date >= :start_ts")
     if params["end_ts"]:
@@ -127,7 +127,7 @@ def get_snapshots_with_metrics(
         where.append("(pvq.sku ILIKE :q OR pq.title ILIKE :q)")
 
     where_sql = " AND ".join(where) if where else "1=1"
-    
+
     params["recent_floor"] = (params.get("end_ts") or datetime.now(timezone.utc)) - timedelta(days=14)
 
     # Metric filters
@@ -135,12 +135,12 @@ def get_snapshots_with_metrics(
     def add_filter(field: str, bounds: Dict[str, float]):
         if bounds:
             lo, hi = bounds.get("min"), bounds.get("max")
-            if lo is not None:
+            if lo is not None and lo != '':
                 mf_sql.append(f"({field} >= :{field}_min)")
-                params[f"{field}_min"] = lo
-            if hi is not None:
+                params[f"{field}_min"] = float(lo)
+            if hi is not None and hi != '':
                 mf_sql.append(f"({field} <= :{field}_max)")
-                params[f"{field}_max"] = hi
+                params[f"{field}_max"] = float(hi)
 
     for k, b in (metric_filters or {}).items():
         add_filter(k, b)
@@ -150,9 +150,9 @@ def get_snapshots_with_metrics(
     so = "ASC" if (sort_order or "").lower() == "asc" else "DESC"
     order_sql = f"ORDER BY {sort_col} {so}, title ASC, sku ASC"
 
-    # --- FINAL QUERY CONSTRUCTION ---
+    # Final query construction
     final_store_filter = "WHERE pv.store_id = :store_id" if store_id else ""
-    
+
     sql = text(f"""
     WITH filtered AS (
         SELECT s.* FROM inventory_snapshots s {join_search} WHERE {where_sql}
@@ -222,15 +222,16 @@ def get_snapshots_with_metrics(
     SELECT * FROM joined WHERE 1=1 {mf_where} {order_sql} LIMIT :limit OFFSET :skip
     """)
 
-    # Count query needs to be simpler and also respect the store filter
     count_base_query = "SELECT COUNT(DISTINCT pv.id) FROM product_variants pv JOIN products p ON p.id = pv.product_id"
+    count_params = {}
     if store_id:
         count_base_query += " WHERE pv.store_id = :store_id"
+        count_params["store_id"] = store_id
     
     count_sql = text(count_base_query)
     
     rows = db.execute(sql, params).fetchall()
-    total = db.execute(count_sql, {"store_id": store_id} if store_id else {}).scalar() or 0
+    total = db.execute(count_sql, count_params).scalar() or 0
 
     if not rows:
         return {"snapshots": [], "total_count": int(total)}
@@ -242,7 +243,7 @@ def get_snapshots_with_metrics(
             "product_variant_id": int(r.variant_id), "on_hand": int(r.on_hand) if r.on_hand is not None else None,
             "product_variant": {
                 "id": int(r.variant_id), "shopify_gid": r.shopify_gid, "sku": r.sku,
-                "product": {"id": r.variant_id, "title": r.title, "image_url": r.image_url}, # Use variant_id as a stand-in for product id
+                "product": {"id": r.variant_id, "title": r.title, "image_url": r.image_url},
             },
             "metrics": {
                 "average_stock_level": r.average_stock_level, "min_stock_level": r.min_stock_level, "max_stock_level": r.max_stock_level,
