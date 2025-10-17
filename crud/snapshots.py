@@ -227,9 +227,9 @@ def get_snapshots_with_metrics(
     if store_id:
         count_base_query += " WHERE pv.store_id = :store_id"
         count_params["store_id"] = store_id
-    
+
     count_sql = text(count_base_query)
-    
+
     rows = db.execute(sql, params).fetchall()
     total = db.execute(count_sql, count_params).scalar() or 0
 
