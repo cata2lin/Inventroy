@@ -329,6 +329,9 @@ joined AS (
     SELECT
         b.*,
         pv.sku,
+        -- --- THIS IS THE FIX ---
+        -- Select the shopify_gid from the product_variants table
+        pv.shopify_gid,
         p.title,
         p.image_url
     FROM base b
@@ -399,18 +402,18 @@ WHERE pv.store_id = :store_id {(" AND (pv.sku ILIKE :q OR p.title ILIKE :q)" if 
         return {"snapshots": [], "total_count": int(total)}
 
     out: List[Dict[str, Any]] = []
-    # --- THIS IS THE FIX ---
-    # Access row data using attribute style (r.column_name) instead of
-    # dictionary style (r["column_name"]) to prevent the TypeError.
     for r in rows:
         out.append({
-            "id": None, # Snapshots themselves don't have a unique ID in this view
-            "date": r.latest_date, # Use the date of the latest snapshot in the range
+            "id": r.variant_id, # Use a unique ID from the data, like variant_id
+            "date": r.latest_date,
             "store_id": int(r.store_id),
             "product_variant_id": int(r.variant_id),
             "on_hand": int(r.on_hand) if r.on_hand is not None else None,
             "product_variant": {
                 "id": int(r.variant_id),
+                # --- THIS IS THE FIX ---
+                # Add the shopify_gid to the response dictionary
+                "shopify_gid": r.shopify_gid,
                 "sku": r.sku,
                 "product": {
                     "id": None,
@@ -437,6 +440,5 @@ WHERE pv.store_id = :store_id {(" AND (pv.sku ILIKE :q OR p.title ILIKE :q)" if 
                 "stock_health_index": r.stock_health_index,
             },
         })
-    # --- END OF FIX ---
 
     return {"snapshots": out, "total_count": int(total)}

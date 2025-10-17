@@ -112,7 +112,9 @@ class SnapshotMetrics(BaseModel):
     stock_health_index: Optional[float] = None
 
 class SnapshotWithMetrics(ORMBase):
-    id: int
+    # --- THIS IS THE FIX ---
+    # The ID is not guaranteed in this context, so we make it optional.
+    id: Optional[int] = None
     date: date
     product_variant_id: int
     store_id: int
