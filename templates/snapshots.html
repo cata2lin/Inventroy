@@ -7,85 +7,59 @@
         <h2>Review historical stock levels and performance metrics</h2>
     </hgroup>
 
-    <!-- Filters -->
     <article class="filters">
         <header><strong>Filters</strong></header>
-        <div class="grid grid-cols-3 gap-4 mb-4">
-            <label>
-                Start Date
-                <input type="date" id="start-date-filter">
-            </label>
-            <label>
-                End Date
-                <input type="date" id="end-date-filter">
-            </label>
-            <label>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <label for="store-filter">
                 Store
                 <select id="store-filter">
                     <option value="">All Stores</option>
                 </select>
             </label>
+            <label for="start-date-filter">
+                Start Date
+                <input type="date" id="start-date-filter">
+            </label>
+            <label for="end-date-filter">
+                End Date
+                <input type="date" id="end-date-filter">
+            </label>
         </div>
 
-        <div class="grid grid-cols-3 gap-4 mb-4" id="metric-filters">
-            <!-- Metric filters will be dynamically generated here -->
-        </div>
+        <details>
+            <summary>Advanced Metric Filters</summary>
+            <div id="metric-filters" class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                </div>
+        </details>
 
-        <button id="trigger-snapshot-btn" class="secondary outline mb-4">Trigger Snapshot Now</button>
+        <button id="trigger-snapshot-btn" class="secondary outline mt-4">Trigger Snapshot Now</button>
     </article>
 
-    <!-- Table -->
     <div class="table-container overflow-auto">
         <table id="snapshots-table" class="w-full border-collapse">
             <thead id="table-head">
                 <tr>
-                    <th>Product</th>
-                    <th data-sort="on_hand" class="sortable">Stoc Curent</th>
-                    <th data-sort="average_stock_level" class="sortable">Stoc Mediu</th>
-                    <th data-sort="min_stock_level" class="sortable">Stoc Min/Max</th>
-                    <th data-sort="stock_range" class="sortable">Variație Stoc</th>
-                    <th data-sort="days_out_of_stock" class="sortable">Zile Fără Stoc</th>
-                    <th data-sort="stockout_rate" class="sortable">Rată Epuizare</th>
-                    <th data-sort="stock_turnover" class="sortable">Rulaj Stoc</th>
-                    <th data-sort="avg_days_in_inventory" class="sortable">Zile Medii Stoc</th>
-                    <th data-sort="dead_stock_days" class="sortable">Zile Stoc Mort</th>
-                    <th data-sort="dead_stock_ratio" class="sortable">Rată Stoc Mort</th>
-                    <th data-sort="avg_inventory_value" class="sortable">Valoare Medie</th>
-                    <th data-sort="stock_health_index" class="sortable">Index Sănătate</th>
+                    <th class="sortable" data-sort="title">Product</th>
+                    <th class="sortable" data-sort="on_hand">Current Stock</th>
+                    <th class="sortable" data-sort="avg_inventory_value">Avg. Inv. Value</th>
+                    <th class="sortable" data-sort="stockout_rate">Stockout Rate</th>
+                    <th class="sortable" data-sort="dead_stock_ratio">Dead Stock Ratio</th>
+                    <th class="sortable" data-sort="stock_turnover">Turnover</th>
+                    <th class="sortable" data-sort="stock_health_index">Health Index</th>
                 </tr>
             </thead>
             <tbody id="snapshots-container">
-                <tr><td colspan="13" class="text-center">Loading analytics...</td></tr>
+                <tr><td colspan="7" class="text-center">Loading analytics...</td></tr>
             </tbody>
         </table>
     </div>
 
-    <!-- Pagination -->
     <div class="pagination-controls grid grid-cols-3 gap-4 mt-4">
         <button id="prev-button" disabled>Previous</button>
-        <span id="page-indicator">Page 1 of 1</span>
+        <span id="page-indicator" class="text-center">Page 1 of 1</span>
         <button id="next-button" disabled>Next</button>
     </div>
 
-    <!-- Legend -->
-    <details class="mt-6">
-        <summary>Legendă Metrică (Explicații)</summary>
-        <article>
-            <ul>
-                <li><strong>Stoc Mediu (buc):</strong> Cantitatea medie în perioada selectată.</li>
-                <li><strong>Stoc Min/Max (buc):</strong> Valori minime și maxime.</li>
-                <li><strong>Variație Stoc (buc):</strong> Diferența dintre min și max.</li>
-                <li><strong>Zile Fără Stoc:</strong> Zile în care produsul a avut stoc zero.</li>
-                <li><strong>Rată Epuizare (%):</strong> Procentajul timpului fără stoc.</li>
-                <li><strong>Rulaj Stoc:</strong> De câte ori stocul a fost vândut și reumplut.</li>
-                <li><strong>Zile Medii Stoc:</strong> Zile medii necesare pentru a vinde întregul stoc.</li>
-                <li><strong>Zile Stoc Mort:</strong> Zile fără schimbare în stoc.</li>
-                <li><strong>Rată Stoc Mort (%):</strong> Procentaj zile fără mișcare.</li>
-                <li><strong>Valoare Medie (RON):</strong> Valoarea medie a stocului la preț de cost.</li>
-                <li><strong>Index Sănătate (%):</strong> Indicator compozit al sănătății stocului.</li>
-            </ul>
-        </article>
-    </details>
 </div>
 {% endblock %}
 

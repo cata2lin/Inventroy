@@ -1,4 +1,3 @@
-
 // static/js/snapshots.js
 document.addEventListener('DOMContentLoaded', () => {
     const elements = {
@@ -22,28 +21,20 @@ document.addEventListener('DOMContentLoaded', () => {
         storeId: '',
         startDate: '',
         endDate: '',
-        sortField: 'date',
+        sortField: 'on_hand',
         sortOrder: 'desc',
         metricFilters: {} // { key: {min, max} }
     };
 
-    const METRICS = [
-        ['average_stock_level','Stoc Mediu'],
-        ['min_stock_level','Stoc Min'],
-        ['max_stock_level','Stoc Max'],
-        ['stock_range','Variație Stoc'],
-        ['stock_stddev','StdDev Stoc'],
-        ['days_out_of_stock','Zile Fără Stoc'],
-        ['stockout_rate','Rată Epuizare %'],
-        ['replenishment_days','Zile Realimentare'],
-        ['depletion_days','Zile Epuizare'],
-        ['total_outflow','Ieșiri Totale'],
-        ['stock_turnover','Rulaj'],
-        ['avg_days_in_inventory','Zile Medii Stoc'],
-        ['dead_stock_days','Zile Stoc Mort'],
-        ['dead_stock_ratio','Rată Stoc Mort %'],
-        ['avg_inventory_value','Valoare Medie'],
-        ['stock_health_index','Index Sănătate (0-1)'],
+    const METRICS_FOR_FILTERS = [
+        ['on_hand', 'Current Stock'],
+        ['average_stock_level', 'Avg. Stock Level'],
+        ['stockout_rate', 'Stockout Rate (%)'],
+        ['dead_stock_ratio', 'Dead Stock Ratio (%)'],
+        ['stock_turnover', 'Stock Turnover'],
+        ['avg_days_in_inventory', 'Avg. Days in Inventory'],
+        ['avg_inventory_value', 'Avg. Inventory Value'],
+        ['stock_health_index', 'Health Index (0-1)'],
     ];
 
     const debounce = (func, delay) => {
@@ -55,7 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const fetchSnapshots = async () => {
-        elements.container.innerHTML = `<tr><td colspan="13" class="text-center">Loading...</td></tr>`;
+        elements.container.innerHTML = `<tr><td colspan="7" class="text-center" aria-busy="true">Loading analytics...</td></tr>`;
 
         const params = new URLSearchParams({
             skip: (state.page - 1) * state.limit,
@@ -79,18 +70,19 @@ document.addEventListener('DOMContentLoaded', () => {
             renderTable(data.snapshots);
             updatePagination();
         } catch (err) {
-            elements.container.innerHTML = `<tr><td colspan="13" class="text-center text-red-600">${err.message}</td></tr>`;
+            elements.container.innerHTML = `<tr><td colspan="7" class="text-center" style="color: var(--pico-color-red-500);">${err.message}</td></tr>`;
         }
     };
 
     const formatMetric = (value, decimals = 2, unit = '') => {
         if (value === null || value === undefined) return 'N/A';
-        return `${parseFloat(value).toFixed(decimals)}${unit}`;
+        const num = parseFloat(value);
+        return isNaN(num) ? 'N/A' : `${num.toFixed(decimals)}${unit}`;
     };
 
     const renderTable = (snapshots) => {
         if (!snapshots || snapshots.length === 0) {
-            elements.container.innerHTML = `<tr><td colspan="13" class="text-center">No data.</td></tr>`;
+            elements.container.innerHTML = `<tr><td colspan="7" class="text-center">No data found for the selected filters.</td></tr>`;
             return;
         }
 
@@ -105,26 +97,20 @@ document.addEventListener('DOMContentLoaded', () => {
             return `
                 <tr>
                     <td>
-                        <div class="flex items-center gap-2">
-                            <img src="${imageUrl}" class="w-12 h-12 object-cover rounded" alt="${title}">
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
+                            <img src="${imageUrl}" style="width: 48px; height: 48px; object-fit: cover; border-radius: var(--pico-border-radius);" alt="${title}">
                             <div>
                                 <strong>${title}</strong><br>
                                 <small>SKU: ${sku}</small>
                             </div>
                         </div>
                     </td>
-                    <td>${s.on_hand ?? '—'} buc</td>
-                    <td>${formatMetric(m.average_stock_level, 1)} buc</td>
-                    <td>${formatMetric(m.min_stock_level, 0)} / ${formatMetric(m.max_stock_level, 0)}</td>
-                    <td>${formatMetric(m.stock_range, 0)}</td>
-                    <td>${m.days_out_of_stock ?? '—'}</td>
-                    <td>${formatMetric(m.stockout_rate, 2, '%')}</td>
-                    <td>${formatMetric(m.stock_turnover, 2)}</td>
-                    <td>${formatMetric(m.avg_days_in_inventory, 1)}</td>
-                    <td>${m.dead_stock_days ?? '—'}</td>
-                    <td>${formatMetric(m.dead_stock_ratio, 2, '%')}</td>
-                    <td>${formatMetric(m.avg_inventory_value, 2, ' RON')}</td>
-                    <td>${m.stock_health_index != null ? formatMetric((m.stock_health_index * 100), 1, '%') : 'N/A'}</td>
+                    <td data-label="Current Stock">${s.on_hand ?? '—'} units</td>
+                    <td data-label="Avg. Inv. Value">${formatMetric(m.avg_inventory_value, 2, ' RON')}</td>
+                    <td data-label="Stockout Rate">${formatMetric(m.stockout_rate, 2, '%')}</td>
+                    <td data-label="Dead Stock Ratio">${formatMetric(m.dead_stock_ratio, 2, '%')}</td>
+                    <td data-label="Turnover">${formatMetric(m.stock_turnover, 2)}</td>
+                    <td data-label="Health Index">${m.stock_health_index != null ? formatMetric((m.stock_health_index * 100), 1, '%') : 'N/A'}</td>
                 </tr>
             `;
         }).join('');
@@ -139,7 +125,6 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.nextButton.disabled = state.page >= totalPages;
     };
 
-    // Sorting by clicking table headers
     const attachSortHandlers = () => {
         elements.thead.querySelectorAll('th.sortable').forEach(th => {
             th.style.cursor = 'pointer';
@@ -151,98 +136,90 @@ document.addEventListener('DOMContentLoaded', () => {
                     state.sortField = field;
                     state.sortOrder = 'desc';
                 }
+                // Update visual indicator
+                elements.thead.querySelectorAll('th.sortable').forEach(header => {
+                    header.classList.remove('sorted-asc', 'sorted-desc');
+                });
+                th.classList.add(state.sortOrder === 'asc' ? 'sorted-asc' : 'sorted-desc');
+                
                 state.page = 1;
                 fetchSnapshots();
             });
         });
     };
 
-    // Metric filter inputs
     const renderMetricFilters = () => {
-        elements.metricFilters.innerHTML = METRICS.map(([key, label]) => {
-            const idMin = `${key}-min`;
-            const idMax = `${key}-max`;
-            return `
-                <div class="flex flex-col">
-                    <label class="text-sm font-medium">${label}</label>
-                    <div class="flex gap-2">
-                        <input id="${idMin}" type="number" inputmode="decimal" placeholder="min" class="w-full">
-                        <input id="${idMax}" type="number" inputmode="decimal" placeholder="max" class="w-full">
-                    </div>
+        elements.metricFilters.innerHTML = METRICS_FOR_FILTERS.map(([key, label]) => `
+            <div>
+                <label for="${key}-filter" class="text-sm font-medium">${label}</label>
+                <div class="grid grid-cols-2 gap-2">
+                    <input id="${key}-min" type="number" placeholder="Min" data-key="${key}" class="metric-filter-input">
+                    <input id="${key}-max" type="number" placeholder="Max" data-key="${key}" class="metric-filter-input">
                 </div>
-            `;
-        }).join('');
+            </div>
+        `).join('');
 
-        METRICS.forEach(([key]) => {
-            const minEl = document.getElementById(`${key}-min`);
-            const maxEl = document.getElementById(`${key}-max`);
-            const handler = debounce(() => {
-                state.metricFilters[key] = {
-                    min: minEl.value,
-                    max: maxEl.value,
-                };
+        elements.metricFilters.querySelectorAll('.metric-filter-input').forEach(input => {
+            input.addEventListener('input', debounce((e) => {
+                const key = e.target.dataset.key;
+                const minVal = document.getElementById(`${key}-min`).value;
+                const maxVal = document.getElementById(`${key}-max`).value;
+                state.metricFilters[key] = { min: minVal, max: maxVal };
                 state.page = 1;
                 fetchSnapshots();
-            }, 350);
-            minEl.addEventListener('input', handler);
-            maxEl.addEventListener('input', handler);
+            }, 400));
+        });
+    };
+    
+    const setupEventListeners = () => {
+        elements.startDateFilter.addEventListener('change', () => {
+            state.startDate = elements.startDateFilter.value;
+            state.page = 1;
+            fetchSnapshots();
+        });
+        elements.endDateFilter.addEventListener('change', () => {
+            state.endDate = elements.endDateFilter.value;
+            state.page = 1;
+            fetchSnapshots();
+        });
+        elements.storeFilter.addEventListener('change', () => {
+            state.storeId = elements.storeFilter.value;
+            state.page = 1;
+            fetchSnapshots();
+        });
+        elements.triggerBtn.addEventListener('click', async () => {
+            if (!state.storeId) {
+                alert('Please select a store before triggering a snapshot.');
+                return;
+            }
+            elements.triggerBtn.setAttribute('aria-busy', 'true');
+            try {
+                const res = await fetch(`/api/snapshots/trigger?store_id=${state.storeId}`, { method: 'POST' });
+                if (!res.ok) throw new Error('Failed to trigger snapshot.');
+                alert('Snapshot triggered successfully! The data will be updated shortly.');
+                setTimeout(fetchSnapshots, 2000); // Refresh data after a delay
+            } catch (e) {
+                alert(e.message);
+            } finally {
+                elements.triggerBtn.removeAttribute('aria-busy', 'false');
+            }
+        });
+        elements.prevButton.addEventListener('click', () => {
+            if (state.page > 1) {
+                state.page--;
+                fetchSnapshots();
+            }
+        });
+        elements.nextButton.addEventListener('click', () => {
+            const totalPages = Math.ceil(state.totalCount / state.limit);
+            if (state.page < totalPages) {
+                state.page++;
+                fetchSnapshots();
+            }
         });
     };
 
-    // Date and store filters
-    elements.startDateFilter.addEventListener('change', () => {
-        state.startDate = elements.startDateFilter.value;
-        state.page = 1;
-        fetchSnapshots();
-    });
-    elements.endDateFilter.addEventListener('change', () => {
-        state.endDate = elements.endDateFilter.value;
-        state.page = 1;
-        fetchSnapshots();
-    });
-    elements.storeFilter.addEventListener('change', () => {
-        state.storeId = elements.storeFilter.value;
-        state.page = 1;
-        fetchSnapshots();
-    });
-
-    // Trigger snapshot
-    elements.triggerBtn.addEventListener('click', async () => {
-        if (!state.storeId) {
-            alert('Selectați un magazin înainte de a rula snapshot.');
-            return;
-        }
-        elements.triggerBtn.disabled = true;
-        try {
-            const res = await fetch(`/api/snapshots/trigger?store_id=${encodeURIComponent(state.storeId)}`, {
-                method: 'POST'
-            });
-            if (!res.ok) throw new Error('Eroare la declanșarea snapshot-ului');
-            await fetchSnapshots();
-        } catch (e) {
-            alert(e.message);
-        } finally {
-            elements.triggerBtn.disabled = false;
-        }
-    });
-
-    // Pagination controls
-    elements.prevButton.addEventListener('click', () => {
-        if (state.page > 1) {
-            state.page -= 1;
-            fetchSnapshots();
-        }
-    });
-    elements.nextButton.addEventListener('click', () => {
-        const totalPages = Math.max(1, Math.ceil(state.totalCount / state.limit));
-        if (state.page < totalPages) {
-            state.page += 1;
-            fetchSnapshots();
-        }
-    });
-
-    // Init dates
-    const initDates = () => {
+    const init = async () => {
         const today = new Date();
         const past = new Date();
         past.setDate(today.getDate() - 30);
@@ -250,25 +227,20 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.startDateFilter.value = past.toISOString().split('T')[0];
         state.startDate = elements.startDateFilter.value;
         state.endDate = elements.endDateFilter.value;
-    };
 
-    // Load stores for dropdown
-    const loadStores = async () => {
         try {
             const res = await fetch('/api/config/stores');
             const stores = await res.json();
-            stores.forEach(s => {
-                elements.storeFilter.add(new Option(s.name, s.id));
-            });
+            stores.forEach(s => elements.storeFilter.add(new Option(s.name, s.id)));
         } catch {
             console.error('Failed to load stores.');
         }
+
+        renderMetricFilters();
+        attachSortHandlers();
+        setupEventListeners();
+        fetchSnapshots();
     };
 
-    // Boot
-    renderMetricFilters();
-    attachSortHandlers();
-    initDates();
-    loadStores();
-    fetchSnapshots();
+    init();
 });
