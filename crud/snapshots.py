@@ -25,7 +25,8 @@ def create_snapshot_for_store(db: Session, store_id: int) -> None:
     if sync_loc_id:
         onhand_rows = db.execute(
             text("""
-                SELECT pv.id AS variant_id, COALESCE(il.on_hand, 0) AS on_hand
+                -- CHANGE 1: Use il.available instead of il.on_hand
+                SELECT pv.id AS variant_id, COALESCE(il.available, 0) AS on_hand
                 FROM product_variants pv
                 LEFT JOIN inventory_levels il
                   ON il.variant_id = pv.id AND il.location_id = :loc_id
@@ -36,7 +37,8 @@ def create_snapshot_for_store(db: Session, store_id: int) -> None:
     else:
         onhand_rows = db.execute(
             text("""
-                SELECT pv.id AS variant_id, COALESCE(SUM(il.on_hand), 0) AS on_hand
+                -- CHANGE 2: Sum il.available instead of il.on_hand
+                SELECT pv.id AS variant_id, COALESCE(SUM(il.available), 0) AS on_hand
                 FROM product_variants pv
                 LEFT JOIN inventory_levels il
                   ON il.variant_id = pv.id
