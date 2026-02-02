@@ -278,6 +278,27 @@ class ShopifyService:
         """Deletes a webhook subscription by its ID."""
         response = requests.delete(f"{self.rest_endpoint}/webhooks/{webhook_id}.json", headers=self.headers)
         response.raise_for_status()
+
+    def set_inventory_quantities(self, quantities: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Sets absolute inventory quantities for multiple items at once.
+        
+        Args:
+            quantities: List of dicts with keys: inventoryItemId, locationId, quantity
+                        Example: [{"inventoryItemId": "gid://...", "locationId": "gid://...", "quantity": 10}]
+        
+        Returns:
+            The API response containing any errors or changes made.
+        """
+        variables = {
+            "input": {
+                "reason": "correction",
+                "name": "available",
+                "quantities": quantities
+            }
+        }
+        return self.execute_mutation("inventorySetQuantities", variables)
+
     def get_locations(self) -> List[Dict[str, Any]]:
         """Retrieves all inventory locations for a store using the REST API."""
         response = requests.get(f"{self.rest_endpoint}/locations.json", headers=self.headers)
