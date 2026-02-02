@@ -5,11 +5,26 @@ import random
 from typing import List, Optional, Dict, Any, Generator
 from datetime import datetime
 
-def gid_to_id(gid: Optional[str]) -> Optional[int]:
-    if not gid:
+def gid_to_id(gid: Optional[Any]) -> Optional[int]:
+    """Convert a Shopify GID or plain ID to an integer.
+    
+    Handles:
+    - GID strings: "gid://shopify/Product/123" -> 123
+    - Numeric strings: "123" -> 123
+    - Integers: 123 -> 123
+    - None/empty: None
+    """
+    if gid is None:
         return None
+    # If it's already an int, return it
+    if isinstance(gid, int):
+        return gid
     try:
-        return int(str(gid).split('/')[-1])
+        gid_str = str(gid).strip()
+        if not gid_str:
+            return None
+        # Split by '/' and take the last part (handles both GID and plain numbers)
+        return int(gid_str.split('/')[-1])
     except (IndexError, ValueError):
         return None
 

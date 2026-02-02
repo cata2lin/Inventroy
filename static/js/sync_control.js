@@ -59,6 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    syncAllProductsBtn.addEventListener('click', () => startSync('/api/sync-control/products'));
+    // Use the new endpoint that syncs products AND runs stock reconciliation
+    syncAllProductsBtn.addEventListener('click', () => startSync('/api/sync-control/products-and-reconcile'));
     pollTaskStatus();
 });

@@ -12,29 +12,66 @@ import json
 try:
     from shopify_service import gid_to_id
 except ImportError:
-    def gid_to_id(gid: Optional[str]) -> Optional[int]:
-        if not gid: return None
-        try: return int(str(gid).split("/")[-1])
+    def gid_to_id(gid) -> Optional[int]:
+        if gid is None: return None
+        if isinstance(gid, int): return gid
+        try: return int(str(gid).strip().split("/")[-1])
         except (IndexError, ValueError): return None
 
 # --- Main function to get products for UI ---
 def get_products(
-    db: Session, skip: int = 0, limit: int = 100, store_id: Optional[int] = None, search: Optional[str] = None
+    db: Session, 
+    skip: int = 0, 
+    limit: int = 100, 
+    store_id: Optional[int] = None, 
+    search: Optional[str] = None,
+    sort_col: str = "title",
+    sort_order: str = "asc",
 ) -> Tuple[List[models.Product], int]:
-    query = db.query(models.Product).options(joinedload(models.Product.variants))
+    """
+    Get products with fuzzy multi-word search and sorting.
+    Search matches if ALL words are found in title, SKU, or barcode (any order).
+    """
+    # Load variants with their inventory levels to compute accurate stock
+    query = db.query(models.Product).options(
+        joinedload(models.Product.variants).joinedload(models.ProductVariant.inventory_levels)
+    )
+    
     if store_id:
         query = query.filter(models.Product.store_id == store_id)
+    
+    # Fuzzy multi-word search: ALL words must match (in any order)
     if search:
-        search_term = f"%{search}%"
-        query = query.filter(
-            or_(
-                models.Product.title.ilike(search_term),
-                models.Product.variants.any(models.ProductVariant.sku.ilike(search_term)),
-                models.Product.variants.any(models.ProductVariant.barcode.ilike(search_term)),
+        search_text = search.strip()
+        words = [w.strip().lower() for w in search_text.split() if w.strip()]
+        
+        for word in words:
+            word_pattern = f"%{word}%"
+            query = query.filter(
+                or_(
+                    func.lower(models.Product.title).like(word_pattern),
+                    models.Product.variants.any(func.lower(models.ProductVariant.sku).like(word_pattern)),
+                    models.Product.variants.any(func.lower(models.ProductVariant.barcode).like(word_pattern)),
+                )
             )
-        )
+    
     total_count = query.count()
-    products = query.order_by(models.Product.title).offset(skip).limit(limit).all()
+    
+    # Sorting
+    valid_sort_cols = {
+        "title": models.Product.title,
+        "status": models.Product.status,
+        "created_at": models.Product.created_at,
+        "updated_at": models.Product.updated_at,
+    }
+    sort_column = valid_sort_cols.get(sort_col, models.Product.title)
+    
+    if sort_order.lower() == "desc":
+        query = query.order_by(sort_column.desc())
+    else:
+        query = query.order_by(sort_column.asc())
+    
+    products = query.offset(skip).limit(limit).all()
     return products, total_count
 
 def get_product(db: Session, product_id: int) -> Optional[models.Product]:
@@ -201,23 +238,91 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
 
 # --- START: NEW AND MODIFIED WEBHOOK FUNCTIONS ---
 
-def patch_product_from_webhook(db: Session, store_id: int, payload: Dict[str, Any]):
+def normalize_webhook_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize a Shopify REST webhook payload to use the same field names
+    as GraphQL responses. This allows the same processing logic to work
+    for both sync (GraphQL) and webhooks (REST).
+    
+    REST webhooks use snake_case, GraphQL uses camelCase.
+    """
+    if not payload:
+        return payload
+    
+    # Field mappings: REST (snake_case) -> GraphQL (camelCase)
+    field_map = {
+        # Product fields
+        "body_html": "bodyHtml",
+        "product_type": "productType",
+        "created_at": "createdAt",
+        "updated_at": "updatedAt",
+        "published_at": "publishedAt",
+        # Variant fields
+        "compare_at_price": "compareAtPrice",
+        "inventory_item_id": "inventoryItemId",
+        "inventory_quantity": "inventoryQuantity",
+        "inventory_policy": "inventoryPolicy",
+        "inventory_management": "inventoryManagement",
+        # Featured image
+        "featured_image": "featuredImage",
+        "image": "featuredImage",
+    }
+    
+    normalized = {}
+    for key, value in payload.items():
+        # Map the key if it's in our mapping, otherwise keep as-is
+        new_key = field_map.get(key, key)
+        
+        # Handle nested structures
+        if key == "variants" and isinstance(value, list):
+            normalized[new_key] = [normalize_webhook_payload(v) for v in value]
+        elif key == "image" and isinstance(value, dict):
+            # REST sends {"src": "..."}, normalize to {"url": "..."}
+            normalized["featuredImage"] = {"url": value.get("src")}
+        elif key == "images" and isinstance(value, list) and len(value) > 0:
+            # Use first image if no featured image
+            if "featuredImage" not in normalized:
+                normalized["featuredImage"] = {"url": value[0].get("src")}
+        elif isinstance(value, dict):
+            normalized[new_key] = normalize_webhook_payload(value)
+        else:
+            normalized[new_key] = value
+    
+    return normalized
+
+def _get_field(payload: Dict[str, Any], *keys, default=None):
+    """Get a field from payload, trying multiple possible key names."""
+    for key in keys:
+        if key in payload:
+            return payload[key]
+    return default
+
+def patch_product_from_webhook(db: Session, store_id: int, raw_payload: Dict[str, Any]):
     """
     Safely updates a product record from a webhook payload by only
     updating the fields that are present in the payload. This prevents
     overwriting complete data with partial data.
+    
+    Handles both REST (snake_case) and GraphQL (camelCase) field names.
     """
-    product_id = payload.get("id")
+    # Normalize the payload to use consistent field names
+    payload = normalize_webhook_payload(raw_payload)
+    
+    product_id = gid_to_id(payload.get("id"))
     if not product_id:
+        print(f"[WEBHOOK] Ignoring product update - no valid ID in payload")
         return
 
     db_product = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not db_product:
-        # If the product doesn't exist, we can fall back to the full create/update.
-        create_or_update_product_from_webhook(db, store_id, payload)
+        # If the product doesn't exist, create it
+        print(f"[WEBHOOK] Product {product_id} not found, creating from webhook")
+        create_or_update_product_from_webhook(db, store_id, raw_payload)
         return
 
+    # Build update dictionary for fields that are present
     updates = {}
+    
     if "title" in payload:
         updates[models.Product.title] = payload["title"]
     if "bodyHtml" in payload:
@@ -228,28 +333,117 @@ def patch_product_from_webhook(db: Session, store_id: int, payload: Dict[str, An
         updates[models.Product.product_type] = payload["productType"]
     if "status" in payload:
         updates[models.Product.status] = payload["status"]
+    if "handle" in payload:
+        updates[models.Product.handle] = payload["handle"]
+    
+    # Handle tags - REST sends comma-separated string, GraphQL sends list
     if "tags" in payload:
-        tags = payload.get("tags", [])
-        updates[models.Product.tags] = ",".join(tags if tags is not None else [])
+        tags = payload["tags"]
+        if isinstance(tags, list):
+            updates[models.Product.tags] = ",".join(tags)
+        elif isinstance(tags, str):
+            updates[models.Product.tags] = tags
+    
     if "updatedAt" in payload:
         updates[models.Product.updated_at] = _to_dt(payload["updatedAt"])
+    
+    # Update featured image if present
+    if "featuredImage" in payload and payload["featuredImage"]:
+        img_url = payload["featuredImage"].get("url") if isinstance(payload["featuredImage"], dict) else None
+        if img_url:
+            updates[models.Product.image_url] = img_url
 
     if updates:
+        updates[models.Product.last_seen_at] = datetime.now(timezone.utc)
         (db.query(models.Product)
            .filter(models.Product.id == product_id)
            .update(updates, synchronize_session=False))
         db.commit()
-        print(f"[DB-UPDATE] Patched product ID {product_id} from webhook.")
+        print(f"[DB-UPDATE] Patched product ID {product_id} from webhook with {len(updates)} fields")
 
-    # Note: We deliberately DO NOT process variants here, as the `products/update`
-    # webhook often omits them, which would wipe out our existing variant data.
-    # Variant-specific webhooks should handle variant updates.
+    # Process variants incrementally if they are present
+    variants = payload.get("variants", [])
+    if variants:
+        _update_variants_incrementally(db, product_id, store_id, variants)
 
-def create_or_update_product_from_webhook(db: Session, store_id: int, payload: Dict[str, Any]):
+def _update_variants_incrementally(db: Session, product_id: int, store_id: int, variants: List[Dict[str, Any]]):
+    """
+    Update variants incrementally from webhook data.
+    Only updates fields that are present in the payload, preserving existing data.
+    Creates new variants if they don't exist.
+    """
+    now = datetime.now(timezone.utc)
+    
+    for v_data in variants:
+        variant_id = gid_to_id(v_data.get("id"))
+        if not variant_id:
+            continue
+        
+        # Check if variant exists
+        db_variant = db.query(models.ProductVariant).filter(
+            models.ProductVariant.id == variant_id
+        ).first()
+        
+        if db_variant:
+            # Update existing variant
+            updates = {}
+            if "title" in v_data:
+                updates[models.ProductVariant.title] = v_data["title"]
+            if "sku" in v_data:
+                updates[models.ProductVariant.sku] = v_data["sku"] or None
+            if "barcode" in v_data:
+                updates[models.ProductVariant.barcode] = v_data["barcode"]
+            if "price" in v_data:
+                updates[models.ProductVariant.price] = v_data["price"]
+            if "compareAtPrice" in v_data:
+                updates[models.ProductVariant.compare_at_price] = v_data["compareAtPrice"]
+            if "position" in v_data:
+                updates[models.ProductVariant.position] = v_data["position"]
+            if "inventoryQuantity" in v_data:
+                updates[models.ProductVariant.inventory_quantity] = v_data["inventoryQuantity"]
+            
+            if updates:
+                updates[models.ProductVariant.last_seen_at] = now
+                (db.query(models.ProductVariant)
+                   .filter(models.ProductVariant.id == variant_id)
+                   .update(updates, synchronize_session=False))
+        else:
+            # Create new variant
+            sku = v_data.get("sku")
+            new_variant = models.ProductVariant(
+                id=variant_id,
+                product_id=product_id,
+                store_id=store_id,
+                shopify_gid=v_data.get("admin_graphql_api_id", f"gid://shopify/ProductVariant/{variant_id}"),
+                title=v_data.get("title"),
+                sku=sku if sku and sku.strip() else None,
+                barcode=v_data.get("barcode"),
+                price=v_data.get("price"),
+                compare_at_price=v_data.get("compareAtPrice"),
+                position=v_data.get("position"),
+                inventory_item_id=gid_to_id(v_data.get("inventory_item_id")),
+                inventory_quantity=v_data.get("inventoryQuantity"),
+                last_seen_at=now,
+            )
+            db.add(new_variant)
+            print(f"[DB-UPDATE] Created new variant {variant_id} from webhook")
+    
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        print(f"[WEBHOOK-ERROR] Failed to update variants: {e}")
+
+# --- END: WEBHOOK PAYLOAD NORMALIZATION ---
+
+def create_or_update_product_from_webhook(db: Session, store_id: int, raw_payload: Dict[str, Any]):
     """
     Handles the 'products/create' webhook. For 'products/update', the new
     patch function should be used to avoid data loss.
     """
+    # Normalize the payload to use consistent field names
+    payload = normalize_webhook_payload(raw_payload)
+    
     now = datetime.now(timezone.utc)
     # This function is now primarily for *creating* products from webhooks
     create_or_update_products(db, store_id, run_id=0, items=[payload], last_seen_at=now)
@@ -259,7 +453,7 @@ def create_or_update_product_from_webhook(db: Session, store_id: int, payload: D
 
 
 def delete_product_from_webhook(db: Session, payload: Dict[str, Any]):
-    product_id = payload.get("id")
+    product_id = gid_to_id(payload.get("id"))
     if not product_id: return
     db.query(models.Product).filter(models.Product.id == product_id).delete()
     db.commit()

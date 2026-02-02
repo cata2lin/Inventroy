@@ -7,12 +7,28 @@
         <h2>View all products synchronized from your connected stores.</h2>
     </hgroup>
 
-    <article>
-        <div class="grid">
-            <input type="search" id="search-input" placeholder="Search by name, SKU, or barcode...">
-            <select id="store-filter">
-                <option value="">All Stores</option>
-            </select>
+    <article class="filters">
+        <div class="grid" style="grid-template-columns: 1fr 1fr 1fr; gap: 1rem; align-items: end;">
+            <label for="search-input">
+                Search
+                <input type="search" id="search-input" placeholder="Search any words: 'red bag leather'...">
+            </label>
+            <label for="store-filter">
+                Store
+                <select id="store-filter">
+                    <option value="">All Stores</option>
+                </select>
+            </label>
+            <label for="sort-select">
+                Sort By
+                <select id="sort-select">
+                    <option value="title-asc">Title (A-Z)</option>
+                    <option value="title-desc">Title (Z-A)</option>
+                    <option value="updated_at-desc">Recently Updated</option>
+                    <option value="created_at-desc">Newest First</option>
+                    <option value="created_at-asc">Oldest First</option>
+                </select>
+            </label>
         </div>
     </article>
 
@@ -20,7 +36,7 @@
         <p>Loading products...</p>
     </article>
 
-    <div class="pagination-controls grid">
+    <div class="pagination-controls">
         <button id="prev-button" disabled>Previous</button>
         <span id="page-indicator">Page 1 of 1</span>
         <button id="next-button" disabled>Next</button>

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, date, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
-from sqlalchemy import text
+from sqlalchemy import text, func
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -91,256 +91,288 @@ def create_snapshot_for_store(db: Session, store_id: int) -> None:
 
 # ---------- Readers ----------
 
-ALLOWED_SORT_COLS = {
-    # column alias in final SELECT -> safe
-    "on_hand": "on_hand",
-    "average_stock_level": "average_stock_level",
-    "avg_inventory_value": "avg_inventory_value",
-    "stockout_rate": "stockout_rate",
-    "dead_stock_ratio": "dead_stock_ratio",
-    "stock_turnover": "stock_turnover",
-    "avg_days_in_inventory": "avg_days_in_inventory",
-    "stock_health_index": "stock_health_index",
-    "product_title": "product_title",
-    "sku": "sku",
-}
-
-def get_snapshots_with_metrics(
+def get_products_with_velocity(
     db: Session,
     skip: int = 0,
     limit: int = 100,
     store_id: Optional[int] = None,
-    start_date: Optional[date] = None,
-    end_date: Optional[date] = None,
     q: Optional[str] = None,
-    sort_col: str = "on_hand",
-    sort_order: str = "desc",
-    metric_filters: Optional[Dict[str, Dict[str, float]]] = None,
+    sort_col: str = "days_left",
+    sort_order: str = "asc",
+    velocity_days: int = 7,
 ) -> Dict[str, Any]:
-    # base where
-    where = []
+    """
+    Get products GROUPED BY BARCODE with:
+    - Total stock across all stores (from inventory_levels)
+    - Combined sales velocity (total units sold/day over velocity_days)
+    - Stock days left (total_stock / total_velocity)
+    - Store count (number of stores the product is listed on)
+    
+    Products without barcodes are grouped individually.
+    """
     params: Dict[str, Any] = {
-        "start_ts": datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc) if start_date else None,
-        "end_ts": datetime.combine(end_date, datetime.max.time(), tzinfo=timezone.utc) if end_date else None,
-        "q": f"%{q.strip()}%" if q else None,
+        "velocity_days": velocity_days,
         "skip": int(skip),
         "limit": int(limit),
     }
-
+    
+    # Build WHERE clauses for initial filtering
+    where_clauses = ["1=1"]
     if store_id is not None:
-        where.append("s.store_id = :store_id")
+        where_clauses.append("pv.store_id = :store_id")
         params["store_id"] = int(store_id)
-
-    if params["start_ts"]:
-        where.append("s.date >= :start_ts")
-    if params["end_ts"]:
-        where.append("s.date <= :end_ts")
-
-    # optional search
-    join_search = ""
+    
+    # Fuzzy multi-word search: ALL words must match (in any order)
+    # Works for: "Set rosu" matching "Set 6 Genti din Piele Ecologica, Model Granulat, Rosu"
     if q:
-        join_search = "JOIN product_variants pvq ON pvq.id = s.product_variant_id JOIN products pq ON pq.id = pvq.product_id"
-        where.append("(pvq.sku ILIKE :q OR pq.title ILIKE :q)")
-
-    where_sql = " AND ".join(where) if where else "1=1"
-
-    # recent window for depletion metric
-    params["recent_floor"] = (params.get("end_ts") or datetime.now(timezone.utc)) - timedelta(days=14)
-
-    # metric filters
-    mf_sql = []
-    if metric_filters:
-        for field, bounds in metric_filters.items():
-            if not bounds:
-                continue
-            lo = bounds.get("min")
-            hi = bounds.get("max")
-            if lo is not None and lo != "":
-                mf_sql.append(f"({field} >= :{field}_min)")
-                params[f"{field}_min"] = float(lo)
-            if hi is not None and hi != "":
-                mf_sql.append(f"({field} <= :{field}_max)")
-                params[f"{field}_max"] = float(hi)
-    mf_where = (" AND " + " AND ".join(mf_sql)) if mf_sql else ""
-
-    # sorting
-    safe_sort = ALLOWED_SORT_COLS.get(sort_col, "on_hand")
+        search_text = q.strip()
+        words = [w.strip() for w in search_text.split() if w.strip()]
+        
+        if words:
+            # Build a condition that requires ALL words to be present in title, sku, or barcode
+            word_conditions = []
+            for i, word in enumerate(words):
+                param_name = f"q{i}"
+                # Each word must appear in at least one of: title, sku, barcode
+                word_conditions.append(f"(LOWER(p.title) LIKE :{param_name} OR LOWER(pv.sku) LIKE :{param_name} OR LOWER(COALESCE(pv.barcode, '')) LIKE :{param_name})")
+                params[param_name] = f"%{word.lower()}%"
+            
+            # ALL words must match
+            where_clauses.append(f"({' AND '.join(word_conditions)})")
+    
+    where_sql = " AND ".join(where_clauses)
+    
+    # Sorting - handle special cases
+    valid_sort_cols = {
+        "days_left": "days_left",
+        "velocity": "total_velocity", 
+        "current_stock": "total_stock",
+        "title": "title",
+        "sku": "sku",
+        "store_count": "store_count",
+    }
+    safe_sort = valid_sort_cols.get(sort_col, "days_left")
     so = "ASC" if (sort_order or "").lower() == "asc" else "DESC"
-    order_sql = f"ORDER BY {safe_sort} {so}, product_title ASC, sku ASC"
-
-    # store filter at the very end join
-    final_store_filter = "WHERE pv.store_id = :store_id" if store_id is not None else ""
-
-    # final SQL with window count over filtered set
+    
+    # Handle NULL sorting - NULLs last for both ASC and DESC
+    if safe_sort in ("days_left", "total_velocity"):
+        order_sql = f"ORDER BY {safe_sort} IS NULL, {safe_sort} {so}"
+    else:
+        order_sql = f"ORDER BY {safe_sort} {so}"
+    
     sql = text(f"""
-    WITH filtered AS (
-        SELECT s.* FROM inventory_snapshots s {join_search} WHERE {where_sql}
-    ),
-    series AS (
-        SELECT
-            f.*,
-            LAG(f.on_hand) OVER (PARTITION BY f.product_variant_id, f.store_id ORDER BY f.date) AS prev_on_hand,
-            (f.date AT TIME ZONE 'UTC')::date AS d
-        FROM filtered f
-    ),
-    latest AS (
-        SELECT DISTINCT ON (product_variant_id, store_id)
-               *,
-               (date AT TIME ZONE 'UTC')::date AS latest_date
-        FROM filtered
-        ORDER BY product_variant_id, store_id, date DESC
-    ),
-    deltas AS (
-        SELECT *,
-               (on_hand - COALESCE(prev_on_hand, on_hand)) AS delta
-        FROM series
-    ),
-    agg AS (
-        SELECT
-            product_variant_id,
-            store_id,
-            COUNT(*)::numeric AS obs_count,
-            AVG(on_hand)::numeric AS average_stock_level,
-            MIN(on_hand)::numeric AS min_stock_level,
-            MAX(on_hand)::numeric AS max_stock_level,
-            (MAX(on_hand) - MIN(on_hand))::numeric AS stock_range,
-            STDDEV_POP(on_hand)::numeric AS stock_stddev,
-            SUM(CASE WHEN on_hand <= 0 THEN 1 ELSE 0 END)::numeric AS days_out_of_stock,
-            100.0 * SUM(CASE WHEN on_hand <= 0 THEN 1 ELSE 0 END)::numeric / NULLIF(COUNT(*),0) AS stockout_rate,
-            SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END)::numeric AS total_outflow
-        FROM deltas
-        GROUP BY product_variant_id, store_id
-    ),
-    last_inflow AS (
-        SELECT DISTINCT ON (product_variant_id, store_id)
-               product_variant_id, store_id, d AS inflow_date
-        FROM deltas
-        WHERE delta > 0
-        ORDER BY product_variant_id, store_id, d DESC
-    ),
-    recent_outflow AS (
-        SELECT
-            product_variant_id,
-            store_id,
-            AVG(CASE WHEN delta < 0 THEN -delta ELSE 0 END) FILTER (WHERE delta < 0) AS recent_outflow_rate
-        FROM deltas
-        WHERE date >= :recent_floor
-        GROUP BY product_variant_id, store_id
-    ),
-    metrics_base AS (
-        SELECT a.*, li.inflow_date, ro.recent_outflow_rate
-        FROM agg a
-        LEFT JOIN last_inflow li USING (product_variant_id, store_id)
-        LEFT JOIN recent_outflow ro USING (product_variant_id, store_id)
-    ),
-    dead_stock AS (
-        SELECT
-            s.product_variant_id,
-            s.store_id,
-            SUM(CASE WHEN s.on_hand <= COALESCE(m.average_stock_level,0) * 0.10 THEN 1 ELSE 0 END)::numeric AS dead_stock_days
-        FROM series s
-        JOIN metrics_base m USING (product_variant_id, store_id)
-        GROUP BY s.product_variant_id, s.store_id
-    ),
-    metrics AS (
-        SELECT
-            m.*,
-            ds.dead_stock_days,
-            CASE WHEN m.obs_count > 0 THEN 100.0 * ds.dead_stock_days / m.obs_count ELSE NULL END AS dead_stock_ratio,
-            CASE WHEN m.average_stock_level > 0 THEN m.total_outflow / m.average_stock_level ELSE NULL END AS stock_turnover,
-            (
-              m.average_stock_level *
-              COALESCE(
-                (SELECT AVG(NULLIF(s.price,0)) FROM filtered s WHERE s.product_variant_id=m.product_variant_id AND s.store_id=m.store_id),
-                (SELECT l.price FROM latest l WHERE l.product_variant_id=m.product_variant_id AND l.store_id=m.store_id)
-              )
-            )::numeric AS avg_inventory_value
-        FROM metrics_base m
-        JOIN dead_stock ds USING (product_variant_id, store_id)
-    ),
-    base AS (
-        SELECT
-            l.product_variant_id AS variant_id,
-            l.store_id,
-            l.on_hand,
-            l.price,
-            l.cost_per_item,
-            l.latest_date,
-            m.*,
-            CASE WHEN m.stock_turnover > 0 THEN 365.0 / m.stock_turnover ELSE NULL END AS avg_days_in_inventory,
-            CASE WHEN m.inflow_date IS NULL THEN NULL ELSE (l.latest_date - m.inflow_date) END AS replenishment_days,
-            CASE WHEN COALESCE(m.recent_outflow_rate,0) > 0 THEN (l.on_hand::numeric / m.recent_outflow_rate) ELSE NULL END AS depletion_days,
-            GREATEST(
-              0,
-              LEAST(
-                1,
-                (1 - COALESCE(m.stockout_rate,0)/100.0) * (1 - COALESCE(m.dead_stock_days / NULLIF(m.obs_count,0), 0))
-              )
-            )::numeric AS stock_health_index
-        FROM latest l
-        LEFT JOIN metrics m ON m.product_variant_id = l.product_variant_id AND m.store_id = l.store_id
-    ),
-    joined AS (
-        SELECT
-            b.*,
+    WITH variant_stock AS (
+        -- Get current stock for each variant from inventory_levels
+        SELECT 
+            pv.id as variant_id,
+            pv.barcode,
             pv.sku,
-            pv.shopify_gid,
-            p.id AS product_id,
-            p.title AS product_title,
-            p.image_url
-        FROM base b
-        JOIN product_variants pv ON pv.id = b.variant_id
+            pv.store_id,
+            p.id as product_id,
+            p.title,
+            p.image_url,
+            COALESCE(SUM(il.available), 0) as stock
+        FROM product_variants pv
         JOIN products p ON p.id = pv.product_id
-        {final_store_filter}
+        LEFT JOIN inventory_levels il ON il.variant_id = pv.id
+        WHERE {where_sql}
+        GROUP BY pv.id, pv.barcode, pv.sku, pv.store_id, p.id, p.title, p.image_url
+    ),
+    oldest_snapshot AS (
+        -- Get the oldest snapshot within velocity period for each variant
+        SELECT DISTINCT ON (product_variant_id, store_id)
+            product_variant_id,
+            store_id,
+            on_hand as old_stock,
+            date as old_date
+        FROM inventory_snapshots
+        WHERE date >= (CURRENT_DATE - :velocity_days * INTERVAL '1 day')
+        ORDER BY product_variant_id, store_id, date ASC
+    ),
+    variant_velocity AS (
+        -- Calculate velocity per variant
+        SELECT
+            vs.variant_id,
+            vs.barcode,
+            vs.sku,
+            vs.store_id,
+            vs.product_id,
+            vs.title,
+            vs.image_url,
+            vs.stock as current_stock,
+            os.old_stock,
+            CASE 
+                WHEN os.old_stock IS NOT NULL AND os.old_date IS NOT NULL 
+                     AND (CURRENT_DATE - os.old_date::date) > 0
+                THEN GREATEST(0, (os.old_stock - vs.stock)::numeric / (CURRENT_DATE - os.old_date::date))
+                ELSE 0
+            END as velocity
+        FROM variant_stock vs
+        LEFT JOIN oldest_snapshot os ON os.product_variant_id = vs.variant_id AND os.store_id = vs.store_id
+    ),
+    barcode_grouped AS (
+        -- Aggregate by barcode (or by variant_id if no barcode)
+        SELECT
+            COALESCE(NULLIF(barcode, ''), 'NO_BARCODE_' || MIN(variant_id)::text) as group_key,
+            COALESCE(NULLIF(barcode, ''), '') as barcode,
+            MIN(sku) as sku,
+            MIN(title) as title,
+            MIN(image_url) as image_url,
+            SUM(current_stock) as total_stock,
+            SUM(velocity) as total_velocity,
+            COUNT(DISTINCT store_id) as store_count,
+            CASE 
+                WHEN SUM(velocity) > 0 
+                THEN SUM(current_stock)::numeric / SUM(velocity)
+                ELSE NULL
+            END as days_left
+        FROM variant_velocity
+        GROUP BY COALESCE(NULLIF(barcode, ''), 'NO_BARCODE_' || variant_id::text), barcode
     )
-    SELECT
-        j.*,
-        COUNT(*) OVER() AS _total_count
-    FROM joined j
-    WHERE 1=1 {mf_where}
+    SELECT 
+        bg.*,
+        COUNT(*) OVER() as _total_count
+    FROM barcode_grouped bg
     {order_sql}
     LIMIT :limit OFFSET :skip
     """)
-
+    
     rows = db.execute(sql, params).mappings().all()
     total = int(rows[0]["_total_count"]) if rows else 0
+    
+    products: List[Dict[str, Any]] = []
+    for r in rows:
+        velocity_val = float(r["total_velocity"]) if r["total_velocity"] is not None else None
+        days_left_val = float(r["days_left"]) if r["days_left"] is not None else None
+        
+        products.append({
+            "barcode": r["barcode"] if r["barcode"] else None,
+            "sku": r["sku"],
+            "title": r["title"],
+            "image_url": r["image_url"],
+            "total_stock": int(r["total_stock"]) if r["total_stock"] is not None else 0,
+            "velocity": round(velocity_val, 2) if velocity_val is not None else None,
+            "days_left": round(days_left_val, 1) if days_left_val is not None else None,
+            "store_count": int(r["store_count"]) if r["store_count"] is not None else 0,
+        })
+    
+    return {"products": products, "total_count": total, "velocity_days": velocity_days}
 
-    snapshots: List[Dict[str, Any]] = []
+
+def get_last_snapshot_date_by_store(db: Session, store_id: Optional[int] = None) -> Optional[datetime]:
+    """Get the most recent snapshot date for a store (or all stores if store_id is None)."""
+    query = db.query(func.max(models.InventorySnapshot.date))
+    if store_id is not None:
+        query = query.filter(models.InventorySnapshot.store_id == store_id)
+    result = query.scalar()
+    return result
+
+
+def has_snapshot_data(db: Session, store_id: Optional[int] = None) -> bool:
+    """Check if any snapshot data exists for the given store."""
+    query = db.query(models.InventorySnapshot.id).limit(1)
+    if store_id is not None:
+        query = query.filter(models.InventorySnapshot.store_id == store_id)
+    return query.first() is not None
+
+
+def get_current_inventory_fallback(
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    store_id: Optional[int] = None,
+    q: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Get current inventory when no snapshots are available.
+    This provides a simplified view without historical metrics.
+    """
+    from sqlalchemy import func as sql_func
+    
+    # Build base query for variants with their inventory
+    query = db.query(
+        models.ProductVariant.id.label("variant_id"),
+        models.ProductVariant.sku,
+        models.ProductVariant.shopify_gid,
+        models.ProductVariant.store_id,
+        models.ProductVariant.price,
+        models.ProductVariant.cost_per_item,
+        models.Product.id.label("product_id"),
+        models.Product.title.label("product_title"),
+        models.Product.image_url,
+        sql_func.coalesce(sql_func.sum(models.InventoryLevel.available), 0).label("on_hand"),
+    ).join(
+        models.Product, models.Product.id == models.ProductVariant.product_id
+    ).outerjoin(
+        models.InventoryLevel, models.InventoryLevel.variant_id == models.ProductVariant.id
+    )
+    
+    if store_id is not None:
+        query = query.filter(models.ProductVariant.store_id == store_id)
+    
+    if q:
+        search_term = f"%{q.strip()}%"
+        query = query.filter(
+            (models.ProductVariant.sku.ilike(search_term)) |
+            (models.Product.title.ilike(search_term))
+        )
+    
+    query = query.group_by(
+        models.ProductVariant.id,
+        models.ProductVariant.sku,
+        models.ProductVariant.shopify_gid,
+        models.ProductVariant.store_id,
+        models.ProductVariant.price,
+        models.ProductVariant.cost_per_item,
+        models.Product.id,
+        models.Product.title,
+        models.Product.image_url,
+    )
+    
+    # Get total count
+    total_count = query.count()
+    
+    # Get paginated results
+    rows = query.order_by(models.Product.title).offset(skip).limit(limit).all()
+    
+    snapshots = []
     for r in rows:
         snapshots.append({
-            "id": r["variant_id"],
-            "date": r["latest_date"],
-            "store_id": int(r["store_id"]),
-            "product_variant_id": int(r["variant_id"]),
-            "on_hand": int(r["on_hand"]) if r["on_hand"] is not None else None,
+            "id": r.variant_id,
+            "date": datetime.now(timezone.utc).date(),
+            "store_id": r.store_id,
+            "product_variant_id": r.variant_id,
+            "on_hand": r.on_hand,
             "product_variant": {
-                "id": int(r["variant_id"]),
-                "shopify_gid": r["shopify_gid"],
-                "sku": r["sku"],
+                "id": r.variant_id,
+                "shopify_gid": r.shopify_gid,
+                "sku": r.sku,
                 "product": {
-                    "id": int(r["product_id"]),
-                    "title": r["product_title"],
-                    "image_url": r["image_url"],
+                    "id": r.product_id,
+                    "title": r.product_title,
+                    "image_url": r.image_url,
                 },
             },
             "metrics": {
-                "average_stock_level": r["average_stock_level"],
-                "min_stock_level": r["min_stock_level"],
-                "max_stock_level": r["max_stock_level"],
-                "stock_range": r["stock_range"],
-                "stock_stddev": r["stock_stddev"],
-                "days_out_of_stock": r["days_out_of_stock"],
-                "stockout_rate": r["stockout_rate"],
-                "replenishment_days": r["replenishment_days"],
-                "depletion_days": r["depletion_days"],
-                "total_outflow": r["total_outflow"],
-                "stock_turnover": r["stock_turnover"],
-                "avg_days_in_inventory": r["avg_days_in_inventory"],
-                "dead_stock_days": r["dead_stock_days"],
-                "dead_stock_ratio": r["dead_stock_ratio"],
-                "avg_inventory_value": r["avg_inventory_value"],
-                "stock_health_index": r["stock_health_index"],
+                # No historical metrics available - show None for all
+                "average_stock_level": None,
+                "min_stock_level": None,
+                "max_stock_level": None,
+                "stock_range": None,
+                "stock_stddev": None,
+                "days_out_of_stock": None,
+                "stockout_rate": None,
+                "replenishment_days": None,
+                "depletion_days": None,
+                "total_outflow": None,
+                "stock_turnover": None,
+                "avg_days_in_inventory": None,
+                "dead_stock_days": None,
+                "dead_stock_ratio": None,
+                "avg_inventory_value": float(r.on_hand) * float(r.price or 0) if r.price else None,
+                "stock_health_index": None,
             },
         })
+    
+    return {"snapshots": snapshots, "total_count": total_count, "is_fallback": True}
 
-    return {"snapshots": snapshots, "total_count": total}

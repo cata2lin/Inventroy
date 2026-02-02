@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <hgroup>
+        <h1>Data Quality</h1>
+        <h2>Check for missing or inconsistent product data</h2>
+    </hgroup>
+
+    <!-- Summary Cards -->
+    <div class="grid" id="summary-cards" style="margin-bottom: 1.5rem;">
+        <article class="issue-card" data-issue="no_barcode" style="cursor: pointer;">
+            <h3 style="margin-bottom: 0.25rem;">🏷️ Missing Barcode</h3>
+            <p id="count-no-barcode" style="font-size: 2rem; font-weight: bold; margin: 0;">—</p>
+            <small>Products without a barcode</small>
+        </article>
+        <article class="issue-card" data-issue="no_sku" style="cursor: pointer;">
+            <h3 style="margin-bottom: 0.25rem;">🔖 Missing SKU</h3>
+            <p id="count-no-sku" style="font-size: 2rem; font-weight: bold; margin: 0;">—</p>
+            <small>Products without a SKU</small>
+        </article>
+        <article class="issue-card" data-issue="sku_mismatch" style="cursor: pointer;">
+            <h3 style="margin-bottom: 0.25rem;">⚠️ SKU Mismatch</h3>
+            <p id="count-sku-mismatch" style="font-size: 2rem; font-weight: bold; margin: 0;">—</p>
+            <small>Same SKU, different barcodes</small>
+        </article>
+        <article class="issue-card" data-issue="barcode_mismatch" style="cursor: pointer;">
+            <h3 style="margin-bottom: 0.25rem;">🔀 Barcode Mismatch</h3>
+            <p id="count-barcode-mismatch" style="font-size: 2rem; font-weight: bold; margin: 0;">—</p>
+            <small>Same barcode, different SKUs</small>
+        </article>
+    </div>
+
+    <!-- Filters -->
+    <article class="filters">
+        <div class="grid" style="grid-template-columns: 1fr 1fr 1fr; gap: 1rem; align-items: end;">
+            <label for="store-filter">
+                Store
+                <select id="store-filter">
+                    <option value="">All Stores</option>
+                </select>
+            </label>
+            <label for="issue-filter">
+                Issue Type
+                <select id="issue-filter">
+                    <option value="">All Issues</option>
+                    <option value="no_barcode">Missing Barcode</option>
+                    <option value="no_sku">Missing SKU</option>
+                    <option value="sku_mismatch">SKU Mismatch</option>
+                    <option value="barcode_mismatch">Barcode Mismatch</option>
+                </select>
+            </label>
+            <label for="search-input">
+                Search
+                <input type="search" id="search-input" placeholder="SKU, barcode, or title...">
+            </label>
+        </div>
+    </article>
+
+    <!-- Issues Table -->
+    <div class="table-container overflow-auto">
+        <table id="issues-table">
+            <thead>
+                <tr>
+                    <th>Product</th>
+                    <th>SKU</th>
+                    <th>Barcode</th>
+                    <th>Store</th>
+                    <th>Issue</th>
+                </tr>
+            </thead>
+            <tbody id="issues-container">
+                <tr>
+                    <td colspan="5" class="text-center">Loading...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination -->
+    <div class="pagination-controls grid grid-cols-3 gap-4 mt-4">
+        <button id="prev-button" disabled>Previous</button>
+        <span id="page-indicator" class="text-center">Page 1 of 1</span>
+        <button id="next-button" disabled>Next</button>
+    </div>
+
+    <!-- Legend -->
+    <article style="margin-top: 1rem; padding: 0.75rem 1rem;">
+        <strong>Issue Types:</strong>
+        <span style="margin-left: 1rem;">🏷️ Missing Barcode</span>
+        <span style="margin-left: 1rem;">🔖 Missing SKU</span>
+        <span style="margin-left: 1rem;">⚠️ Same SKU, different barcodes</span>
+        <span style="margin-left: 1rem;">🔀 Same barcode, different SKUs</span>
+    </article>
+</div>
+
+<style>
+    .issue-card {
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .issue-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .issue-card.selected {
+        border: 2px solid var(--pico-primary);
+    }
+
+    .issue-badge {
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+
+    .issue-badge.no_barcode {
+        background: #ffcdd2;
+        color: #c62828;
+    }
+
+    .issue-badge.no_sku {
+        background: #fff3e0;
+        color: #e65100;
+    }
+
+    .issue-badge.sku_mismatch {
+        background: #fff9c4;
+        color: #f57f17;
+    }
+
+    .issue-badge.barcode_mismatch {
+        background: #e1bee7;
+        color: #7b1fa2;
+    }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/data_quality.js"></script>
+{% endblock %}

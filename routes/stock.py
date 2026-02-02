@@ -41,6 +41,8 @@ def get_stock_grouped_by_barcode(
     max_stock: Optional[int] = Query(None),
     min_retail: Optional[float] = Query(None),
     max_retail: Optional[float] = Query(None),
+    sort_field: str = Query("title"),
+    sort_order: str = Query("asc"),
     db: Session = Depends(get_db)
 ):
     base_query = (
@@ -61,7 +63,7 @@ def get_stock_grouped_by_barcode(
         search_terms = normalize_and_split(search)
         matching_barcodes = set()
         for v in all_variants:
-            full_text = f"{v.product.title} {v.sku}"
+            full_text = f"{v.product.title} {v.sku} {v.barcode}"
             normalized_full_text = normalize_and_split(full_text)
             if all(term in normalized_full_text for term in search_terms):
                 matching_barcodes.add(v.barcode)
@@ -108,6 +110,17 @@ def get_stock_grouped_by_barcode(
             "total_retail_value": round(total_retail_value, 2), "total_inventory_value": round(total_inventory_value, 2),
             "currency": "RON"
         })
+
+    # Apply sorting
+    sort_keys = {
+        "stock": lambda x: x["total_stock"],
+        "retail": lambda x: x["total_retail_value"],
+        "barcode": lambda x: x["barcode"],
+        "title": lambda x: x["primary_title"].lower(),
+    }
+    sort_key = sort_keys.get(sort_field, sort_keys["title"])
+    reverse = sort_order.lower() == "desc"
+    final_groups.sort(key=sort_key, reverse=reverse)
 
     grand_total_stock = sum(g['total_stock'] for g in final_groups)
     grand_total_retail = sum(g['total_retail_value'] for g in final_groups)

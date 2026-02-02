@@ -20,12 +20,15 @@ def get_products(
     limit: int = 100,
     store_id: Optional[int] = Query(None),
     search: Optional[str] = Query(None),
+    sort_field: str = Query("title"),
+    sort_order: str = Query("asc"),
 ):
     """
-    Get a paginated and filterable list of products.
+    Get a paginated and filterable list of products with fuzzy search and sorting.
     """
     products, total_count = crud_product.get_products(
-        db, skip=skip, limit=limit, store_id=store_id, search=search
+        db, skip=skip, limit=limit, store_id=store_id, search=search,
+        sort_col=sort_field, sort_order=sort_order
     )
     return {"total_count": total_count, "products": products}
 

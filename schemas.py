@@ -82,9 +82,17 @@ class ProductVariant(ORMBase):
     product: Optional[ProductLite] = None
 
     @model_validator(mode="after")
-    def _derive_inventory_item_gid(self):
+    def _compute_derived_fields(self):
+        # Derive inventory_item_gid from inventory_item_id
         if not self.inventory_item_gid and self.inventory_item_id:
             self.inventory_item_gid = f"gid://shopify/InventoryItem/{self.inventory_item_id}"
+        
+        # Compute inventory_quantity from inventory_levels if they are loaded
+        # This ensures the Products page shows the same accurate stock as Stock by Barcode
+        if self.inventory_levels:
+            self.inventory_quantity = sum(
+                level.available or 0 for level in self.inventory_levels
+            )
         return self
 
 class Product(ORMBase):

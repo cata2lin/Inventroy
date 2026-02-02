@@ -9,9 +9,10 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from crud.snapshots import (
-    get_snapshots_with_metrics,
+    get_products_with_velocity,
     create_snapshot_for_store,
-    ALLOWED_SORT_COLS,
+    has_snapshot_data,
+    get_last_snapshot_date_by_store,
 )
 
 router = APIRouter(prefix="/api/snapshots", tags=["snapshots"])
@@ -26,67 +27,50 @@ def trigger_snapshot(store_id: int = Query(..., ge=1), db: Session = Depends(get
     create_snapshot_for_store(db, store_id)
     return {"ok": True, "store_id": store_id}
 
-def _collect_metric_filters(q: Dict[str, str]) -> Dict[str, Dict[str, float]]:
-    numeric_keys = {
-        "on_hand",
-        "average_stock_level",
-        "avg_inventory_value",
-        "stockout_rate",
-        "dead_stock_ratio",
-        "stock_turnover",
-        "avg_days_in_inventory",
-        "stock_health_index",
-    }
-    out: Dict[str, Dict[str, float]] = {}
-    for key in numeric_keys:
-        min_key = f"{key}_min"
-        max_key = f"{key}_max"
-        lo = q.get(min_key)
-        hi = q.get(max_key)
-        if (lo is not None and lo != "") or (hi is not None and hi != ""):
-            bounds: Dict[str, float] = {}
-            if lo not in (None, ""):
-                bounds["min"] = float(lo)
-            if hi not in (None, ""):
-                bounds["max"] = float(hi)
-            out[key] = bounds
-    return out
-
 @router.get("/")
-def list_snapshots(
-    request: Request,
+def list_products_velocity(
     db: Session = Depends(get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=200),
     store_id: Optional[int] = Query(None, description="Leave empty for all stores"),
-    start_date: Optional[date] = Query(None),
-    end_date: Optional[date] = Query(None),
-    sort_field: str = Query("on_hand"),
-    sort_order: str = Query("desc"),
-    q: Optional[str] = Query(None),
+    q: Optional[str] = Query(None, description="Search by SKU, barcode, or title"),
+    sort_field: str = Query("days_left", description="Sort by: days_left, velocity, current_stock, title, sku"),
+    sort_order: str = Query("asc", description="asc or desc"),
+    velocity_days: int = Query(7, ge=1, le=90, description="Calculate velocity over this many days"),
 ):
-    # default date window: last 30 days
-    if start_date is None and end_date is None:
-        end_date = datetime.now(timezone.utc).date()
-        start_date = end_date - timedelta(days=30)
-
-    # metric filters from query
-    metric_filters = _collect_metric_filters(dict(request.query_params))
-
-    # sanitize sort
-    safe_sort = ALLOWED_SORT_COLS.get(sort_field, "on_hand")
-    safe_order = "asc" if (sort_order or "").lower() == "asc" else "desc"
-
-    payload = get_snapshots_with_metrics(
+    """
+    Get all products with sales velocity and stock days left.
+    
+    - **velocity**: Units sold per day (based on snapshot history)
+    - **days_left**: How many days until stock runs out at current velocity
+    - **velocity_days**: Period to calculate velocity over (default 7 days)
+    
+    Products are sorted by days_left ascending by default (most urgent first).
+    """
+    result = get_products_with_velocity(
         db=db,
         skip=skip,
         limit=limit,
-        store_id=store_id,             # None => all stores
-        start_date=start_date,
-        end_date=end_date,
+        store_id=store_id,
         q=q,
-        sort_col=safe_sort,
-        sort_order=safe_order,
-        metric_filters=metric_filters,
+        sort_col=sort_field,
+        sort_order=sort_order,
+        velocity_days=velocity_days,
     )
-    return payload
+    return result
+
+
+@router.get("/status")
+def get_snapshot_status(
+    db: Session = Depends(get_db),
+    store_id: Optional[int] = Query(None),
+):
+    """Get the status of snapshot data - whether data exists and when the last snapshot was taken."""
+    has_data = has_snapshot_data(db, store_id)
+    last_snapshot = get_last_snapshot_date_by_store(db, store_id)
+    
+    return {
+        "has_data": has_data,
+        "last_snapshot_date": last_snapshot.isoformat() if last_snapshot else None,
+        "store_id": store_id,
+    }

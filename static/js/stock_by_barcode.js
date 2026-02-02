@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const filters = {
         search: document.getElementById('product-search-input'),
         store: document.getElementById('store-filter'),
+        sortSelect: document.getElementById('sort-select'),
         minStock: document.getElementById('min-stock'),
         maxStock: document.getElementById('max-stock'),
         minRetail: document.getElementById('min-retail'),
@@ -21,6 +22,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- State ---
     let barcodeGroupsData = [];
+    let sortField = 'title';
+    let sortOrder = 'asc';
 
     // --- Utility ---
     const debounce = (func, delay) => {
@@ -45,6 +48,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (filters.maxStock.value) params.set('max_stock', filters.maxStock.value);
         if (filters.minRetail.value) params.set('min_retail', filters.minRetail.value);
         if (filters.maxRetail.value) params.set('max_retail', filters.maxRetail.value);
+        params.set('sort_field', sortField);
+        params.set('sort_order', sortOrder);
 
         try {
             const response = await fetch(`/api/stock/by-barcode?${params.toString()}`);
@@ -162,8 +167,8 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const result = await response.json();
             if (!response.ok) {
-                 const errorMsg = result.detail.errors ? result.detail.errors.join('\\n') : (result.detail.message || JSON.stringify(result.detail));
-                 throw new Error(errorMsg);
+                const errorMsg = result.detail.errors ? result.detail.errors.join('\\n') : (result.detail.message || JSON.stringify(result.detail));
+                throw new Error(errorMsg);
             }
             button.classList.add('success');
             setTimeout(() => {
@@ -201,9 +206,21 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // --- Initial Setup & Event Listeners ---
-    Object.values(filters).forEach(el => {
-        el.addEventListener('input', debounce(fetchStockData, 400));
+    // Filter inputs with debounce
+    [filters.search, filters.minStock, filters.maxStock, filters.minRetail, filters.maxRetail].forEach(el => {
+        if (el) el.addEventListener('input', debounce(fetchStockData, 400));
     });
+
+    // Store and sort - immediate change
+    if (filters.store) filters.store.addEventListener('change', fetchStockData);
+    if (filters.sortSelect) {
+        filters.sortSelect.addEventListener('change', () => {
+            const [field, order] = filters.sortSelect.value.split('-');
+            sortField = field;
+            sortOrder = order;
+            fetchStockData();
+        });
+    }
 
     stockContainer.addEventListener('click', (e) => {
         if (e.target.classList.contains('product-image-compact')) {

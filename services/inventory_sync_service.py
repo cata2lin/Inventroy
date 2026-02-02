@@ -128,7 +128,8 @@ def handle_catalog_webhook(store_id: int, topic: str, payload: Dict[str, Any]):
 
 # --- Helper Functions ---
 def _is_duplicate_webhook(db: Session, store_id: int, barcode: str, total: int, timestamp: datetime) -> bool:
-    db.query(models.ProcessedWebhook).filter(models.ProcessedWebhook.expires_at < datetime.now(timezone.utc)).delete()
+    """Check if we've already processed this exact webhook event."""
+    # Note: Cleanup of expired records is now done by a scheduled job, not per-request
     event_id = hashlib.sha256(f"{store_id}-{barcode}-{total}-{timestamp.isoformat()}".encode()).hexdigest()
     if db.query(models.ProcessedWebhook).filter(models.ProcessedWebhook.id == event_id).first():
         return True
@@ -240,3 +241,34 @@ def _execute_propagation(db: Session, barcode: str, desired_total: int, target_s
 
         except Exception as e:
             print(f"[SYNC-ERROR] Failed to write to store '{store.name}': {e}")
+
+
+# --- Scheduled Cleanup Functions ---
+def cleanup_expired_records():
+    """
+    Clean up expired ProcessedWebhook and WriteIntent records.
+    This should be called by a scheduled job (e.g., every 5 minutes) instead of per-request.
+    """
+    db: Session = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        
+        # Cleanup expired ProcessedWebhook entries
+        expired_webhooks = db.query(models.ProcessedWebhook).filter(
+            models.ProcessedWebhook.expires_at < now
+        ).delete(synchronize_session=False)
+        
+        # Cleanup expired WriteIntent entries
+        expired_intents = db.query(models.WriteIntent).filter(
+            models.WriteIntent.expires_at < now
+        ).delete(synchronize_session=False)
+        
+        db.commit()
+        
+        if expired_webhooks > 0 or expired_intents > 0:
+            print(f"[CLEANUP] Removed {expired_webhooks} expired webhooks and {expired_intents} expired intents.")
+    except Exception as e:
+        db.rollback()
+        print(f"[CLEANUP-ERROR] Failed to clean up expired records: {e}")
+    finally:
+        db.close()

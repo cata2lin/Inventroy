@@ -7,36 +7,59 @@
         <h2>Master inventory control across all stores.</h2>
     </hgroup>
 
-    <div id="filters" class="grid">
-        <input type="search" id="product-search-input" placeholder="Search by name or SKU...">
-        <select id="store-filter">
-            <option value="">All Stores</option>
-        </select>
-    </div>
-    <div id="value-filters" class="grid">
-        <input type="number" id="min-stock" placeholder="Min Stock">
-        <input type="number" id="max-stock" placeholder="Max Stock">
-        <input type="number" id="min-retail" placeholder="Min Retail Value">
-        <input type="number" id="max-retail" placeholder="Max Retail Value">
-    </div>
-
-    <article id="dashboard" class="grid">
-        <div>
-            <h3 id="metric-total-stock">0</h3>
-            <p>Total Units in Stock</p>
+    <article class="filters">
+        <div class="grid" style="grid-template-columns: 2fr 1fr 1fr; gap: 1rem; align-items: end;">
+            <label for="product-search-input">
+                Search
+                <input type="search" id="product-search-input" placeholder="Search any words: 'rosu bag 12345'...">
+            </label>
+            <label for="store-filter">
+                Store
+                <select id="store-filter">
+                    <option value="">All Stores</option>
+                </select>
+            </label>
+            <label for="sort-select">
+                Sort By
+                <select id="sort-select">
+                    <option value="title-asc">Title (A-Z)</option>
+                    <option value="title-desc">Title (Z-A)</option>
+                    <option value="stock-desc">Stock (Highest)</option>
+                    <option value="stock-asc">Stock (Lowest)</option>
+                    <option value="retail-desc">Retail Value (Highest)</option>
+                    <option value="retail-asc">Retail Value (Lowest)</option>
+                    <option value="barcode-asc">Barcode (A-Z)</option>
+                </select>
+            </label>
         </div>
-        <div>
-            <h3 id="metric-total-inventory-value">$0.00</h3>
-            <p>Total Inventory Value</p>
-        </div>
-        <div>
-            <h3 id="metric-total-retail-value">$0.00</h3>
-            <p>Total Retail Value</p>
+        <div class="grid" style="grid-template-columns: 1fr 1fr 1fr 1fr; gap: 1rem; margin-top: 0.5rem;">
+            <input type="number" id="min-stock" placeholder="Min Stock">
+            <input type="number" id="max-stock" placeholder="Max Stock">
+            <input type="number" id="min-retail" placeholder="Min Retail Value">
+            <input type="number" id="max-retail" placeholder="Max Retail Value">
         </div>
     </article>
 
-    <article id="stock-container" aria-busy="true" class="table-container compact">
-        </article>
+    <article id="dashboard" class="grid metric-cards">
+        <div class="metric-card">
+            <h3>Total Units</h3>
+            <p class="value" id="metric-total-stock">0</p>
+            <small>in stock</small>
+        </div>
+        <div class="metric-card">
+            <h3>Inventory Value</h3>
+            <p class="value" id="metric-total-inventory-value">0 RON</p>
+            <small>at cost</small>
+        </div>
+        <div class="metric-card">
+            <h3>Retail Value</h3>
+            <p class="value" id="metric-total-retail-value">0 RON</p>
+            <small>at sale price</small>
+        </div>
+    </article>
+
+    <article id="stock-container" aria-busy="true" class="table-container">
+    </article>
 
     <dialog id="manage-variants-modal">
         <article>

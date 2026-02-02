@@ -3,53 +3,49 @@
 {% block content %}
 <div class="container">
     <hgroup>
-        <h1>Inventory Analytics</h1>
-        <h2>Review historical stock levels and performance metrics</h2>
+        <h1>Inventory Velocity</h1>
+        <h2>Track sales velocity and stock days remaining (grouped by barcode)</h2>
     </hgroup>
 
     <article class="filters">
-        <header><strong>Filters</strong></header>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <div class="grid" style="grid-template-columns: 1fr 1fr 1fr auto; gap: 1rem; align-items: end;">
             <label for="store-filter">
                 Store
                 <select id="store-filter">
                     <option value="">All Stores</option>
                 </select>
             </label>
-            <label for="start-date-filter">
-                Start Date
-                <input type="date" id="start-date-filter">
+            <label for="search-input">
+                Search
+                <input type="search" id="search-input" placeholder="SKU, barcode, or title...">
             </label>
-            <label for="end-date-filter">
-                End Date
-                <input type="date" id="end-date-filter">
+            <label for="velocity-days">
+                Velocity Period
+                <select id="velocity-days">
+                    <option value="7">Last 7 days</option>
+                    <option value="14">Last 14 days</option>
+                    <option value="30">Last 30 days</option>
+                </select>
             </label>
+            <button id="trigger-snapshot-btn" class="secondary outline">📸 Snapshot</button>
         </div>
-
-        <details>
-            <summary>Advanced Metric Filters</summary>
-            <div id="metric-filters" class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                </div>
-        </details>
-
-        <button id="trigger-snapshot-btn" class="secondary outline mt-4">Trigger Snapshot Now</button>
     </article>
 
     <div class="table-container overflow-auto">
-        <table id="snapshots-table" class="w-full border-collapse">
+        <table id="velocity-table" class="w-full border-collapse">
             <thead id="table-head">
                 <tr>
-                    <th class="sortable" data-sort="title">Product</th>
-                    <th class="sortable" data-sort="on_hand">Current Stock</th>
-                    <th class="sortable" data-sort="avg_inventory_value">Avg. Inv. Value</th>
-                    <th class="sortable" data-sort="stockout_rate">Stockout Rate</th>
-                    <th class="sortable" data-sort="dead_stock_ratio">Dead Stock Ratio</th>
-                    <th class="sortable" data-sort="stock_turnover">Turnover</th>
-                    <th class="sortable" data-sort="stock_health_index">Health Index</th>
+                    <th>Product</th>
+                    <th class="sortable" data-sort="current_stock">Total Stock</th>
+                    <th class="sortable" data-sort="velocity">Velocity</th>
+                    <th class="sortable sorted-asc" data-sort="days_left">Days Left</th>
+                    <th class="sortable" data-sort="store_count">Stores</th>
                 </tr>
             </thead>
-            <tbody id="snapshots-container">
-                <tr><td colspan="7" class="text-center">Loading analytics...</td></tr>
+            <tbody id="products-container">
+                <tr>
+                    <td colspan="5" class="text-center">Loading...</td>
+                </tr>
             </tbody>
         </table>
     </div>
@@ -60,6 +56,13 @@
         <button id="next-button" disabled>Next</button>
     </div>
 
+    <article id="legend" style="margin-top: 1rem; padding: 0.75rem 1rem;">
+        <strong>Days Left Legend:</strong>
+        <span style="margin-left: 1rem;">🔴 &lt; 7 days (urgent)</span>
+        <span style="margin-left: 1rem;">🟡 7-30 days (watch)</span>
+        <span style="margin-left: 1rem;">🟢 &gt; 30 days (healthy)</span>
+        <span style="margin-left: 1rem;">— No sales data</span>
+    </article>
 </div>
 {% endblock %}
 

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en" data-theme="light">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -52,7 +53,7 @@
         .sidebar nav {
             flex-grow: 1;
         }
-        
+
         .sidebar nav a {
             display: flex;
             align-items: center;
@@ -83,7 +84,7 @@
             overflow-y: auto;
             padding: 2rem;
         }
-        
+
         /* Compact product images in tables */
         .product-image-compact {
             max-height: 50px;
@@ -98,65 +99,114 @@
             gap: 0.5rem;
             margin-bottom: 0;
         }
+
         .update-form-inline input {
             margin-bottom: 0;
             width: 80px;
         }
+
         .update-form-inline button.success {
             background-color: var(--pico-color-green-500);
             border-color: var(--pico-color-green-500);
             color: var(--pico-color-white);
         }
 
-.metric-filter-group label {
-        font-size: 0.8rem; /* Smaller label font */
-        font-weight: 500;
-        margin-bottom: 0.2rem;
-        display: block;
-    }
-    .metric-filter-group .grid {
-        grid-template-columns: 1fr 1fr;
-        gap: 0.25rem;
-    }
-    .metric-filter-input {
-        padding: 0.3rem !important; /* Smaller padding */
-        font-size: 0.8rem !important; /* Smaller input font */
-        height: auto !important; /* Adjust height automatically */
-    }
-    #metric-filters {
-        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); /* Responsive columns */
-    }
-</style>
+        .metric-filter-group label {
+            font-size: 0.8rem;
+            /* Smaller label font */
+            font-weight: 500;
+            margin-bottom: 0.2rem;
+            display: block;
+        }
+
+        .metric-filter-group .grid {
+            grid-template-columns: 1fr 1fr;
+            gap: 0.25rem;
+        }
+
+        .metric-filter-input {
+            padding: 0.3rem !important;
+            /* Smaller padding */
+            font-size: 0.8rem !important;
+            /* Smaller input font */
+            height: auto !important;
+            /* Adjust height automatically */
+        }
+
+        #metric-filters {
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            /* Responsive columns */
+        }
+    </style>
 </head>
+
 <body>
     <aside class="sidebar">
         <div class="brand">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                <circle cx="12" cy="10" r="3"></circle>
+            </svg>
             <strong>Inventory Intel</strong>
         </div>
         <nav>
-            <a href="/sync-control" {% if title == "Sync Control" %}class="active"{% endif %}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>
+            <a href="/sync-control" {% if title=="Sync Control" %}class="active" {% endif %}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+                </svg>
                 Sync Control
             </a>
-            <a href="/products" {% if title == "Products" %}class="active"{% endif %}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
+            <a href="/products" {% if title=="Products" %}class="active" {% endif %}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+                    <line x1="3" y1="6" x2="21" y2="6"></line>
+                    <path d="M16 10a4 4 0 0 1-8 0"></path>
+                </svg>
                 Products
             </a>
-            <a href="/stock-by-barcode" {% if title == "Stock by Barcode" %}class="active"{% endif %}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2z"></path><path d="M7 7h.01"></path></svg>
+            <a href="/stock-by-barcode" {% if title=="Stock by Barcode" %}class="active" {% endif %}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2z"></path>
+                    <path d="M7 7h.01"></path>
+                </svg>
                 Stock by Barcode
             </a>
-            <a href="/snapshots" {% if title == "Snapshots" %}class="active"{% endif %}>
-                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+            <a href="/snapshots" {% if title=="Snapshots" %}class="active" {% endif %}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                    <line x1="16" y1="2" x2="16" y2="6"></line>
+                    <line x1="8" y1="2" x2="8" y2="6"></line>
+                    <line x1="3" y1="10" x2="21" y2="10"></line>
+                </svg>
                 Snapshots
             </a>
-            <a href="/mutations" {% if title == "Mutations" %}class="active"{% endif %}>
-                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2z"></polygon></svg>
+            <a href="/mutations" {% if title=="Mutations" %}class="active" {% endif %}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2z"></polygon>
+                </svg>
                 Mutations
             </a>
-            <a href="/config" {% if title == "Configuration" %}class="active"{% endif %}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+            <a href="/data-quality" {% if title=="Data Quality" %}class="active" {% endif %}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                    <path d="M22 4L12 14.01l-3-3"></path>
+                </svg>
+                Data Quality
+            </a>
+            <a href="/config" {% if title=="Configuration" %}class="active" {% endif %}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path
+                        d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z">
+                    </path>
+                </svg>
                 Configuration
             </a>
         </nav>
@@ -164,7 +214,8 @@
     <main class="main-content">
         {% block content %}{% endblock %}
     </main>
-    
+
     {% block scripts %}{% endblock %}
 </body>
+
 </html>

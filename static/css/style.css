@@ -1,0 +1,140 @@
+/* static/css/style.css - Custom styles for Inventory Intelligence */
+
+/* Additional utility classes */
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+.text-left { text-align: left; }
+
+/* Table enhancements */
+.sortable {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+}
+.sortable:hover {
+    background-color: var(--pico-secondary-hover-background);
+}
+.sortable::after {
+    content: '↕';
+    opacity: 0.3;
+    margin-left: 0.5rem;
+    font-size: 0.75rem;
+}
+.sortable.sorted-asc::after {
+    content: '↑';
+    opacity: 1;
+}
+.sortable.sorted-desc::after {
+    content: '↓';
+    opacity: 1;
+}
+
+/* Status badges */
+.badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+.badge-success { background: #c8e6c9; color: #2e7d32; }
+.badge-warning { background: #fff3cd; color: #856404; }
+.badge-danger { background: #ffcdd2; color: #c62828; }
+.badge-info { background: #bbdefb; color: #1565c0; }
+
+/* Card hover effects */
+.card-clickable {
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.card-clickable:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.card-clickable.selected {
+    border: 2px solid var(--pico-primary);
+}
+
+/* Stock status colors */
+.stock-urgent { color: #c62828; }
+.stock-warning { color: #ff9800; }
+.stock-healthy { color: #2e7d32; }
+
+/* Product image styles */
+.product-img {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 8px;
+}
+.product-img-sm {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 6px;
+}
+
+/* Improved table responsiveness */
+.table-container {
+    overflow-x: auto;
+    margin-bottom: 1rem;
+}
+
+/* Loading spinner style */
+[aria-busy="true"]::before {
+    opacity: 0.7;
+}
+
+/* Pagination alignment */
+.pagination-controls {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 1rem;
+    align-items: center;
+    margin-top: 1rem;
+}
+.pagination-controls span {
+    text-align: center;
+}
+
+/* Filter article padding */
+.filters {
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+/* Toast notifications (for future use) */
+.toast {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    padding: 1rem 1.5rem;
+    border-radius: 8px;
+    background: var(--pico-card-background-color);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    z-index: 1000;
+    animation: slideIn 0.3s ease;
+}
+@keyframes slideIn {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+/* Metric cards grid */
+.metric-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+.metric-card h3 {
+    margin-bottom: 0.25rem;
+    font-size: 1rem;
+}
+.metric-card .value {
+    font-size: 2rem;
+    font-weight: bold;
+    margin: 0;
+}
+.metric-card small {
+    opacity: 0.7;
+}
