@@ -3,44 +3,93 @@
 {% block content %}
 <div class="container">
     <hgroup>
-        <h1>Product Mutations</h1>
-        <h2>Search for a product to easily execute GraphQL mutations.</h2>
+        <h1>⚡ Product Mutations</h1>
+        <h2>Execute Shopify GraphQL mutations on individual products. Select a store, find a product, and apply changes.</h2>
     </hgroup>
 
+    <!-- Step 1: Product Selection -->
     <article>
-        <header><strong>1. Select a Product</strong></header>
+        <header>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span class="badge badge-info" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;">Step 1</span>
+                <strong>Select a Product</strong>
+            </div>
+        </header>
+
         <div class="grid">
-            <select id="store-select" required>
-                <option value="">-- Select a Store --</option>
-            </select>
-            <input type="search" id="product-search-input" placeholder="Search by name, SKU, or barcode..." disabled>
+            <div>
+                <label for="store-select">Store</label>
+                <select id="store-select" required>
+                    <option value="">— Select a Store —</option>
+                </select>
+            </div>
+            <div>
+                <label for="product-search-input">Search Products</label>
+                <input type="search" id="product-search-input" placeholder="Type name, SKU, or barcode…" disabled>
+            </div>
         </div>
+
+        <label for="product-select">Results</label>
         <select id="product-select" required disabled>
-            <option value="">-- Search for a product above --</option>
+            <option value="">— Search for a product above —</option>
         </select>
+
+        <!-- Product Preview Card (shown after selection) -->
+        <div id="product-preview" style="display: none; margin-top: 1rem; padding: 1rem; border-radius: 8px; background: var(--card-bg, rgba(255,255,255,0.03)); border: 1px solid var(--border-color, #333);">
+            <div style="display: flex; gap: 1rem; align-items: center;">
+                <img id="preview-image" src="" alt="" style="width: 56px; height: 56px; object-fit: cover; border-radius: 6px; background: #222; display: none;">
+                <div>
+                    <strong id="preview-title" style="font-size: 1.05rem;"></strong>
+                    <div id="preview-meta" style="font-size: 0.85rem; opacity: 0.65; margin-top: 0.25rem;"></div>
+                </div>
+            </div>
+            <div id="preview-variants" style="margin-top: 0.75rem;"></div>
+        </div>
     </article>
 
+    <!-- Step 2 & Response side-by-side -->
     <div class="grid">
         <article id="mutation-selection-container" style="display: none;">
-            <header><strong>2. Choose a Mutation</strong></header>
-            <select id="mutation-select" required>
-                <option value="">-- Select a Mutation --</option>
-                <option value="setProductCategory">Set Product Category</option>
-                <option value="updateProductType">Update Product Type</option>
-                <option value="updateVariantPrices">Update Variant Prices</option>
-                <option value="updateVariantCompareAt">Update Variant Compare-At Price</option>
-                <option value="updateVariantBarcode">Update Variant Barcode</option>
-                <option value="updateVariantCosts">Update Variant Costs (Bulk)</option>
-                <option value="updateInventoryCost">Update Inventory Cost (Direct)</option>
-                <option value="inventorySetQuantities">Set Absolute Quantity</option>
-            </select>
-            <div id="mutation-form-container">
+            <header>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span class="badge badge-success" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;">Step 2</span>
+                    <strong>Choose & Execute Mutation</strong>
                 </div>
+            </header>
+
+            <label for="mutation-select">Mutation Type</label>
+            <select id="mutation-select" required>
+                <option value="">— Select a Mutation —</option>
+                <optgroup label="Product">
+                    <option value="setProductCategory">Set Product Category</option>
+                    <option value="updateProductType">Update Product Type</option>
+                </optgroup>
+                <optgroup label="Variant">
+                    <option value="updateVariantPrices">Update Variant Prices</option>
+                    <option value="updateVariantCompareAt">Update Compare-At Price</option>
+                    <option value="updateVariantBarcode">Update Variant Barcode</option>
+                    <option value="updateVariantCosts">Update Variant Costs (Bulk)</option>
+                </optgroup>
+                <optgroup label="Inventory">
+                    <option value="updateInventoryCost">Update Inventory Cost (Direct)</option>
+                    <option value="inventorySetQuantities">Set Absolute Quantity</option>
+                </optgroup>
+            </select>
+
+            <div id="mutation-form-container"></div>
         </article>
 
         <article id="api-response-container" style="display: none;">
-            <header><strong>API Response</strong></header>
-            <pre><code id="api-response"></code></pre>
+            <header>
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span id="response-badge" class="badge" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;">•</span>
+                        <strong>API Response</strong>
+                    </div>
+                    <button id="copy-response-btn" class="outline" style="padding: 0.25rem 0.75rem; font-size: 0.8rem;">Copy</button>
+                </div>
+            </header>
+            <pre style="max-height: 400px; overflow: auto; font-size: 0.8rem; background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 6px;"><code id="api-response"></code></pre>
         </article>
     </div>
 </div>
