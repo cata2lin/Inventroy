@@ -20,7 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
         limit: 50,
         total: 0,
         storeId: '',
-        issueType: '',
+        issueType: 'no_barcode',  // Default to most actionable issue type
         search: '',
     };
 
@@ -181,6 +181,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         setupEvents();
+
+        // Set initial filter state
+        el.issueType.value = state.issueType;
+        const initialCard = document.querySelector(`.issue-card[data-issue="${state.issueType}"]`);
+        if (initialCard) initialCard.classList.add('selected');
+
         fetchIssues();
     };
 

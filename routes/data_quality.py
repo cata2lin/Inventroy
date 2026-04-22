@@ -21,14 +21,11 @@ def get_data_quality_issues(
     db: Session = Depends(get_db)
 ):
     """
-    Get products with data quality issues:
-    - no_barcode: Products without a barcode
-    - no_sku: Products without a SKU
-    - sku_mismatch: Same SKU but different barcodes across stores
-    - barcode_mismatch: Same barcode but different SKUs across stores
+    Get products with data quality issues.
+    Pagination works correctly: total_count reflects the FULL count for the selected issue_type,
+    not just the current page.
     """
     
-    # Build base query for all variants
     params: Dict[str, Any] = {"skip": skip, "limit": limit}
     
     store_filter = ""
@@ -47,21 +44,16 @@ def get_data_quality_issues(
                 params[param_name] = f"%{term}%"
             search_filter = "AND " + " AND ".join(search_conditions)
     
-    # Get issue counts for summary
+    # Get issue counts for summary (always unfiltered by issue_type, so cards show totals)
     summary_sql = text(f"""
     WITH variants AS (
         SELECT 
-            pv.id,
-            pv.sku,
-            pv.barcode,
-            pv.store_id,
-            p.title,
-            p.image_url,
-            s.name as store_name
+            pv.id, pv.sku, pv.barcode, pv.store_id,
+            p.title, p.image_url, s.name as store_name
         FROM product_variants pv
         JOIN products p ON p.id = pv.product_id
         JOIN stores s ON s.id = pv.store_id
-        WHERE 1=1 {store_filter} {search_filter}
+        WHERE p.deleted_at IS NULL {store_filter} {search_filter}
     ),
     no_barcode AS (
         SELECT COUNT(*) as cnt FROM variants WHERE barcode IS NULL OR barcode = ''
@@ -92,104 +84,129 @@ def get_data_quality_issues(
     
     summary = db.execute(summary_sql, params).mappings().first()
     
-    # Get detailed issues based on filter
-    issues = []
+    # Determine which single issue type to query
+    # When issue_type is None, default to showing 'no_barcode' issues (most actionable)
+    # This prevents mixing LIMIT/OFFSET across different issue queries which breaks pagination
+    effective_type = issue_type or "no_barcode"
     
-    if issue_type == "no_barcode" or issue_type is None:
-        no_barcode_sql = text(f"""
+    issues = []
+    total_count = 0
+    
+    if effective_type == "no_barcode":
+        total_count = int(summary["no_barcode_count"] or 0)
+        sql = text(f"""
         SELECT 
-            pv.id as variant_id,
-            pv.sku,
-            pv.barcode,
-            p.title,
-            p.image_url,
-            s.name as store_name,
+            pv.id as variant_id, pv.sku, pv.barcode,
+            p.title, p.image_url, s.name as store_name,
             'no_barcode' as issue_type
         FROM product_variants pv
         JOIN products p ON p.id = pv.product_id
         JOIN stores s ON s.id = pv.store_id
-        WHERE (pv.barcode IS NULL OR pv.barcode = '') {store_filter} {search_filter}
+        WHERE (pv.barcode IS NULL OR pv.barcode = '') AND p.deleted_at IS NULL {store_filter} {search_filter}
         ORDER BY p.title, s.name
         LIMIT :limit OFFSET :skip
         """)
-        rows = db.execute(no_barcode_sql, params).mappings().all()
-        issues.extend([dict(r) for r in rows])
+        rows = db.execute(sql, params).mappings().all()
+        issues = [dict(r) for r in rows]
     
-    if issue_type == "no_sku" or issue_type is None:
-        no_sku_sql = text(f"""
+    elif effective_type == "no_sku":
+        total_count = int(summary["no_sku_count"] or 0)
+        sql = text(f"""
         SELECT 
-            pv.id as variant_id,
-            pv.sku,
-            pv.barcode,
-            p.title,
-            p.image_url,
-            s.name as store_name,
+            pv.id as variant_id, pv.sku, pv.barcode,
+            p.title, p.image_url, s.name as store_name,
             'no_sku' as issue_type
         FROM product_variants pv
         JOIN products p ON p.id = pv.product_id
         JOIN stores s ON s.id = pv.store_id
-        WHERE (pv.sku IS NULL OR pv.sku = '') {store_filter} {search_filter}
+        WHERE (pv.sku IS NULL OR pv.sku = '') AND p.deleted_at IS NULL {store_filter} {search_filter}
         ORDER BY p.title, s.name
         LIMIT :limit OFFSET :skip
         """)
-        rows = db.execute(no_sku_sql, params).mappings().all()
-        issues.extend([dict(r) for r in rows])
+        rows = db.execute(sql, params).mappings().all()
+        issues = [dict(r) for r in rows]
     
-    if issue_type == "sku_mismatch" or issue_type is None:
-        # Same SKU, different barcodes
-        sku_mismatch_sql = text(f"""
+    elif effective_type == "sku_mismatch":
+        # Count: number of variants involved in mismatched SKU groups
+        count_sql = text(f"""
         WITH problem_skus AS (
             SELECT sku
             FROM product_variants pv
-            WHERE sku IS NOT NULL AND sku != '' {store_filter.replace('pv.store_id', 'store_id')}
+            JOIN products p ON p.id = pv.product_id
+            WHERE sku IS NOT NULL AND sku != '' AND p.deleted_at IS NULL {store_filter}
+            GROUP BY sku
+            HAVING COUNT(DISTINCT NULLIF(barcode, '')) > 1
+        )
+        SELECT COUNT(*) as cnt
+        FROM product_variants pv
+        JOIN products p ON p.id = pv.product_id
+        WHERE pv.sku IN (SELECT sku FROM problem_skus) AND p.deleted_at IS NULL {store_filter} {search_filter}
+        """)
+        total_count = db.execute(count_sql, params).scalar() or 0
+        
+        sql = text(f"""
+        WITH problem_skus AS (
+            SELECT sku
+            FROM product_variants pv
+            JOIN products p ON p.id = pv.product_id
+            WHERE sku IS NOT NULL AND sku != '' AND p.deleted_at IS NULL {store_filter}
             GROUP BY sku
             HAVING COUNT(DISTINCT NULLIF(barcode, '')) > 1
         )
         SELECT 
-            pv.id as variant_id,
-            pv.sku,
-            pv.barcode,
-            p.title,
-            p.image_url,
-            s.name as store_name,
+            pv.id as variant_id, pv.sku, pv.barcode,
+            p.title, p.image_url, s.name as store_name,
             'sku_mismatch' as issue_type
         FROM product_variants pv
         JOIN products p ON p.id = pv.product_id
         JOIN stores s ON s.id = pv.store_id
-        WHERE pv.sku IN (SELECT sku FROM problem_skus) {store_filter} {search_filter}
+        WHERE pv.sku IN (SELECT sku FROM problem_skus) AND p.deleted_at IS NULL {store_filter} {search_filter}
         ORDER BY pv.sku, s.name
         LIMIT :limit OFFSET :skip
         """)
-        rows = db.execute(sku_mismatch_sql, params).mappings().all()
-        issues.extend([dict(r) for r in rows])
+        rows = db.execute(sql, params).mappings().all()
+        issues = [dict(r) for r in rows]
     
-    if issue_type == "barcode_mismatch" or issue_type is None:
-        # Same barcode, different SKUs
-        barcode_mismatch_sql = text(f"""
+    elif effective_type == "barcode_mismatch":
+        # Count: number of variants involved in mismatched barcode groups
+        count_sql = text(f"""
         WITH problem_barcodes AS (
             SELECT barcode
             FROM product_variants pv
-            WHERE barcode IS NOT NULL AND barcode != '' {store_filter.replace('pv.store_id', 'store_id')}
+            JOIN products p ON p.id = pv.product_id
+            WHERE barcode IS NOT NULL AND barcode != '' AND p.deleted_at IS NULL {store_filter}
+            GROUP BY barcode
+            HAVING COUNT(DISTINCT NULLIF(sku, '')) > 1
+        )
+        SELECT COUNT(*) as cnt
+        FROM product_variants pv
+        JOIN products p ON p.id = pv.product_id
+        WHERE pv.barcode IN (SELECT barcode FROM problem_barcodes) AND p.deleted_at IS NULL {store_filter} {search_filter}
+        """)
+        total_count = db.execute(count_sql, params).scalar() or 0
+        
+        sql = text(f"""
+        WITH problem_barcodes AS (
+            SELECT barcode
+            FROM product_variants pv
+            JOIN products p ON p.id = pv.product_id
+            WHERE barcode IS NOT NULL AND barcode != '' AND p.deleted_at IS NULL {store_filter}
             GROUP BY barcode
             HAVING COUNT(DISTINCT NULLIF(sku, '')) > 1
         )
         SELECT 
-            pv.id as variant_id,
-            pv.sku,
-            pv.barcode,
-            p.title,
-            p.image_url,
-            s.name as store_name,
+            pv.id as variant_id, pv.sku, pv.barcode,
+            p.title, p.image_url, s.name as store_name,
             'barcode_mismatch' as issue_type
         FROM product_variants pv
         JOIN products p ON p.id = pv.product_id
         JOIN stores s ON s.id = pv.store_id
-        WHERE pv.barcode IN (SELECT barcode FROM problem_barcodes) {store_filter} {search_filter}
+        WHERE pv.barcode IN (SELECT barcode FROM problem_barcodes) AND p.deleted_at IS NULL {store_filter} {search_filter}
         ORDER BY pv.barcode, s.name
         LIMIT :limit OFFSET :skip
         """)
-        rows = db.execute(barcode_mismatch_sql, params).mappings().all()
-        issues.extend([dict(r) for r in rows])
+        rows = db.execute(sql, params).mappings().all()
+        issues = [dict(r) for r in rows]
     
     return {
         "summary": {
@@ -199,7 +216,8 @@ def get_data_quality_issues(
             "barcode_mismatch": int(summary["barcode_mismatch_count"] or 0),
         },
         "issues": issues,
-        "total_count": len(issues),
+        "total_count": total_count,
+        "issue_type_shown": effective_type,
     }
 
 

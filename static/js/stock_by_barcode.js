@@ -142,15 +142,20 @@ document.addEventListener('DOMContentLoaded', () => {
             </tr>
         `}).join('');
 
+        const sortArrow = (field) => {
+            if (sortField !== field) return '';
+            return sortOrder === 'asc' ? ' ↑' : ' ↓';
+        };
+
         stockContainer.innerHTML = `
             <table>
                 <thead>
                     <tr>
                         <th style="width: 55px;"></th>
-                        <th>Product / Barcode</th>
+                        <th class="sortable-header" data-sort="title" style="cursor:pointer;">Product / Barcode${sortArrow('title')}</th>
                         <th>Listings</th>
-                        <th>Stock</th>
-                        <th>Retail (RON)</th>
+                        <th class="sortable-header" data-sort="stock" style="cursor:pointer;">Stock${sortArrow('stock')}</th>
+                        <th class="sortable-header" data-sort="retail" style="cursor:pointer;">Retail (RON)${sortArrow('retail')}</th>
                         <th style="width: 155px;">Set Stock</th>
                     </tr>
                 </thead>
@@ -256,15 +261,35 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    stockContainer.addEventListener('submit', (e) => {
+        if (e.target.matches('.update-form-inline')) handleStockUpdate(e);
+    });
+
+    // Clickable table header sort
     stockContainer.addEventListener('click', (e) => {
+        const header = e.target.closest('.sortable-header');
+        if (header) {
+            const field = header.dataset.sort;
+            if (sortField === field) {
+                sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortField = field;
+                sortOrder = 'asc';
+            }
+            // Sync the dropdown
+            const dropdownVal = `${sortField}-${sortOrder}`;
+            if (filters.sortSelect) {
+                const option = [...filters.sortSelect.options].find(o => o.value === dropdownVal);
+                if (option) filters.sortSelect.value = dropdownVal;
+            }
+            fetchStockData();
+            return;
+        }
+        // Image click for modal
         if (e.target.classList.contains('product-image-compact')) {
             const row = e.target.closest('tr[data-group-index]');
             if (row) openManageModal(row.dataset.groupIndex);
         }
-    });
-
-    stockContainer.addEventListener('submit', (e) => {
-        if (e.target.matches('.update-form-inline')) handleStockUpdate(e);
     });
 
     modalBody.addEventListener('click', handleSetPrimary);
