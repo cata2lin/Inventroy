@@ -232,14 +232,37 @@ def handle_catalog_webhook(store_id: int, topic: str, payload: Dict[str, Any]):
     try:
         if topic == "products/create":
             crud_product.create_or_update_product_from_webhook(db, store_id, payload)
+            # Auto-sync: align new product's variants to existing barcode groups
+            _auto_sync_product_barcodes(db, store_id, payload)
+
         elif topic == "products/update":
             crud_product.patch_product_from_webhook(db, store_id, payload)
+            # Auto-sync: if any variant's barcode changed, align to group
+            _auto_sync_product_barcodes(db, store_id, payload)
+
         elif topic == "products/delete":
             crud_product.delete_product_from_webhook(db, payload)
+
         elif topic == "inventory_items/update":
+            # Capture the barcode BEFORE the update to detect changes
+            inv_item_id = payload.get("id")
+            old_barcode = None
+            if inv_item_id:
+                old_variant = db.query(models.ProductVariant).filter(
+                    models.ProductVariant.inventory_item_id == inv_item_id
+                ).first()
+                old_barcode = old_variant.barcode if old_variant else None
+
             crud_product.update_variant_from_webhook(db, payload)
+
+            # If the barcode changed, sync to the new group
+            new_barcode = payload.get("barcode")
+            if new_barcode and new_barcode != old_barcode and old_variant:
+                _sync_variant_to_barcode_group(db, store_id, old_variant.id, new_barcode)
+
         elif topic == "inventory_items/delete":
             crud_product.delete_inventory_item_from_webhook(db, payload)
+
     except Exception as e:
         print(f"[SYNC-ERROR] Failed to process catalog webhook '{topic}': {e}")
         audit_logger.log_error("inventory_sync_service.handle_catalog_webhook",
@@ -247,6 +270,167 @@ def handle_catalog_webhook(store_id: int, topic: str, payload: Dict[str, Any]):
                                details={"topic": topic}, exc=e)
     finally:
         db.close()
+
+
+def _auto_sync_product_barcodes(db: Session, store_id: int, payload: Dict[str, Any]):
+    """
+    After a products/create or products/update webhook, check if any variant's
+    barcode belongs to an existing barcode group. If so, set the new variant's
+    stock to match the group's authoritative level.
+
+    This ensures zero-delay alignment when adding products to stores.
+    """
+    try:
+        # Extract variant barcodes from the webhook payload (REST format)
+        variants = payload.get("variants", [])
+        if not variants:
+            return
+
+        for v_data in variants:
+            barcode = v_data.get("barcode")
+            variant_id = v_data.get("id")
+            if not barcode or not variant_id:
+                continue
+            _sync_variant_to_barcode_group(db, store_id, variant_id, barcode)
+
+    except Exception as e:
+        print(f"[SYNC-AUTO] Error in auto-sync for store {store_id}: {e}")
+        audit_logger.log_error("inventory_sync_service._auto_sync_product_barcodes",
+                               f"Auto-sync failed for store {store_id}",
+                               exc=e)
+
+
+def _sync_variant_to_barcode_group(db: Session, store_id: int, variant_id: int, barcode: str):
+    """
+    Sync a single variant's stock to match its barcode group.
+    Called when a variant is created or its barcode changes.
+
+    Steps:
+    1. Skip placeholder/empty barcodes
+    2. Check if the barcode exists on other variants (a group exists)
+    3. Get the authoritative stock level from BarcodeVersion or existing inventory
+    4. Write that stock to this variant via Shopify API
+    5. Update local DB
+    """
+    if not barcode or barcode.strip() in PLACEHOLDER_BARCODES:
+        return
+
+    barcode = barcode.strip()
+
+    # Check: does this barcode already exist on OTHER variants?
+    existing_count = (
+        db.query(models.ProductVariant.id)
+        .join(models.Product, models.Product.id == models.ProductVariant.product_id)
+        .filter(
+            models.ProductVariant.barcode == barcode,
+            models.ProductVariant.id != variant_id,
+            models.Product.deleted_at.is_(None),
+            models.ProductVariant.inventory_item_id.isnot(None),
+        )
+        .count()
+    )
+
+    if existing_count == 0:
+        return  # No group — this is the only product with this barcode
+
+    # Determine target quantity from BarcodeVersion (most reliable)
+    target_quantity = None
+    version_obj = db.query(models.BarcodeVersion).filter(
+        models.BarcodeVersion.barcode == barcode
+    ).first()
+
+    if version_obj and version_obj.quantity is not None:
+        target_quantity = version_obj.quantity
+    else:
+        # Fallback: get stock from any existing variant in the group
+        existing_variant = (
+            db.query(models.ProductVariant)
+            .join(models.Product)
+            .filter(
+                models.ProductVariant.barcode == barcode,
+                models.ProductVariant.id != variant_id,
+                models.Product.deleted_at.is_(None),
+                models.ProductVariant.inventory_item_id.isnot(None),
+            )
+            .first()
+        )
+        if existing_variant and existing_variant.product and existing_variant.product.store:
+            ev_store = existing_variant.product.store
+            if ev_store.sync_location_id:
+                level = db.query(models.InventoryLevel).filter(
+                    models.InventoryLevel.variant_id == existing_variant.id,
+                    models.InventoryLevel.location_id == ev_store.sync_location_id,
+                ).first()
+                if level and level.available is not None:
+                    target_quantity = level.available
+
+    if target_quantity is None:
+        print(f"[SYNC-AUTO] Cannot determine group stock for barcode {barcode}, skipping auto-sync")
+        return
+
+    # Get the new variant from DB
+    new_variant = db.query(models.ProductVariant).filter(
+        models.ProductVariant.id == variant_id
+    ).first()
+    if not new_variant or not new_variant.inventory_item_id:
+        return
+
+    store = db.query(models.Store).filter(models.Store.id == store_id).first()
+    if not store or not store.sync_location_id or not store.enabled:
+        return
+
+    # Create WriteIntent to suppress the echo webhook
+    try:
+        _create_write_intents(db, barcode, target_quantity, 
+                              version_obj.version if version_obj else 0, [store])
+    except Exception:
+        pass  # Non-critical, echo suppression is best-effort
+
+    # Set stock on Shopify
+    try:
+        location_gid = f"gid://shopify/Location/{store.sync_location_id}"
+        service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+
+        variables = {
+            "input": {
+                "name": "available",
+                "reason": "correction",
+                "ignoreCompareQuantity": True,
+                "quantities": [{
+                    "inventoryItemId": f"gid://shopify/InventoryItem/{new_variant.inventory_item_id}",
+                    "locationId": location_gid,
+                    "quantity": target_quantity,
+                }],
+            }
+        }
+
+        result = service.execute_mutation("inventorySetQuantities", variables)
+        user_errors = result.get("inventorySetQuantities", {}).get("userErrors", [])
+        if user_errors:
+            print(f"[SYNC-AUTO] Shopify userErrors for barcode {barcode}: {user_errors}")
+            return
+
+        # Update local DB
+        crud_product.update_inventory_levels_for_variants(
+            db, variant_ids=[new_variant.id],
+            location_id=store.sync_location_id,
+            new_quantity=target_quantity,
+        )
+
+        print(f"[SYNC-AUTO] Auto-synced barcode {barcode} on store '{store.name}' to qty {target_quantity}")
+        audit_logger.log_propagation(
+            barcode=barcode,
+            source_store="auto_sync",
+            target_store=store.name,
+            quantity=target_quantity,
+            details={"trigger": "barcode_group_join", "variant_id": variant_id},
+        )
+
+    except Exception as e:
+        print(f"[SYNC-AUTO-ERROR] Failed to auto-sync barcode {barcode} on store '{store.name}': {e}")
+        audit_logger.log_error("inventory_sync_service._sync_variant_to_barcode_group",
+                               f"Auto-sync failed for barcode {barcode} on store '{store.name}'",
+                               details={"barcode": barcode, "variant_id": variant_id}, exc=e)
 
 # --- Helper Functions ---
 
