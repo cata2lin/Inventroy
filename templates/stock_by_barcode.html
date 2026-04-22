@@ -4,7 +4,7 @@
 <div class="container">
     <hgroup>
         <h1>Stock by Barcode</h1>
-        <h2>Master inventory control across all stores.</h2>
+        <h2>Master inventory control — unified stock view across all stores and listings.</h2>
     </hgroup>
 
     <article class="filters">
@@ -32,31 +32,31 @@
                 </select>
             </label>
         </div>
-        <div class="grid" style="grid-template-columns: 1fr 1fr 1fr 1fr; gap: 1rem; margin-top: 0.5rem;">
+        <div class="grid" style="grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.75rem; margin-top: 0.75rem;">
             <input type="number" id="min-stock" placeholder="Min Stock">
             <input type="number" id="max-stock" placeholder="Max Stock">
-            <input type="number" id="min-retail" placeholder="Min Retail Value">
-            <input type="number" id="max-retail" placeholder="Max Retail Value">
+            <input type="number" id="min-retail" placeholder="Min Retail (RON)">
+            <input type="number" id="max-retail" placeholder="Max Retail (RON)">
         </div>
     </article>
 
-    <article id="dashboard" class="grid metric-cards">
+    <div class="metric-cards" id="dashboard">
         <div class="metric-card">
             <h3>Total Units</h3>
             <p class="value" id="metric-total-stock">0</p>
-            <small>in stock</small>
+            <small>in stock across all stores</small>
         </div>
         <div class="metric-card">
             <h3>Inventory Value</h3>
             <p class="value" id="metric-total-inventory-value">0 RON</p>
-            <small>at cost</small>
+            <small>at cost price</small>
         </div>
         <div class="metric-card">
             <h3>Retail Value</h3>
             <p class="value" id="metric-total-retail-value">0 RON</p>
             <small>at sale price</small>
         </div>
-    </article>
+    </div>
 
     <article id="stock-container" aria-busy="true" class="table-container">
     </article>
@@ -64,7 +64,7 @@
     <dialog id="manage-variants-modal">
         <article>
             <header>
-                <button class="close" aria-label="Close"></button>
+                <button class="close" aria-label="Close">&times;</button>
                 <strong id="modal-title">Set Primary Variant</strong>
             </header>
             <div id="modal-body"></div>

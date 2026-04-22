@@ -76,10 +76,10 @@ document.addEventListener('DOMContentLoaded', () => {
         el.countBarcodeMismatch.textContent = summary.barcode_mismatch || 0;
 
         // Color-code: green if 0, red if > 0
-        el.countNoBarcode.style.color = summary.no_barcode > 0 ? 'var(--pico-del-color)' : 'var(--pico-ins-color)';
-        el.countNoSku.style.color = summary.no_sku > 0 ? 'var(--pico-del-color)' : 'var(--pico-ins-color)';
-        el.countSkuMismatch.style.color = summary.sku_mismatch > 0 ? 'var(--pico-del-color)' : 'var(--pico-ins-color)';
-        el.countBarcodeMismatch.style.color = summary.barcode_mismatch > 0 ? 'var(--pico-del-color)' : 'var(--pico-ins-color)';
+        el.countNoBarcode.style.color = summary.no_barcode > 0 ? 'var(--color-danger)' : 'var(--color-success)';
+        el.countNoSku.style.color = summary.no_sku > 0 ? 'var(--color-danger)' : 'var(--color-success)';
+        el.countSkuMismatch.style.color = summary.sku_mismatch > 0 ? 'var(--color-danger)' : 'var(--color-success)';
+        el.countBarcodeMismatch.style.color = summary.barcode_mismatch > 0 ? 'var(--color-danger)' : 'var(--color-success)';
     };
 
     const updatePagination = () => {
@@ -111,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updatePagination();
         } catch (e) {
             console.error(e);
-            el.container.innerHTML = `<tr><td colspan="5" class="text-center" style="color: var(--pico-del-color);">Failed to load data. Please try again.</td></tr>`;
+            el.container.innerHTML = `<tr><td colspan="5" class="text-center" style="color: var(--color-danger);">Failed to load data. Please try again.</td></tr>`;
         }
     };
 

@@ -34,6 +34,10 @@ class StoreCreate(StoreBase):
 
 class Store(StoreBase):
     id: int
+    enabled: bool = True
+    sync_location_id: Optional[int] = None
+    last_synced_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
 class Webhook(BaseModel):

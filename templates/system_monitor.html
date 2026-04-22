@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <hgroup>
+        <h1>System Monitor</h1>
+        <h2>Full traceability — audit trail, errors, webhook history, and system health.</h2>
+    </hgroup>
+
+    <!-- Dashboard Metrics -->
+    <div class="metric-cards" id="stats-dashboard">
+        <div class="metric-card">
+            <h3>Events (24h)</h3>
+            <p class="value" id="stat-total-events">—</p>
+            <small>total audit entries</small>
+        </div>
+        <div class="metric-card">
+            <h3>Errors (24h)</h3>
+            <p class="value" id="stat-errors" style="color: var(--color-danger);">—</p>
+            <small>errors & criticals</small>
+        </div>
+        <div class="metric-card">
+            <h3>Webhooks (24h)</h3>
+            <p class="value" id="stat-webhooks">—</p>
+            <small id="stat-webhooks-rate">— per hour</small>
+        </div>
+        <div class="metric-card">
+            <h3>Avg Webhook</h3>
+            <p class="value" id="stat-avg-webhook">—</p>
+            <small>processing time</small>
+        </div>
+        <div class="metric-card">
+            <h3>Stock Changes</h3>
+            <p class="value" id="stat-stock-changes">—</p>
+            <small>in last 24 hours</small>
+        </div>
+        <div class="metric-card">
+            <h3>Unresolved</h3>
+            <p class="value" id="stat-unresolved" style="color: var(--color-warning);">—</p>
+            <small>open error events</small>
+        </div>
+    </div>
+
+    <!-- Tab Navigation -->
+    <div class="monitor-tabs">
+        <button class="tab-btn active" data-tab="audit-log">Audit Trail</button>
+        <button class="tab-btn" data-tab="errors">System Errors</button>
+        <button class="tab-btn" data-tab="webhooks">Webhook History</button>
+    </div>
+
+    <!-- Filters (shared) -->
+    <article class="filters" id="filters-section">
+        <div class="grid" style="grid-template-columns: 2fr 1fr 1fr 1fr; gap: 0.75rem; align-items: end;">
+            <label for="monitor-search">
+                Search
+                <input type="search" id="monitor-search" placeholder="Search messages, targets, actors...">
+            </label>
+            <label for="monitor-category" id="category-filter-wrapper">
+                Category
+                <select id="monitor-category">
+                    <option value="">All Categories</option>
+                    <option value="WEBHOOK">Webhook</option>
+                    <option value="SYNC">Sync</option>
+                    <option value="STOCK">Stock</option>
+                    <option value="CONFIG">Config</option>
+                    <option value="AUTH">Auth</option>
+                    <option value="SYSTEM">System</option>
+                    <option value="RECONCILIATION">Reconciliation</option>
+                </select>
+            </label>
+            <label for="monitor-severity">
+                Severity
+                <select id="monitor-severity">
+                    <option value="">All</option>
+                    <option value="INFO">Info</option>
+                    <option value="WARN">Warning</option>
+                    <option value="ERROR">Error</option>
+                    <option value="CRITICAL">Critical</option>
+                </select>
+            </label>
+            <label for="monitor-store">
+                Store
+                <select id="monitor-store">
+                    <option value="">All Stores</option>
+                </select>
+            </label>
+        </div>
+    </article>
+
+    <!-- Tab Content: Audit Trail -->
+    <div id="tab-audit-log" class="tab-content active">
+        <article id="audit-log-container" class="table-container" aria-busy="true"></article>
+        <div class="pagination-controls">
+            <button id="audit-prev" disabled>Previous</button>
+            <span id="audit-page-info">Page 1 of 1</span>
+            <button id="audit-next" disabled>Next</button>
+        </div>
+    </div>
+
+    <!-- Tab Content: Errors -->
+    <div id="tab-errors" class="tab-content" style="display: none;">
+        <article id="errors-container" class="table-container" aria-busy="true"></article>
+        <div class="pagination-controls">
+            <button id="errors-prev" disabled>Previous</button>
+            <span id="errors-page-info">Page 1 of 1</span>
+            <button id="errors-next" disabled>Next</button>
+        </div>
+    </div>
+
+    <!-- Tab Content: Webhooks -->
+    <div id="tab-webhooks" class="tab-content" style="display: none;">
+        <article id="webhooks-container" class="table-container" aria-busy="true"></article>
+        <div class="pagination-controls">
+            <button id="webhooks-prev" disabled>Previous</button>
+            <span id="webhooks-page-info">Page 1 of 1</span>
+            <button id="webhooks-next" disabled>Next</button>
+        </div>
+    </div>
+
+    <!-- Detail Modal -->
+    <dialog id="detail-modal">
+        <article>
+            <header>
+                <button class="close" aria-label="Close">&times;</button>
+                <strong id="detail-modal-title">Event Details</strong>
+            </header>
+            <div id="detail-modal-body"></div>
+        </article>
+    </dialog>
+</div>
+
+<style>
+    .monitor-tabs {
+        display: flex;
+        gap: 2px;
+        margin-bottom: 1rem;
+        border-bottom: 1px solid var(--color-border);
+        padding-bottom: 0;
+    }
+    .tab-btn {
+        padding: 0.6rem 1.25rem;
+        border: none;
+        border-bottom: 2px solid transparent;
+        background: transparent;
+        color: var(--color-text-secondary);
+        cursor: pointer;
+        font-weight: 500;
+        font-size: 0.875rem;
+        border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+        transition: all var(--transition-base);
+    }
+    .tab-btn:hover {
+        color: var(--color-text);
+        background: rgba(255,255,255,0.02);
+    }
+    .tab-btn.active {
+        color: var(--emerald-400);
+        border-bottom-color: var(--color-primary);
+        background: transparent;
+    }
+    .severity-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 0.35rem;
+    }
+    .severity-dot.INFO { background: var(--color-info); }
+    .severity-dot.WARN { background: var(--color-warning); }
+    .severity-dot.ERROR { background: var(--color-danger); }
+    .severity-dot.CRITICAL { background: #dc2626; animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    .log-row { cursor: pointer; }
+    .log-row:hover { background: rgba(255,255,255,0.03) !important; }
+
+    .category-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.15rem 0.45rem;
+        border-radius: 999px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+    .category-pill.WEBHOOK { background: rgba(59, 130, 246, 0.15); color: var(--color-info); }
+    .category-pill.SYNC { background: rgba(16, 185, 129, 0.15); color: var(--emerald-400); }
+    .category-pill.STOCK { background: rgba(168, 85, 247, 0.15); color: #a855f7; }
+    .category-pill.CONFIG { background: rgba(245, 158, 11, 0.15); color: var(--color-warning); }
+    .category-pill.AUTH { background: rgba(236, 72, 153, 0.15); color: #ec4899; }
+    .category-pill.SYSTEM { background: rgba(113, 113, 122, 0.15); color: var(--zinc-400); }
+    .category-pill.RECONCILIATION { background: rgba(34, 211, 238, 0.15); color: #22d3ee; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/system_monitor.js"></script>
+{% endblock %}

@@ -53,11 +53,15 @@ class Product(Base):
     handle = Column(String(255), index=True)
     updated_at = Column(DateTime(timezone=True))
     published_at = Column(DateTime(timezone=True))
-    status = Column(String(50))
+    status = Column(String(50))  # Shopify status: ACTIVE, DRAFT, ARCHIVED — all participate in sync
     tags = Column(Text)
     image_url = Column(String(2048))
     last_fetched_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     last_seen_at = Column(DateTime(timezone=True))
+    # Option B: Soft-delete with timestamp. NULL = active, set = deleted.
+    # Products with any status (ACTIVE/DRAFT/ARCHIVED) can participate in barcode sync.
+    # Only products soft-deleted by the sync runner (disappeared from Shopify) are excluded.
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
     
     store = relationship("Store", back_populates="products")
@@ -67,7 +71,7 @@ class ProductVariant(Base):
     __tablename__ = "product_variants"
     id = Column(BIGINT, primary_key=True, index=False)
     shopify_gid = Column(String(255), unique=True, nullable=False)
-    product_id = Column(BIGINT, ForeignKey("products.id"), nullable=False)
+    product_id = Column(BIGINT, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
     store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(255))
     price = Column(NUMERIC(10, 2))
@@ -140,7 +144,7 @@ class InventorySnapshot(Base):
 
 class SyncRun(Base):
     __tablename__ = "sync_runs"
-    id = Column(BIGINT, primary_key=True)
+    id = Column(BIGINT, primary_key=True, autoincrement=True)
     store_id = Column(BIGINT, nullable=False)
     started_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     t0 = Column(DateTime(timezone=True), nullable=False)
@@ -153,7 +157,7 @@ class SyncRun(Base):
 
 class SyncDeadLetter(Base):
     __tablename__ = "sync_dead_letters"
-    id = Column(BIGINT, primary_key=True)
+    id = Column(BIGINT, primary_key=True, autoincrement=True)
     store_id = Column(BIGINT, nullable=False)
     run_id = Column(BIGINT, ForeignKey("sync_runs.id"))
     payload = Column(JSONB, nullable=False)
@@ -197,3 +201,52 @@ class ProcessedWebhook(Base):
     id = Column(String(255), primary_key=True) # A unique hash of the payload
     received_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=False)
+
+
+class AuditLog(Base):
+    """
+    Central audit trail for ALL system operations.
+    Categories: WEBHOOK, SYNC, STOCK, CONFIG, AUTH, SYSTEM, RECONCILIATION
+    """
+    __tablename__ = "audit_logs"
+    id = Column(BIGINT, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    category = Column(String(50), nullable=False, index=True)  # WEBHOOK, SYNC, STOCK, CONFIG, AUTH, SYSTEM
+    action = Column(String(100), nullable=False, index=True)   # e.g. webhook_received, sync_started, stock_updated
+    severity = Column(String(20), nullable=False, server_default="INFO")  # INFO, WARN, ERROR, CRITICAL
+    actor = Column(String(255), nullable=True)  # username or "system"
+    store_id = Column(Integer, nullable=True, index=True)
+    store_name = Column(String(255), nullable=True)
+    target = Column(String(255), nullable=True)  # barcode, product_id, webhook_topic, etc.
+    message = Column(Text, nullable=False)
+    details = Column(JSONB, nullable=True)  # Flexible payload for any extra context
+    duration_ms = Column(Integer, nullable=True)  # How long the operation took
+    error_message = Column(Text, nullable=True)
+    stack_trace = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index('ix_audit_logs_category_timestamp', 'category', 'timestamp'),
+        Index('ix_audit_logs_severity_timestamp', 'severity', 'timestamp'),
+    )
+
+
+class SystemEvent(Base):
+    """
+    System-level events for monitoring health, errors, and performance.
+    Used for the error log view and system dashboard.
+    """
+    __tablename__ = "system_events"
+    id = Column(BIGINT, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    level = Column(String(20), nullable=False, index=True)  # INFO, WARN, ERROR, CRITICAL
+    source = Column(String(255), nullable=False, index=True)  # Module/function that generated the event
+    message = Column(Text, nullable=False)
+    details = Column(JSONB, nullable=True)
+    stack_trace = Column(Text, nullable=True)
+    resolved = Column(BOOLEAN, default=False, nullable=False)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_by = Column(String(255), nullable=True)
+
+    __table_args__ = (
+        Index('ix_system_events_level_timestamp', 'level', 'timestamp'),
+    )

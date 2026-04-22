@@ -4,31 +4,78 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - Inventory Intelligence</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+    <link rel="stylesheet" href="/static/css/style.css" />
     <style>
-        body { display: grid; place-items: center; min-height: 100vh; }
-        .error { color: var(--pico-color-red-500); margin-top: 1rem; }
+        body {
+            display: grid;
+            grid-template-columns: 1fr;
+            place-items: center;
+            min-height: 100vh;
+            background: var(--color-bg);
+        }
+        .login-card {
+            width: 100%;
+            max-width: 380px;
+            padding: 2.5rem;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-xl);
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
+        }
+        .login-brand {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            margin-bottom: 2rem;
+        }
+        .login-brand svg { color: var(--color-primary); }
+        .login-brand strong {
+            font-size: 1.25rem;
+            background: linear-gradient(135deg, var(--emerald-400), var(--emerald-500));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .login-card form { display: flex; flex-direction: column; gap: 1rem; }
+        .login-card button { width: 100%; margin-top: 0.5rem; }
+        .error-msg {
+            color: var(--color-danger);
+            font-size: 0.85rem;
+            text-align: center;
+            margin-top: 1rem;
+            padding: 0.5rem;
+            background: rgba(239, 68, 68, 0.1);
+            border-radius: var(--radius-md);
+        }
     </style>
 </head>
 <body>
-    <main class="container">
-        <article class="grid">
+    <div class="login-card">
+        <div class="login-brand">
+            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                <line x1="12" y1="22.08" x2="12" y2="12"></line>
+            </svg>
+            <strong>Inventory Intel</strong>
+        </div>
+        <form method="post" action="/login">
             <div>
-                <hgroup>
-                    <h1>Login</h1>
-                    <h2>Inventory Intelligence</h2>
-                </hgroup>
-                <form method="post" action="/login">
-                    <input type="text" name="username" placeholder="Username" required autocomplete="username">
-                    <input type="password" name="password" placeholder="Password" required autocomplete="current-password">
-                    <button type="submit">Log in</button>
-                </form>
-
-                {% if request.query_params.get('error') %}
-                <p class="error"><strong>Login failed.</strong> Please check your username and password.</p>
-                {% endif %}
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" placeholder="Enter username" required autocomplete="username">
             </div>
-        </article>
-    </main>
+            <div>
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" placeholder="Enter password" required autocomplete="current-password">
+            </div>
+            <button type="submit" class="primary">Sign In</button>
+        </form>
+
+        {% if request.query_params.get('error') %}
+        <p class="error-msg"><strong>Login failed.</strong> Check your username and password.</p>
+        {% endif %}
+    </div>
 </body>
 </html>

@@ -38,9 +38,25 @@ document.addEventListener('DOMContentLoaded', () => {
         return new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON' }).format(amount);
     };
 
+    const getStockClass = (stock) => {
+        if (stock <= 0) return 'stock-urgent';
+        if (stock <= 5) return 'stock-warning';
+        return 'stock-healthy';
+    };
+
+    const getStatusBadge = (status) => {
+        if (!status) return '';
+        const s = status.toLowerCase();
+        if (s === 'active') return '<span class="badge badge-active">Active</span>';
+        if (s === 'draft') return '<span class="badge badge-draft">Draft</span>';
+        if (s === 'archived') return '<span class="badge badge-archived">Archived</span>';
+        return `<span class="badge">${status}</span>`;
+    };
+
     // --- Data Fetching ---
     const fetchStockData = async () => {
         stockContainer.setAttribute('aria-busy', 'true');
+        stockContainer.innerHTML = '';
         const params = new URLSearchParams();
         if (filters.search.value) params.set('search', filters.search.value);
         if (filters.store.value) params.set('store_id', filters.store.value);
@@ -59,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderTableView();
             updateDashboard(data.metrics);
         } catch (error) {
-            stockContainer.innerHTML = `<p style="color:red;">${error.message}</p>`;
+            stockContainer.innerHTML = `<p style="color: var(--color-danger);">${error.message}</p>`;
         } finally {
             stockContainer.removeAttribute('aria-busy');
         }
@@ -77,46 +93,65 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- UI Rendering ---
     const updateDashboard = (metrics) => {
-        dashboard.stock.textContent = metrics.total_stock.toLocaleString();
-        dashboard.inventoryValue.textContent = currencyFormatter(metrics.total_inventory_value);
-        dashboard.retailValue.textContent = currencyFormatter(metrics.total_retail_value);
+        dashboard.stock.textContent = (metrics.total_stock || 0).toLocaleString();
+        dashboard.inventoryValue.textContent = currencyFormatter(metrics.total_inventory_value || 0);
+        dashboard.retailValue.textContent = currencyFormatter(metrics.total_retail_value || 0);
     };
 
     const renderTableView = () => {
         if (barcodeGroupsData.length === 0) {
-            stockContainer.innerHTML = '<p>No products found matching your criteria.</p>';
+            stockContainer.innerHTML = '<p style="padding: 2rem; text-align: center;">No products found matching your criteria.</p>';
             return;
         }
 
-        const tableRows = barcodeGroupsData.map((group, index) => `
+        const tableRows = barcodeGroupsData.map((group, index) => {
+            const stockClass = getStockClass(group.total_stock);
+            const variantCount = group.variants ? group.variants.length : 0;
+            // Count unique stores in this group
+            const storeNames = group.variants
+                ? [...new Set(group.variants.map(v => v.store_name))].join(', ')
+                : '';
+
+            return `
             <tr data-group-index="${index}">
-                <td><img src="${group.primary_image_url || '/static/img/placeholder.png'}" class="product-image-compact" alt="Primary product image"></td>
-                <td class="product-title-cell">
-                    <strong>${group.primary_title}</strong><br>
-                    <small>Barcode: <code>${group.barcode}</code></small>
+                <td>
+                    <img src="${group.primary_image_url || '/static/img/placeholder.png'}"
+                         class="product-image-compact" alt="Product"
+                         onerror="this.style.display='none'">
                 </td>
-                <td>${group.variants.length}</td>
-                <td>${group.total_stock}</td>
-                <td>${currencyFormatter(group.total_retail_value)}</td>
+                <td>
+                    <strong>${group.primary_title || 'Untitled'}</strong><br>
+                    <small>
+                        <code>${group.barcode}</code>
+                        ${group.primary_status ? ' · ' + getStatusBadge(group.primary_status) : ''}
+                    </small>
+                </td>
+                <td>
+                    <span title="${storeNames}">${variantCount} variant${variantCount !== 1 ? 's' : ''}</span>
+                </td>
+                <td class="${stockClass}" style="font-weight: 600; font-size: 1.1rem;">
+                    ${group.total_stock}
+                </td>
+                <td>${currencyFormatter(group.total_retail_value || 0)}</td>
                 <td>
                     <form class="update-form-inline">
                         <input type="number" class="quantity-input-inline" value="${group.total_stock}" required />
-                        <button type="submit" class="update-stock-btn-inline" data-barcode="${group.barcode}">Set</button>
+                        <button type="submit" class="update-stock-btn-inline primary" data-barcode="${group.barcode}">Set</button>
                     </form>
                 </td>
             </tr>
-        `).join('');
+        `}).join('');
 
         stockContainer.innerHTML = `
             <table>
                 <thead>
                     <tr>
-                        <th>Image</th>
-                        <th>Primary Product</th>
-                        <th>Variants</th>
-                        <th>Stock Level</th>
-                        <th>Total Retail (RON)</th>
-                        <th>Set Stock</th>
+                        <th style="width: 55px;"></th>
+                        <th>Product / Barcode</th>
+                        <th>Listings</th>
+                        <th>Stock</th>
+                        <th>Retail (RON)</th>
+                        <th style="width: 155px;">Set Stock</th>
                     </tr>
                 </thead>
                 <tbody>${tableRows}</tbody>
@@ -127,16 +162,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const openManageModal = (groupIndex) => {
         const group = barcodeGroupsData[groupIndex];
         if (!group) return;
-        modalTitle.textContent = `Set Primary for Barcode: ${group.barcode}`;
+        modalTitle.textContent = `Variants for: ${group.barcode}`;
         modalBody.innerHTML = `
-            <p><small>Click the variant you want to set as the primary display.</small></p>
+            <p><small>Click a variant to set it as the primary display for this barcode group.</small></p>
             <div class="variants-grid">
                 ${group.variants.map(v => `
                     <div class="variant-card ${v.is_barcode_primary ? 'is-primary' : ''}" data-variant-id="${v.variant_id}">
-                        <img src="${v.image_url || '/static/img/placeholder.png'}" alt="${v.product_title}">
+                        <img src="${v.image_url || '/static/img/placeholder.png'}" alt="${v.product_title}"
+                             onerror="this.style.display='none'">
                         <div class="variant-card-body">
                             <strong>${v.store_name}</strong>
-                            <p>${v.product_title}</p>
+                            <p>${v.product_title} ${v.product_status ? '(' + v.product_status + ')' : ''}</p>
                             ${v.is_barcode_primary ? '<small class="primary-badge">Primary</small>' : ''}
                         </div>
                     </div>
@@ -167,7 +203,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const result = await response.json();
             if (!response.ok) {
-                const errorMsg = result.detail.errors ? result.detail.errors.join('\\n') : (result.detail.message || JSON.stringify(result.detail));
+                const errorMsg = result.detail.errors ? result.detail.errors.join('\n') : (result.detail.message || JSON.stringify(result.detail));
                 throw new Error(errorMsg);
             }
             button.classList.add('success');
@@ -205,13 +241,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    // --- Initial Setup & Event Listeners ---
-    // Filter inputs with debounce
+    // --- Event Listeners ---
     [filters.search, filters.minStock, filters.maxStock, filters.minRetail, filters.maxRetail].forEach(el => {
         if (el) el.addEventListener('input', debounce(fetchStockData, 400));
     });
 
-    // Store and sort - immediate change
     if (filters.store) filters.store.addEventListener('change', fetchStockData);
     if (filters.sortSelect) {
         filters.sortSelect.addEventListener('change', () => {
@@ -225,24 +259,17 @@ document.addEventListener('DOMContentLoaded', () => {
     stockContainer.addEventListener('click', (e) => {
         if (e.target.classList.contains('product-image-compact')) {
             const row = e.target.closest('tr[data-group-index]');
-            if (row) {
-                openManageModal(row.dataset.groupIndex);
-            }
+            if (row) openManageModal(row.dataset.groupIndex);
         }
     });
 
-    // CORRECTED: The listener is now attached to the container and listens for 'submit' events.
     stockContainer.addEventListener('submit', (e) => {
-        if (e.target.matches('.update-form-inline')) {
-            handleStockUpdate(e);
-        }
+        if (e.target.matches('.update-form-inline')) handleStockUpdate(e);
     });
 
     modalBody.addEventListener('click', handleSetPrimary);
     modal.addEventListener('click', (e) => {
-        if (e.target.matches('.close') || e.target === modal) {
-            modal.close();
-        }
+        if (e.target.matches('.close') || e.target === modal) modal.close();
     });
 
     loadStores();

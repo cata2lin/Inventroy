@@ -43,13 +43,20 @@ document.addEventListener('DOMContentLoaded', () => {
             storesListContainer.innerHTML = '<p>No stores have been added yet.</p>';
             return;
         }
-        let tableHtml = '<table><thead><tr><th>Name</th><th>Shopify URL</th><th>Currency</th><th>Actions</th></tr></thead><tbody>';
+        let tableHtml = '<table><thead><tr><th>Name</th><th>Shopify URL</th><th>Currency</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
         stores.forEach(store => {
+            const statusBadge = store.enabled
+                ? '<span class="badge badge-success">Active</span>'
+                : '<span class="badge badge-danger">Disabled</span>';
+            const locationBadge = store.sync_location_id
+                ? `<span class="badge badge-info" style="margin-left:4px;">Loc: ${store.sync_location_id}</span>`
+                : '<span class="badge badge-warning" style="margin-left:4px;">No Location</span>';
             tableHtml += `
                 <tr>
                     <td>${store.name}</td>
                     <td>${store.shopify_url}</td>
                     <td>${store.currency}</td>
+                    <td>${statusBadge}${locationBadge}</td>
                     <td><button class="outline" data-store-id="${store.id}">Manage</button></td>
                 </tr>`;
         });
@@ -237,7 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch('/api/config/webhooks/delete-all', { method: 'DELETE' });
             const result = await response.json();
             if (!response.ok) {
-                const errorDetails = result.errors ? `\\n\\nDetails:\\n${result.errors.join('\\n')}` : '';
+                const errorDetails = result.errors ? `\n\nDetails:\n${result.errors.join('\n')}` : '';
                 throw new Error(result.message + errorDetails);
             }
             alert(result.message);
@@ -248,6 +255,46 @@ document.addEventListener('DOMContentLoaded', () => {
             alert(`Error: ${error.message}`);
         } finally {
             deleteAllWebhooksBtn.removeAttribute('aria-busy');
+        }
+    });
+
+    // --- Verify All Webhooks ---
+    const verifyAllBtn = document.getElementById('verify-all-webhooks-btn');
+    const verifyResultDiv = document.getElementById('webhook-verify-result');
+
+    verifyAllBtn.addEventListener('click', async () => {
+        if (!confirm('Verify and recreate missing webhooks for ALL stores?')) return;
+        verifyAllBtn.setAttribute('aria-busy', 'true');
+        verifyAllBtn.disabled = true;
+        verifyResultDiv.innerHTML = '<p aria-busy="true">Verifying webhooks for all stores… This may take a minute.</p>';
+
+        try {
+            const response = await fetch('/api/config/webhooks/verify-all', { method: 'POST' });
+            const result = await response.json();
+
+            let html = `<p style="color: var(--color-success); font-weight: 600;">${result.message}</p>`;
+
+            if (result.store_results && result.store_results.length > 0) {
+                html += '<table><thead><tr><th>Store</th><th>Verified</th><th>Created</th><th>Fixed</th></tr></thead><tbody>';
+                result.store_results.forEach(sr => {
+                    const rowStyle = (sr.created > 0 || sr.updated > 0) ? ' style="color: var(--color-warning);"' : '';
+                    html += `<tr${rowStyle}><td>${sr.store}</td><td>${sr.verified}</td><td>${sr.created}</td><td>${sr.updated}</td></tr>`;
+                });
+                html += '</tbody></table>';
+            }
+
+            if (result.errors) {
+                html += '<p style="color: var(--color-danger);">Errors:</p><ul>';
+                result.errors.forEach(e => html += `<li>${e}</li>`);
+                html += '</ul>';
+            }
+
+            verifyResultDiv.innerHTML = html;
+        } catch (error) {
+            verifyResultDiv.innerHTML = `<p style="color: var(--color-danger);">Failed: ${error.message}</p>`;
+        } finally {
+            verifyAllBtn.removeAttribute('aria-busy');
+            verifyAllBtn.disabled = false;
         }
     });
 

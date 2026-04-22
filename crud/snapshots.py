@@ -204,7 +204,9 @@ def get_products_with_velocity(
             CASE 
                 WHEN os.old_stock IS NOT NULL AND os.old_date IS NOT NULL 
                      AND (CURRENT_DATE - os.old_date::date) > 0
-                THEN GREATEST(0, (os.old_stock - vs.stock)::numeric / (CURRENT_DATE - os.old_date::date))
+                -- BUG-16 FIX: Allow negative velocity (restocking) instead of clamping to 0.
+                -- Negative velocity = stock increased. Consumers should check sign for direction.
+                THEN (os.old_stock - vs.stock)::numeric / (CURRENT_DATE - os.old_date::date)
                 ELSE 0
             END as velocity
         FROM variant_stock vs

@@ -3,17 +3,49 @@
 {% block content %}
 <div class="container">
     <hgroup>
-        <h1>Synchronization Control</h1>
-        <h2>Trigger and monitor data syncs.</h2>
+        <h1>Sync Control</h1>
+        <h2>Trigger and monitor inventory synchronization across all stores.</h2>
     </hgroup>
 
-    <article class="card">
-        <header><strong>Full Sync Actions</strong></header>
-        <p>This action will sync products for ALL enabled stores.</p>
-        <button id="sync-all-products-btn">Sync All Products</button>
+    <div class="metric-cards" id="sync-metrics">
+        <div class="metric-card">
+            <h3>Stores</h3>
+            <p class="value" id="metric-stores">—</p>
+            <small>connected & enabled</small>
+        </div>
+        <div class="metric-card">
+            <h3>Barcodes Tracked</h3>
+            <p class="value" id="metric-barcodes">—</p>
+            <small>unique barcodes</small>
+        </div>
+        <div class="metric-card">
+            <h3>Last Sync</h3>
+            <p class="value" id="metric-last-sync">—</p>
+            <small>most recent run</small>
+        </div>
+        <div class="metric-card">
+            <h3>Sync Status</h3>
+            <p class="value" id="metric-sync-status">—</p>
+            <small>overall health</small>
+        </div>
+    </div>
+
+    <article>
+        <header><strong>Sync Actions</strong></header>
+        <p>Trigger a full product sync + stock reconciliation across all enabled stores. Products on all stores with the same barcode will be unified to the minimum stock level.</p>
+        <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+            <button id="sync-all-products-btn" class="primary">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                Sync All Products
+            </button>
+            <button id="reconcile-btn">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"></path><path d="M8 3H3v5"></path><path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"></path><path d="m15 9 6-6"></path></svg>
+                Reconcile Stock Only
+            </button>
+        </div>
     </article>
 
-    <article id="progress-container" class="card">
+    <article id="progress-container">
         <header><strong>Sync Progress</strong></header>
         <div id="progress-bars"><p>No sync jobs running.</p></div>
     </article>

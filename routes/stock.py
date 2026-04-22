@@ -1,29 +1,52 @@
 # routes/stock.py
 from typing import List, Dict, Any, Optional
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
 from unidecode import unidecode
 import requests
+import threading
 
 from database import get_db
 import models
 import crud.product as crud_product
 from shopify_service import ShopifyService, gid_to_id
+from services import audit_logger
 
 router = APIRouter(prefix="/api/stock", tags=["Stock Management"])
 
-# --- Currency Conversion ---
+# --- BUG-28 FIX: Cached Currency Conversion ---
+_exchange_rate_cache: Dict[str, Any] = {"rates": None, "fetched_at": None}
+_exchange_rate_lock = threading.Lock()
+EXCHANGE_RATE_TTL_SECONDS = 3600  # 1 hour
+
 def get_exchange_rates(base_currency: str = "RON") -> Dict[str, float]:
+    """Fetch exchange rates with 1-hour TTL cache to avoid blocking on every page load."""
+    with _exchange_rate_lock:
+        now = datetime.now(timezone.utc)
+        if _exchange_rate_cache["rates"] and _exchange_rate_cache["fetched_at"]:
+            age = (now - _exchange_rate_cache["fetched_at"]).total_seconds()
+            if age < EXCHANGE_RATE_TTL_SECONDS:
+                return _exchange_rate_cache["rates"]
+
     try:
-        response = requests.get(f"https://api.exchangerate-api.com/v4/latest/{base_currency}")
+        response = requests.get(f"https://api.exchangerate-api.com/v4/latest/{base_currency}", timeout=10)
         response.raise_for_status()
         data = response.json()
         rates = data.get("rates", {})
         rates[base_currency] = 1.0
+
+        with _exchange_rate_lock:
+            _exchange_rate_cache["rates"] = rates
+            _exchange_rate_cache["fetched_at"] = datetime.now(timezone.utc)
+
         return rates
     except Exception:
+        # BUG-21 NOTE: These fallback values are store_currency→RON conversion factors.
+        # e.g., 1 EUR * 5.0 = 5 RON. They intentionally differ from the API's format
+        # (which returns 1 RON = 0.2 EUR). Do NOT "fix" them to match the API.
         return {"RON": 1.0, "EUR": 5.0, "USD": 4.6, "BGN": 2.5, "PLN": 1.1, "CZK": 0.2}
 
 # --- Helper for Smart Search ---
@@ -47,7 +70,13 @@ def get_stock_grouped_by_barcode(
 ):
     base_query = (
         db.query(models.ProductVariant)
-        .filter(models.ProductVariant.barcode != None, models.ProductVariant.barcode != '')
+        .join(models.Product, models.Product.id == models.ProductVariant.product_id)
+        .filter(
+            models.ProductVariant.barcode != None,
+            models.ProductVariant.barcode != '',
+            # BUG-24 FIX: Exclude soft-deleted products from stock view
+            models.Product.deleted_at.is_(None)
+        )
         .options(
             joinedload(models.ProductVariant.product).joinedload(models.Product.store),
             joinedload(models.ProductVariant.inventory_levels)
@@ -63,7 +92,9 @@ def get_stock_grouped_by_barcode(
         search_terms = normalize_and_split(search)
         matching_barcodes = set()
         for v in all_variants:
-            full_text = f"{v.product.title} {v.sku} {v.barcode}"
+            # BUG-26 FIX: Guard against None values in title, sku, barcode
+            title = v.product.title if v.product else ""
+            full_text = f"{title or ''} {v.sku or ''} {v.barcode or ''}"
             normalized_full_text = normalize_and_split(full_text)
             if all(term in normalized_full_text for term in search_terms):
                 matching_barcodes.add(v.barcode)
@@ -77,13 +108,15 @@ def get_stock_grouped_by_barcode(
         if barcode not in grouped_by_barcode:
             grouped_by_barcode[barcode] = { "barcode": barcode, "variants": [] }
 
-        store_currency = variant.product.store.currency
+        store_currency = variant.product.store.currency if variant.product and variant.product.store else "RON"
         rate = exchange_rates.get(store_currency, 1.0)
         variant_stock = sum(level.available for level in variant.inventory_levels if level.available is not None)
 
         grouped_by_barcode[barcode]["variants"].append({
-            "variant_id": variant.id, "product_title": variant.product.title, "image_url": variant.product.image_url,
-            "sku": variant.sku, "store_name": variant.product.store.name, "is_barcode_primary": variant.is_barcode_primary,
+            "variant_id": variant.id, "product_title": variant.product.title if variant.product else "Unknown",
+            "image_url": variant.product.image_url if variant.product else None,
+            "sku": variant.sku, "store_name": variant.product.store.name if variant.product and variant.product.store else "Unknown",
+            "is_barcode_primary": variant.is_barcode_primary,
             "stock": variant_stock, "retail_value_ron": (variant_stock * float(variant.price or 0)) * rate,
             "inventory_value_ron": (variant_stock * float(variant.cost_per_item or 0)) * rate,
         })
@@ -91,11 +124,10 @@ def get_stock_grouped_by_barcode(
     final_groups = []
     for barcode, group in grouped_by_barcode.items():
         if not group["variants"]: continue
-        
-        # Calculate total stock based on the primary variant or the first one if none is primary
+
         primary_variant = next((v for v in group["variants"] if v["is_barcode_primary"]), group["variants"][0])
         representative_stock = primary_variant["stock"]
-        
+
         total_retail_value = sum(v["retail_value_ron"] for v in group["variants"])
         total_inventory_value = sum(v["inventory_value_ron"] for v in group["variants"])
 
@@ -116,7 +148,7 @@ def get_stock_grouped_by_barcode(
         "stock": lambda x: x["total_stock"],
         "retail": lambda x: x["total_retail_value"],
         "barcode": lambda x: x["barcode"],
-        "title": lambda x: x["primary_title"].lower(),
+        "title": lambda x: (x["primary_title"] or "").lower(),
     }
     sort_key = sort_keys.get(sort_field, sort_keys["title"])
     reverse = sort_order.lower() == "desc"
@@ -155,9 +187,16 @@ class BulkStockUpdatePayload(BaseModel):
 
 @router.post("/bulk-update")
 def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get_db)):
-    all_variants = db.query(models.ProductVariant).filter(
-        models.ProductVariant.barcode == payload.barcode
-    ).options(joinedload(models.ProductVariant.product).joinedload(models.Product.store)).all()
+    all_variants = (
+        db.query(models.ProductVariant)
+        .join(models.Product, models.Product.id == models.ProductVariant.product_id)
+        .filter(
+            models.ProductVariant.barcode == payload.barcode,
+            models.Product.deleted_at.is_(None)
+        )
+        .options(joinedload(models.ProductVariant.product).joinedload(models.Product.store))
+        .all()
+    )
 
     if not all_variants:
         raise HTTPException(status_code=404, detail="No variants found with that barcode")
@@ -167,7 +206,10 @@ def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get
         store_id = v.product.store.id
         if store_id not in variants_by_store: variants_by_store[store_id] = []
         variants_by_store[store_id].append(v)
-    
+
+    # BUG-25 FIX: Create WriteIntents BEFORE calling Shopify to suppress echo webhooks
+    _create_bulk_update_write_intents(db, payload.barcode, payload.quantity, variants_by_store.keys())
+
     errors = []
     success_updates = []
 
@@ -179,12 +221,12 @@ def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get
 
         location_gid = f"gid://shopify/Location/{store.sync_location_id}"
         service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
-        
+
         quantities_payload = [
             {"inventoryItemId": f"gid://shopify/InventoryItem/{v.inventory_item_id}", "locationId": location_gid, "quantity": payload.quantity}
             for v in variants if v.inventory_item_id
         ]
-        
+
         if not quantities_payload: continue
 
         variables = {
@@ -204,7 +246,6 @@ def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get
         except Exception as e:
             errors.append(f"Store {store.name}: {str(e)}")
 
-    # --- THIS IS THE CRITICAL FIX ---
     # After all API calls, update the local database for the successful ones.
     if success_updates:
         for update in success_updates:
@@ -213,6 +254,38 @@ def bulk_update_stock(payload: BulkStockUpdatePayload, db: Session = Depends(get
             )
 
     if errors:
+        audit_logger.log_stock_change(payload.barcode, 0, "Manual", 0, payload.quantity,
+                                       source="manual_bulk_update",
+                                       details={"errors": errors, "success_count": len(success_updates)})
         raise HTTPException(status_code=422, detail={"message": "Completed with partial success.", "errors": errors})
 
+    audit_logger.log_stock_change(payload.barcode, 0, "Manual", 0, payload.quantity,
+                                   source="manual_bulk_update",
+                                   details={"stores_updated": len(success_updates), "variant_count": len(all_variants)})
     return {"status": "ok", "message": "Stock updated successfully for all applicable stores."}
+
+
+def _create_bulk_update_write_intents(db: Session, barcode: str, quantity: int, store_ids):
+    """BUG-25 FIX: Create WriteIntents for all stores before bulk stock update."""
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=60)
+
+    version_obj = db.query(models.BarcodeVersion).filter(
+        models.BarcodeVersion.barcode == barcode
+    ).first()
+    version = version_obj.version if version_obj else 0
+
+    for store_id in store_ids:
+        intent = models.WriteIntent(
+            barcode=barcode,
+            target_store_id=store_id,
+            quantity=quantity,
+            barcode_version=version,
+            expires_at=expires
+        )
+        db.add(intent)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()

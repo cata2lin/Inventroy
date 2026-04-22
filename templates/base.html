@@ -1,165 +1,36 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }} - Inventory Intelligence</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
     <link rel="stylesheet" href="/static/css/style.css" />
-
-    <style>
-        :root {
-            --sidebar-width: 260px;
-            --sidebar-bg-color: #f8f9fa;
-            --sidebar-link-color: #495057;
-            --sidebar-link-active-bg: #e9ecef;
-            --sidebar-link-hover-bg: #f1f3f5;
-        }
-
-        [data-theme="dark"] {
-            --sidebar-bg-color: #18202c;
-            --sidebar-link-color: #adb5bd;
-            --sidebar-link-active-bg: #2c3e50;
-            --sidebar-link-hover-bg: #212c3a;
-        }
-
-        body {
-            display: grid;
-            grid-template-columns: var(--sidebar-width) 1fr;
-            grid-template-rows: 100vh;
-            margin: 0;
-        }
-
-        .sidebar {
-            background-color: var(--sidebar-bg-color);
-            padding: 1.5rem 1rem;
-            display: flex;
-            flex-direction: column;
-            border-right: 1px solid var(--pico-card-border-color);
-        }
-
-        .sidebar .brand {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            font-size: 1.25rem;
-            font-weight: 600;
-            padding: 0 0.5rem 1.5rem 0.5rem;
-            border-bottom: 1px solid var(--pico-card-border-color);
-            margin-bottom: 1rem;
-        }
-
-        .sidebar nav {
-            flex-grow: 1;
-        }
-
-        .sidebar nav a {
-            display: flex;
-            align-items: center;
-            gap: 0.85rem;
-            padding: 0.75rem 1rem;
-            border-radius: 0.5rem;
-            color: var(--sidebar-link-color);
-            text-decoration: none;
-            font-weight: 500;
-            transition: background-color 0.2s ease;
-        }
-
-        .sidebar nav a:hover {
-            background-color: var(--sidebar-link-hover-bg);
-        }
-
-        .sidebar nav a.active {
-            background-color: var(--sidebar-link-active-bg);
-            color: var(--pico-color);
-        }
-
-        .sidebar nav a svg {
-            width: 20px;
-            height: 20px;
-        }
-
-        .main-content {
-            overflow-y: auto;
-            padding: 2rem;
-        }
-
-        /* Compact product images in tables */
-        .product-image-compact {
-            max-height: 50px;
-            width: auto;
-            display: block;
-            border-radius: var(--pico-border-radius);
-        }
-
-        /* Inline form styles */
-        .update-form-inline {
-            display: flex;
-            gap: 0.5rem;
-            margin-bottom: 0;
-        }
-
-        .update-form-inline input {
-            margin-bottom: 0;
-            width: 80px;
-        }
-
-        .update-form-inline button.success {
-            background-color: var(--pico-color-green-500);
-            border-color: var(--pico-color-green-500);
-            color: var(--pico-color-white);
-        }
-
-        .metric-filter-group label {
-            font-size: 0.8rem;
-            /* Smaller label font */
-            font-weight: 500;
-            margin-bottom: 0.2rem;
-            display: block;
-        }
-
-        .metric-filter-group .grid {
-            grid-template-columns: 1fr 1fr;
-            gap: 0.25rem;
-        }
-
-        .metric-filter-input {
-            padding: 0.3rem !important;
-            /* Smaller padding */
-            font-size: 0.8rem !important;
-            /* Smaller input font */
-            height: auto !important;
-            /* Adjust height automatically */
-        }
-
-        #metric-filters {
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-            /* Responsive columns */
-        }
-    </style>
 </head>
 
 <body>
     <aside class="sidebar">
         <div class="brand">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
-                <circle cx="12" cy="10" r="3"></circle>
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                <line x1="12" y1="22.08" x2="12" y2="12"></line>
             </svg>
             <strong>Inventory Intel</strong>
         </div>
         <nav>
             <a href="/sync-control" {% if title=="Sync Control" %}class="active" {% endif %}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <polyline points="1 20 1 14 7 14"></polyline>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
                 </svg>
                 Sync Control
             </a>
             <a href="/products" {% if title=="Products" %}class="active" {% endif %}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
                     <line x1="3" y1="6" x2="21" y2="6"></line>
@@ -168,7 +39,7 @@
                 Products
             </a>
             <a href="/stock-by-barcode" {% if title=="Stock by Barcode" %}class="active" {% endif %}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2z"></path>
                     <path d="M7 7h.01"></path>
@@ -176,36 +47,43 @@
                 Stock by Barcode
             </a>
             <a href="/snapshots" {% if title=="Snapshots" %}class="active" {% endif %}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                    <line x1="16" y1="2" x2="16" y2="6"></line>
-                    <line x1="8" y1="2" x2="8" y2="6"></line>
-                    <line x1="3" y1="10" x2="21" y2="10"></line>
+                    <path d="M18 20V10"></path>
+                    <path d="M12 20V4"></path>
+                    <path d="M6 20v-6"></path>
                 </svg>
                 Snapshots
             </a>
             <a href="/mutations" {% if title=="Mutations" %}class="active" {% endif %}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2z"></polygon>
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                 </svg>
                 Mutations
             </a>
             <a href="/data-quality" {% if title=="Data Quality" %}class="active" {% endif %}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
                     <path d="M22 4L12 14.01l-3-3"></path>
                 </svg>
                 Data Quality
             </a>
-            <a href="/config" {% if title=="Configuration" %}class="active" {% endif %}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+            <a href="/system-monitor" {% if title=="System Monitor" %}class="active" {% endif %}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path
-                        d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z">
-                    </path>
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                    <line x1="8" y1="21" x2="16" y2="21"></line>
+                    <line x1="12" y1="17" x2="12" y2="21"></line>
+                </svg>
+                System Monitor
+            </a>
+            <a href="/config" {% if title=="Configuration" %}class="active" {% endif %}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
                 </svg>
                 Configuration
             </a>

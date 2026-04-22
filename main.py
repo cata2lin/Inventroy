@@ -1,6 +1,7 @@
 # main.py
 import os
 import sys
+import time
 from pathlib import Path
 from fastapi import FastAPI, Request, Form, Depends
 from fastapi.staticfiles import StaticFiles
@@ -8,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse
 from dotenv import load_dotenv
 from jose import jwt, JOSEError
-from datetime import datetime, timedelta, timezone # <--- IMPORT timezone HERE
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
 import models
@@ -17,41 +18,54 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
 from database import engine, Base, get_db
-from routes import sync_control, config, products, mutations, stock, webhooks, snapshots, data_quality
+from routes import sync_control, config, products, mutations, stock, webhooks, snapshots, data_quality, system_monitor
 from services import snapshot_runner
 from services.inventory_sync_service import cleanup_expired_records
+from services import audit_logger
+from services import webhook_maintenance
 
 load_dotenv()
 
 app = FastAPI(title="Inventory Suite")
 
+# --- DATABASE INIT (must be before scheduler) ---
+Base.metadata.create_all(bind=engine)
+
 # --- SCHEDULER SETUP (MODIFIED) ---
-# Instead of the string "utc", we use the direct timezone object.
-# This avoids the file system lookup that was causing the error.
 scheduler = BackgroundScheduler(timezone=timezone.utc)
 scheduler.add_job(snapshot_runner.run_daily_snapshot, 'cron', hour=23, minute=55)
-# Cleanup expired echo suppression records every 5 minutes
 scheduler.add_job(cleanup_expired_records, 'interval', minutes=5)
+# Verify and recreate missing webhooks every 7 days (Sundays at 3 AM UTC)
+scheduler.add_job(webhook_maintenance.verify_and_recreate_webhooks, 'cron', day_of_week='sun', hour=3, minute=0)
 scheduler.start()
 # --- END SCHEDULER SETUP ---
 
 app.mount("/static", StaticFiles(directory=str(ROOT_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(ROOT_DIR / "templates"))
 
-Base.metadata.create_all(bind=engine)
-
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-super-secret-key-that-is-long-and-secure")
+
+# --- System Startup Log ---
+audit_logger.log(
+    category="SYSTEM",
+    action="startup",
+    message="Inventory Intelligence Platform started",
+    details={"scheduler_jobs": ["daily_snapshot", "cleanup_expired_records", "webhook_maintenance_weekly"]},
+)
+
 
 @app.post("/login")
 async def login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     user = db.query(models.User).filter_by(username=username).first()
     if not user or not user.verify_password(password):
+        audit_logger.log_auth(username, "login", success=False)
         return RedirectResponse(url="/login_page?error=1", status_code=303)
     payload = {"sub": user.username, "exp": datetime.utcnow() + timedelta(days=1)}
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
     response = RedirectResponse(url="/", status_code=303)
-    # NOTE: Set secure=False for local HTTP testing, change back to True for production (HTTPS)
-    response.set_cookie(key="access_token_8002", value=token, httponly=True, samesite="lax", max_age=86400, secure=False)
+    is_https = os.getenv("HTTPS_MODE", "false").lower() == "true"
+    response.set_cookie(key="access_token_8002", value=token, httponly=True, samesite="lax", max_age=86400, secure=is_https)
+    audit_logger.log_auth(username, "login", success=True)
     return response
 
 @app.middleware("http")
@@ -69,7 +83,26 @@ async def add_login_middleware(request: Request, call_next):
         response = RedirectResponse(url="/login_page")
         response.delete_cookie("access_token_8002")
         return response
-    return await call_next(request)
+
+    # --- Request timing for API calls ---
+    start_time = time.monotonic()
+    response = await call_next(request)
+    duration_ms = int((time.monotonic() - start_time) * 1000)
+
+    # Log slow requests (> 5 seconds)
+    if duration_ms > 5000 and request.url.path.startswith("/api/"):
+        audit_logger.log(
+            category="SYSTEM",
+            action="slow_request",
+            message=f"Slow request: {request.method} {request.url.path} took {duration_ms}ms",
+            severity="WARN",
+            actor=getattr(request.state, 'user', None),
+            duration_ms=duration_ms,
+            details={"method": request.method, "path": request.url.path},
+        )
+
+    return response
+
 
 @app.get("/login_page", response_class=HTMLResponse, include_in_schema=False)
 async def get_login_page(request: Request):
@@ -107,6 +140,10 @@ async def get_stock_by_barcode_page(request: Request):
 async def get_data_quality_page(request: Request):
     return templates.TemplateResponse("data_quality.html", {"request": request, "title": "Data Quality"})
 
+@app.get("/system-monitor", response_class=HTMLResponse, include_in_schema=False)
+async def get_system_monitor_page(request: Request):
+    return templates.TemplateResponse("system_monitor.html", {"request": request, "title": "System Monitor"})
+
 # Routers
 app.include_router(sync_control.router)
 app.include_router(config.router)
@@ -116,7 +153,10 @@ app.include_router(stock.router)
 app.include_router(webhooks.router)
 app.include_router(snapshots.router)
 app.include_router(data_quality.router)
+app.include_router(system_monitor.router)
 
 @app.on_event("shutdown")
 def shutdown_event():
+    audit_logger.log(category="SYSTEM", action="shutdown",
+                     message="Inventory Intelligence Platform shutting down")
     scheduler.shutdown()

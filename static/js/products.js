@@ -29,9 +29,24 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     };
 
+    const getStatusBadge = (status) => {
+        if (!status) return '<span class="badge badge-active">Active</span>';
+        const s = status.toLowerCase();
+        if (s === 'active') return '<span class="badge badge-active">Active</span>';
+        if (s === 'draft') return '<span class="badge badge-draft">Draft</span>';
+        if (s === 'archived') return '<span class="badge badge-archived">Archived</span>';
+        return `<span class="badge">${status}</span>`;
+    };
+
+    const getStockBadge = (stock) => {
+        if (stock <= 0) return `<span class="badge badge-danger">${stock} in stock</span>`;
+        if (stock <= 5) return `<span class="badge badge-warning">${stock} in stock</span>`;
+        return `<span class="badge badge-success">${stock} in stock</span>`;
+    };
+
     const fetchProducts = async () => {
         elements.container.setAttribute('aria-busy', 'true');
-        elements.container.innerHTML = '<p>Loading products...</p>';
+        elements.container.innerHTML = '';
 
         const params = new URLSearchParams({
             skip: (state.page - 1) * state.limit,
@@ -50,7 +65,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderProducts(data.products);
             updatePagination();
         } catch (error) {
-            elements.container.innerHTML = `<p style="color: var(--pico-del-color);">${error.message}</p>`;
+            elements.container.innerHTML = `<p style="color: var(--color-danger);">${error.message}</p>`;
         } finally {
             elements.container.removeAttribute('aria-busy');
         }
@@ -58,12 +73,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const renderProducts = (products) => {
         if (products.length === 0) {
-            elements.container.innerHTML = '<p>No products found matching your criteria.</p>';
+            elements.container.innerHTML = '<p style="padding: 2rem; text-align: center;">No products found matching your criteria.</p>';
             return;
         }
         let content = '';
         products.forEach(product => {
-            // Calculate total stock from variants
             let totalStock = 0;
             if (product.variants) {
                 product.variants.forEach(v => {
@@ -75,43 +89,45 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
 
+            const isDeleted = product.deleted_at !== null && product.deleted_at !== undefined;
+
             content += `
-                <details>
-                    <summary>
-                        <div class="product-summary" style="display: flex; align-items: center; gap: 0.75rem; width: 100%;">
+                <details style="${isDeleted ? 'opacity: 0.5;' : ''}">
+                    <summary style="padding: 0.75rem 1rem; cursor: pointer; border-radius: var(--radius-md); transition: background var(--transition-fast);">
+                        <div style="display: flex; align-items: center; gap: 0.75rem; width: 100%;">
                             <img src="${product.image_url || '/static/img/placeholder.png'}" 
                                  alt="${product.title}" 
                                  class="product-img"
-                                 onerror="this.src='https://via.placeholder.com/48'">
+                                 onerror="this.style.display='none'">
                             <div style="flex: 1;">
-                                <strong>${product.title}</strong>
-                                <small style="opacity: 0.7;"> (${product.variants?.length || 0} variants)</small>
+                                <strong>${product.title || 'Untitled'}</strong>
+                                <small style="color: var(--color-text-muted);"> (${product.variants?.length || 0} variants)</small>
+                                ${isDeleted ? '<small class="badge badge-danger" style="margin-left: 0.5rem;">Soft-Deleted</small>' : ''}
                             </div>
-                            <div style="text-align: right;">
-                                <span class="badge ${totalStock > 10 ? 'badge-success' : totalStock > 0 ? 'badge-warning' : 'badge-danger'}">
-                                    ${totalStock} in stock
-                                </span>
-                                <br>
-                                <small style="opacity: 0.6;">${product.status || 'ACTIVE'}</small>
+                            <div style="text-align: right; display: flex; gap: 0.5rem; align-items: center;">
+                                ${getStatusBadge(product.status)}
+                                ${getStockBadge(totalStock)}
                             </div>
                         </div>
                     </summary>
-                    <table>
-                        <thead><tr><th>Variant</th><th>SKU</th><th>Barcode</th><th>Price</th><th>Stock</th></tr></thead>
-                        <tbody>
-                            ${(product.variants || []).map(v => {
-                const variantStock = (v.inventory_levels || []).reduce((sum, il) => sum + (il.available || 0), 0);
-                return `
-                                <tr>
-                                    <td>${v.title || 'Default'}</td>
-                                    <td>${v.sku || '<em style="opacity:0.5">—</em>'}</td>
-                                    <td>${v.barcode || '<em style="opacity:0.5">—</em>'}</td>
-                                    <td>${v.price ? parseFloat(v.price).toFixed(2) : '—'}</td>
-                                    <td>${variantStock}</td>
-                                </tr>
-                            `}).join('')}
-                        </tbody>
-                    </table>
+                    <div style="padding: 0 1rem 1rem;">
+                        <table>
+                            <thead><tr><th>Variant</th><th>SKU</th><th>Barcode</th><th>Price</th><th>Stock</th></tr></thead>
+                            <tbody>
+                                ${(product.variants || []).map(v => {
+                    const variantStock = (v.inventory_levels || []).reduce((sum, il) => sum + (il.available || 0), 0);
+                    return `
+                                    <tr>
+                                        <td>${v.title || 'Default'}</td>
+                                        <td>${v.sku || '<span style="opacity:0.3">—</span>'}</td>
+                                        <td>${v.barcode ? '<code>' + v.barcode + '</code>' : '<span style="opacity:0.3">—</span>'}</td>
+                                        <td>${v.price ? parseFloat(v.price).toFixed(2) : '—'}</td>
+                                        <td class="${variantStock <= 0 ? 'stock-urgent' : variantStock <= 5 ? 'stock-warning' : ''}">${variantStock}</td>
+                                    </tr>
+                                `}).join('')}
+                            </tbody>
+                        </table>
+                    </div>
                 </details>
             `;
         });

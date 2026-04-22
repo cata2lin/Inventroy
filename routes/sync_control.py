@@ -8,6 +8,7 @@ import time
 from database import get_db, SessionLocal
 from crud import store as crud_store
 from services import product_sync_runner, sync_tracker, stock_reconciliation
+from services import audit_logger
 
 router = APIRouter(prefix="/api/sync-control", tags=["Sync Control"])
 
@@ -32,6 +33,9 @@ def trigger_products_sync(
         task_id = sync_tracker.add_task(f"Products sync for {store.name}")
         background_tasks.add_task(product_sync_runner.run_product_sync_for_store, store.id, task_id)
         tasks.append({"store_id": store.id, "store": store.name, "task_id": task_id})
+
+        audit_logger.log_sync(store.id, store.name, "sync_triggered",
+                              f"Manual product sync triggered for {store.name}")
     else:
         stores = crud_store.get_enabled_stores(db)
         if not stores: raise HTTPException(status_code=404, detail="No enabled stores configured.")
@@ -39,6 +43,10 @@ def trigger_products_sync(
             task_id = sync_tracker.add_task(f"Products sync for {s.name}")
             background_tasks.add_task(product_sync_runner.run_product_sync_for_store, s.id, task_id)
             tasks.append({"store_id": s.id, "store": s.name, "task_id": task_id})
+
+        audit_logger.log_sync(0, "All Stores", "sync_triggered",
+                              f"Manual product sync triggered for {len(stores)} stores",
+                              details={"store_count": len(stores)})
     
     return {"status": "ok", "message": "Product sync started.", "tasks": tasks}
 
@@ -55,7 +63,6 @@ def trigger_products_sync_with_reconciliation(
     if not stores: 
         raise HTTPException(status_code=404, detail="No enabled stores configured.")
     
-    # Collect store IDs and task IDs for the chain
     store_ids = [s.id for s in stores]
     store_task_ids = []
     tasks: List[Dict[str, Any]] = []
@@ -65,17 +72,19 @@ def trigger_products_sync_with_reconciliation(
         store_task_ids.append(task_id)
         tasks.append({"store_id": s.id, "store": s.name, "task_id": task_id})
     
-    # Add reconciliation task (will run after all syncs complete)
     reconcile_task_id = sync_tracker.add_task("Stock Reconciliation (min stock)")
     tasks.append({"store_id": None, "store": "All Stores", "task_id": reconcile_task_id, "type": "reconciliation"})
     
-    # Run the chained sync in background
     background_tasks.add_task(
         _run_sync_then_reconcile, 
         store_ids, 
         store_task_ids, 
         reconcile_task_id
     )
+
+    audit_logger.log_sync(0, "All Stores", "sync_and_reconcile_triggered",
+                          f"Full sync + reconciliation triggered for {len(stores)} stores",
+                          details={"store_count": len(stores), "store_ids": store_ids})
     
     return {"status": "ok", "message": "Product sync started with stock reconciliation.", "tasks": tasks}
 
@@ -83,30 +92,38 @@ def trigger_products_sync_with_reconciliation(
 def _run_sync_then_reconcile(store_ids: List[int], store_task_ids: List[str], reconcile_task_id: str):
     """
     Runs product sync for all stores sequentially, then runs stock reconciliation.
-    This ensures reconciliation only runs after ALL stores have finished syncing.
     """
-    # Run each store sync sequentially
+    total_start = time.monotonic()
+
     for store_id, task_id in zip(store_ids, store_task_ids):
         try:
             product_sync_runner.run_product_sync_for_store(store_id, task_id)
         except Exception as e:
-            print(f"[SYNC-CHAIN] Error syncing store {store_id}: {e}")
+            audit_logger.log_sync(store_id, f"store_{store_id}", "sync_failed",
+                                  f"Sync failed for store {store_id}: {e}",
+                                  error=str(e))
+            audit_logger.log_error("sync_control._run_sync_then_reconcile",
+                                   f"Sync chain error for store {store_id}", exc=e)
             sync_tracker.finish_task(task_id, ok=False, note=str(e))
     
     # After all stores are done, run reconciliation
-    print("[SYNC-CHAIN] All stores synced. Starting stock reconciliation...")
     stock_reconciliation.reconcile_stock_by_barcode(reconcile_task_id)
+
+    total_ms = int((time.monotonic() - total_start) * 1000)
+    audit_logger.log_sync(0, "All Stores", "sync_chain_completed",
+                          f"Full sync chain completed in {total_ms}ms",
+                          duration_ms=total_ms)
 
 
 @router.post("/reconcile-stock")
 def trigger_stock_reconciliation(
     background_tasks: BackgroundTasks,
 ) -> Dict[str, Any]:
-    """
-    Manually trigger stock reconciliation.
-    Finds all barcodes across multiple stores and applies the minimum stock level.
-    """
+    """Manually trigger stock reconciliation."""
     task_id = sync_tracker.add_task("Stock Reconciliation (min stock)")
     background_tasks.add_task(stock_reconciliation.reconcile_stock_by_barcode, task_id)
+
+    audit_logger.log_reconciliation("reconciliation_triggered",
+                                    "Manual stock reconciliation triggered")
     
     return {"status": "ok", "message": "Stock reconciliation started.", "task_id": task_id}

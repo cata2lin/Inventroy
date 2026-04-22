@@ -86,8 +86,8 @@ GET_ALL_PRODUCTS_QUERY = f"""
 {INVENTORY_LEVEL_FRAGMENT}
 {INVENTORY_ITEM_FRAGMENT}
 {PRODUCT_FRAGMENT}
-query GetAllProducts($cursor: String) {{
-  products(first: 20, after: $cursor, sortKey: UPDATED_AT) {{
+query GetAllProducts($cursor: String, $query: String) {{
+  products(first: 20, after: $cursor, query: $query, sortKey: UPDATED_AT) {{
     pageInfo {{ hasNextPage endCursor }}
     edges {{
       node {{

@@ -31,13 +31,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let emoji, color;
     if (d < 7) {
       emoji = '🔴';
-      color = 'var(--pico-del-color, #c62828)';
+      color = 'var(--color-danger)';
     } else if (d <= 30) {
       emoji = '🟡';
-      color = 'var(--pico-mark-background-color, #ff9800)';
+      color = 'var(--color-warning)';
     } else {
       emoji = '🟢';
-      color = 'var(--pico-ins-color, #2e7d32)';
+      color = 'var(--color-success)';
     }
     return `<span style="color: ${color}; font-weight: 600;">${emoji} ${d.toFixed(0)} days</span>`;
   };
@@ -118,7 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
       updatePagination();
     } catch (e) {
       console.error(e);
-      el.container.innerHTML = `<tr><td colspan="5" class="text-center" style="color: var(--pico-del-color);">Failed to load data. Please try again.</td></tr>`;
+      el.container.innerHTML = `<tr><td colspan="5" class="text-center" style="color: var(--color-danger);">Failed to load data. Please try again.</td></tr>`;
     }
   };
 

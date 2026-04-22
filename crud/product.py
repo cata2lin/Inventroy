@@ -32,30 +32,35 @@ def get_products(
     Get products with fuzzy multi-word search and sorting.
     Search matches if ALL words are found in title, SKU, or barcode (any order).
     """
-    # Load variants with their inventory levels to compute accurate stock
-    query = db.query(models.Product).options(
-        joinedload(models.Product.variants).joinedload(models.ProductVariant.inventory_levels)
-    )
-    
+    # BUG-09 FIX: Build a base filter query WITHOUT joinedload for accurate count.
+    # joinedload creates JOINs that inflate count() results.
+    base_query = db.query(models.Product)
+
     if store_id:
-        query = query.filter(models.Product.store_id == store_id)
-    
+        base_query = base_query.filter(models.Product.store_id == store_id)
+
     # Fuzzy multi-word search: ALL words must match (in any order)
     if search:
         search_text = search.strip()
         words = [w.strip().lower() for w in search_text.split() if w.strip()]
-        
+
         for word in words:
             word_pattern = f"%{word}%"
-            query = query.filter(
+            base_query = base_query.filter(
                 or_(
                     func.lower(models.Product.title).like(word_pattern),
                     models.Product.variants.any(func.lower(models.ProductVariant.sku).like(word_pattern)),
                     models.Product.variants.any(func.lower(models.ProductVariant.barcode).like(word_pattern)),
                 )
             )
-    
-    total_count = query.count()
+
+    # Count BEFORE applying joinedload to get accurate distinct product count
+    total_count = base_query.count()
+
+    # Now apply joinedload for the actual data query
+    query = base_query.options(
+        joinedload(models.Product.variants).joinedload(models.ProductVariant.inventory_levels)
+    )
     
     # Sorting
     valid_sort_cols = {
@@ -123,8 +128,19 @@ def _extract_product_fields(p_data: Any, store_id: int, last_seen_at: datetime) 
     pid = gid_to_id(p_data.get("id"))
     if not pid: raise ValueError("Missing product ID")
     tags = p_data.get("tags", [])
+
+    # BUG-23/31 FIX: Prefer admin_graphql_api_id for GID, construct from id as fallback.
+    # REST webhooks send id as integer, but admin_graphql_api_id has the full GID.
+    raw_id = p_data.get("id")
+    shopify_gid = p_data.get("admin_graphql_api_id")
+    if not shopify_gid:
+        if isinstance(raw_id, str) and raw_id.startswith("gid://"):
+            shopify_gid = raw_id
+        else:
+            shopify_gid = f"gid://shopify/Product/{pid}"
+
     return {
-        "id": pid, "store_id": store_id, "shopify_gid": p_data.get("id"),
+        "id": pid, "store_id": store_id, "shopify_gid": shopify_gid,
         "title": p_data.get("title"), "body_html": p_data.get("bodyHtml"),
         "vendor": p_data.get("vendor"), "product_type": p_data.get("productType"),
         "product_category": _get(p_data, "category", "name"),
@@ -223,9 +239,15 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
                     loc_stmt = loc_stmt.on_conflict_do_update(index_elements=['id'], set_={ "name": loc_stmt.excluded.name, "shopify_gid": loc_stmt.excluded.shopify_gid })
                     db.execute(loc_stmt)
                 if inv_level_rows:
-                    inv_stmt = pg_insert(models.InventoryLevel).values(inv_level_rows).on_conflict_do_update(
+                    # BUG-07 FIX: Use the same statement's .excluded, not a new pg_insert()
+                    inv_stmt = pg_insert(models.InventoryLevel).values(inv_level_rows)
+                    inv_stmt = inv_stmt.on_conflict_do_update(
                         index_elements=['variant_id', 'location_id'],
-                        set_={ "available": pg_insert(models.InventoryLevel).excluded.available, "on_hand": pg_insert(models.InventoryLevel).excluded.on_hand, "last_fetched_at": pg_insert(models.InventoryLevel).excluded.last_fetched_at }
+                        set_={
+                            "available": inv_stmt.excluded.available,
+                            "on_hand": inv_stmt.excluded.on_hand,
+                            "last_fetched_at": inv_stmt.excluded.last_fetched_at
+                        }
                     )
                     db.execute(inv_stmt)
             db.commit()
@@ -277,8 +299,9 @@ def normalize_webhook_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if key == "variants" and isinstance(value, list):
             normalized[new_key] = [normalize_webhook_payload(v) for v in value]
         elif key == "image" and isinstance(value, dict):
-            # REST sends {"src": "..."}, normalize to {"url": "..."}
-            normalized["featuredImage"] = {"url": value.get("src")}
+            # BUG-12 FIX: Only set if not already set (prevent ordering dependency)
+            if "featuredImage" not in normalized:
+                normalized["featuredImage"] = {"url": value.get("src")}
         elif key == "images" and isinstance(value, list) and len(value) > 0:
             # Use first image if no featured image
             if "featuredImage" not in normalized:
@@ -453,11 +476,19 @@ def create_or_update_product_from_webhook(db: Session, store_id: int, raw_payloa
 
 
 def delete_product_from_webhook(db: Session, payload: Dict[str, Any]):
+    """BUG-06 FIX: Use ORM delete for proper cascade, or explicit variant cleanup."""
     product_id = gid_to_id(payload.get("id"))
     if not product_id: return
-    db.query(models.Product).filter(models.Product.id == product_id).delete()
+
+    product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not product:
+        print(f"[DB-UPDATE] Product ID {product_id} not found, nothing to delete.")
+        return
+
+    # Use ORM delete to trigger SQLAlchemy cascade (delete-orphan on variants)
+    db.delete(product)
     db.commit()
-    print(f"[DB-UPDATE] Deleted product ID {product_id} from webhook.")
+    print(f"[DB-UPDATE] Deleted product ID {product_id} and its variants from webhook.")
 
 def update_variant_from_webhook(db: Session, payload: Dict[str, Any]):
     inventory_item_id = payload.get("id")
@@ -490,13 +521,35 @@ def delete_inventory_item_from_webhook(db: Session, payload: Dict[str, Any]):
     print(f"[DB-UPDATE] Deleted variant with inventory_item_id {inventory_item_id} from webhook.")
 
 def update_inventory_levels_for_variants(db: Session, variant_ids: List[int], location_id: int, new_quantity: int):
+    """BUG-08 FIX: Use upsert instead of UPDATE-only, so new levels are created if missing."""
     now = datetime.now(timezone.utc)
-    db.query(models.InventoryLevel).filter(
-        models.InventoryLevel.variant_id.in_(variant_ids),
-        models.InventoryLevel.location_id == location_id
-    ).update({
-        models.InventoryLevel.available: new_quantity,
-        models.InventoryLevel.updated_at: now,
-        models.InventoryLevel.last_fetched_at: now
-    }, synchronize_session=False)
-    db.commit()
+
+    rows = []
+    for vid in variant_ids:
+        # Look up inventory_item_id for each variant
+        variant = db.query(models.ProductVariant).filter(models.ProductVariant.id == vid).first()
+        inv_item_id = variant.inventory_item_id if variant else None
+
+        rows.append({
+            "variant_id": vid,
+            "location_id": location_id,
+            "inventory_item_id": inv_item_id,
+            "available": new_quantity,
+            "on_hand": new_quantity,
+            "updated_at": now,
+            "last_fetched_at": now,
+        })
+
+    if rows:
+        stmt = pg_insert(models.InventoryLevel).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['variant_id', 'location_id'],
+            set_={
+                "available": stmt.excluded.available,
+                "on_hand": stmt.excluded.on_hand,
+                "updated_at": stmt.excluded.updated_at,
+                "last_fetched_at": stmt.excluded.last_fetched_at,
+            }
+        )
+        db.execute(stmt)
+        db.commit()
