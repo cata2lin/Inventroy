@@ -123,7 +123,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Event Listeners ---
     syncAllProductsBtn.addEventListener('click', () =>
-        startSync('/api/sync-control/products-and-reconcile', syncAllProductsBtn)
+        startSync('/api/sync-control/products', syncAllProductsBtn)
     );
 
     reconcileBtn.addEventListener('click', () =>
