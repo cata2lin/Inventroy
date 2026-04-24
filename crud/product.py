@@ -160,10 +160,26 @@ def _extract_variant_fields(v_data: Any, product_id: int, store_id: int, last_se
         sku = None
 
     inventory_item = v_data.get("inventoryItem", {})
-    inventory_item_id = gid_to_id(_get(inventory_item, "id")) or v_data.get("inventory_item_id")
+    # BUG-32 FIX: normalize_webhook_payload renames 'inventory_item_id' → 'inventoryItemId'.
+    # We must check both the original snake_case AND the normalized camelCase key.
+    inventory_item_id = (
+        gid_to_id(_get(inventory_item, "id"))
+        or v_data.get("inventory_item_id")
+        or gid_to_id(v_data.get("inventoryItemId"))
+    )
+
+    # BUG-32 FIX: Use admin_graphql_api_id for shopify_gid when available (same as BUG-23/31 product fix).
+    # REST webhooks send id as integer; we need the full GID for consistency with GraphQL syncs.
+    raw_id = v_data.get("id")
+    shopify_gid = v_data.get("admin_graphql_api_id")
+    if not shopify_gid:
+        if isinstance(raw_id, str) and raw_id.startswith("gid://"):
+            shopify_gid = raw_id
+        else:
+            shopify_gid = f"gid://shopify/ProductVariant/{vid}"
 
     return {
-        "id": vid, "product_id": product_id, "store_id": store_id, "shopify_gid": v_data.get("id"),
+        "id": vid, "product_id": product_id, "store_id": store_id, "shopify_gid": shopify_gid,
         "title": v_data.get("title"), "sku": sku, "barcode": v_data.get("barcode"),
         "price": v_data.get("price"), "compare_at_price": v_data.get("compareAtPrice"),
         "inventory_item_id": inventory_item_id,
@@ -204,6 +220,20 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
                 
                 for v_data in v_data_list:
                     v_row = _extract_variant_fields(v_data, p_row["id"], store_id, last_seen_at)
+                    
+                    # BUG-33 FIX: Clear SKU from other variants on same store to prevent
+                    # UniqueConstraint violation on (sku, store_id). Shopify is source of truth:
+                    # if it says this variant owns the SKU, any old claim must be released.
+                    if v_row.get("sku"):
+                        db.execute(
+                            models.ProductVariant.__table__.update()
+                            .where(
+                                models.ProductVariant.store_id == store_id,
+                                models.ProductVariant.sku == v_row["sku"],
+                                models.ProductVariant.id != v_row["id"],
+                            )
+                            .values(sku=None)
+                        )
                     
                     variant_stmt = pg_insert(models.ProductVariant).values(v_row)
                     variant_stmt = variant_stmt.on_conflict_do_update(
@@ -394,6 +424,9 @@ def _update_variants_incrementally(db: Session, product_id: int, store_id: int, 
     Update variants incrementally from webhook data.
     Only updates fields that are present in the payload, preserving existing data.
     Creates new variants if they don't exist.
+    
+    Each variant is processed in its own savepoint so one failure doesn't
+    block other variants from being updated.
     """
     now = datetime.now(timezone.utc)
     
@@ -402,60 +435,92 @@ def _update_variants_incrementally(db: Session, product_id: int, store_id: int, 
         if not variant_id:
             continue
         
-        # Check if variant exists
-        db_variant = db.query(models.ProductVariant).filter(
-            models.ProductVariant.id == variant_id
-        ).first()
-        
-        if db_variant:
-            # Update existing variant
-            updates = {}
-            if "title" in v_data:
-                updates[models.ProductVariant.title] = v_data["title"]
-            if "sku" in v_data:
-                updates[models.ProductVariant.sku] = v_data["sku"] or None
-            if "barcode" in v_data:
-                updates[models.ProductVariant.barcode] = v_data["barcode"]
-            if "price" in v_data:
-                updates[models.ProductVariant.price] = v_data["price"]
-            if "compareAtPrice" in v_data:
-                updates[models.ProductVariant.compare_at_price] = v_data["compareAtPrice"]
-            if "position" in v_data:
-                updates[models.ProductVariant.position] = v_data["position"]
-            if "inventoryQuantity" in v_data:
-                updates[models.ProductVariant.inventory_quantity] = v_data["inventoryQuantity"]
+        try:
+            # Use a savepoint so one variant failure doesn't roll back others
+            nested = db.begin_nested()
             
-            if updates:
-                updates[models.ProductVariant.last_seen_at] = now
-                (db.query(models.ProductVariant)
-                   .filter(models.ProductVariant.id == variant_id)
-                   .update(updates, synchronize_session=False))
-        else:
-            # Create new variant
-            sku = v_data.get("sku")
-            new_variant = models.ProductVariant(
-                id=variant_id,
-                product_id=product_id,
-                store_id=store_id,
-                shopify_gid=v_data.get("admin_graphql_api_id", f"gid://shopify/ProductVariant/{variant_id}"),
-                title=v_data.get("title"),
-                sku=sku if sku and sku.strip() else None,
-                barcode=v_data.get("barcode"),
-                price=v_data.get("price"),
-                compare_at_price=v_data.get("compareAtPrice"),
-                position=v_data.get("position"),
-                inventory_item_id=gid_to_id(v_data.get("inventory_item_id")),
-                inventory_quantity=v_data.get("inventoryQuantity"),
-                last_seen_at=now,
-            )
-            db.add(new_variant)
-            print(f"[DB-UPDATE] Created new variant {variant_id} from webhook")
+            # Check if variant exists
+            db_variant = db.query(models.ProductVariant).filter(
+                models.ProductVariant.id == variant_id
+            ).first()
+            
+            # BUG-33 FIX: Before setting a SKU, release it from any OTHER variant
+            # on the same store. Shopify is the source of truth for SKU ownership.
+            new_sku = v_data.get("sku")
+            if new_sku and new_sku.strip():
+                db.execute(
+                    models.ProductVariant.__table__.update()
+                    .where(
+                        models.ProductVariant.store_id == store_id,
+                        models.ProductVariant.sku == (new_sku or None),
+                        models.ProductVariant.id != variant_id,
+                    )
+                    .values(sku=None)
+                )
+            
+            if db_variant:
+                # Update existing variant
+                updates = {}
+                if "title" in v_data:
+                    updates[models.ProductVariant.title] = v_data["title"]
+                if "sku" in v_data:
+                    updates[models.ProductVariant.sku] = v_data["sku"] or None
+                if "barcode" in v_data:
+                    updates[models.ProductVariant.barcode] = v_data["barcode"]
+                if "price" in v_data:
+                    updates[models.ProductVariant.price] = v_data["price"]
+                if "compareAtPrice" in v_data:
+                    updates[models.ProductVariant.compare_at_price] = v_data["compareAtPrice"]
+                if "position" in v_data:
+                    updates[models.ProductVariant.position] = v_data["position"]
+                if "inventoryQuantity" in v_data:
+                    updates[models.ProductVariant.inventory_quantity] = v_data["inventoryQuantity"]
+                # BUG-32 FIX: Backfill inventory_item_id if missing (handles both key formats)
+                inv_item_id = v_data.get("inventory_item_id") or v_data.get("inventoryItemId")
+                if inv_item_id and not db_variant.inventory_item_id:
+                    updates[models.ProductVariant.inventory_item_id] = gid_to_id(inv_item_id)
+                
+                if updates:
+                    updates[models.ProductVariant.last_seen_at] = now
+                    (db.query(models.ProductVariant)
+                       .filter(models.ProductVariant.id == variant_id)
+                       .update(updates, synchronize_session=False))
+            else:
+                # Create new variant
+                sku = v_data.get("sku")
+                new_variant = models.ProductVariant(
+                    id=variant_id,
+                    product_id=product_id,
+                    store_id=store_id,
+                    shopify_gid=v_data.get("admin_graphql_api_id", f"gid://shopify/ProductVariant/{variant_id}"),
+                    title=v_data.get("title"),
+                    sku=sku if sku and sku.strip() else None,
+                    barcode=v_data.get("barcode"),
+                    price=v_data.get("price"),
+                    compare_at_price=v_data.get("compareAtPrice"),
+                    position=v_data.get("position"),
+                    # BUG-32 FIX: Check both original and normalized key names
+                    inventory_item_id=gid_to_id(v_data.get("inventory_item_id") or v_data.get("inventoryItemId")),
+                    inventory_quantity=v_data.get("inventoryQuantity"),
+                    last_seen_at=now,
+                )
+                db.add(new_variant)
+                print(f"[DB-UPDATE] Created new variant {variant_id} from webhook")
+            
+            nested.commit()
+        except IntegrityError as e:
+            nested.rollback()
+            print(f"[WEBHOOK-WARN] Variant {variant_id} skipped due to constraint: {e.orig}")
+        except Exception as e:
+            nested.rollback()
+            print(f"[WEBHOOK-ERROR] Failed to process variant {variant_id}: {e}")
     
+    # Final commit for any pending flushes
     try:
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        print(f"[WEBHOOK-ERROR] Failed to update variants: {e}")
+        print(f"[WEBHOOK-ERROR] Final commit failed for variants: {e}")
 
 # --- END: WEBHOOK PAYLOAD NORMALIZATION ---
 
@@ -468,9 +533,20 @@ def create_or_update_product_from_webhook(db: Session, store_id: int, raw_payloa
     payload = normalize_webhook_payload(raw_payload)
     
     now = datetime.now(timezone.utc)
+    product_id = gid_to_id(payload.get("id"))
     # This function is now primarily for *creating* products from webhooks
     create_or_update_products(db, store_id, run_id=0, items=[payload], last_seen_at=now)
-    print(f"[DB-UPDATE] Created/Updated product '{payload.get('title')}' from webhook.")
+    
+    # BUG-32 FIX: Verify the product actually persisted (create_or_update_products swallows errors)
+    if product_id:
+        from models import Product
+        exists = db.query(Product.id).filter(Product.id == product_id).first()
+        if exists:
+            print(f"[DB-UPDATE] Created/Updated product '{payload.get('title')}' (ID: {product_id}) from webhook.")
+        else:
+            print(f"[DB-ERROR] Product '{payload.get('title')}' (ID: {product_id}) FAILED to persist — check dead_letters for details.")
+    else:
+        print(f"[DB-ERROR] Could not extract product ID from webhook payload for '{payload.get('title')}'")
 
 # --- END: NEW AND MODIFIED WEBHOOK FUNCTIONS ---
 
@@ -553,3 +629,26 @@ def update_inventory_levels_for_variants(db: Session, variant_ids: List[int], lo
         )
         db.execute(stmt)
         db.commit()
+
+
+def adjust_inventory_levels_for_variants(db: Session, variant_ids: List[int], location_id: int, delta: int):
+    """
+    Adjust local inventory levels by a relative delta for the given variants.
+    Uses SQL increment (available = available + delta) for atomicity.
+    Only updates rows that already exist — does NOT create new InventoryLevel rows
+    (those should be created by a full product sync first).
+    """
+    if not variant_ids or delta == 0:
+        return
+
+    now = datetime.now(timezone.utc)
+    db.query(models.InventoryLevel).filter(
+        models.InventoryLevel.variant_id.in_(variant_ids),
+        models.InventoryLevel.location_id == location_id,
+    ).update({
+        models.InventoryLevel.available: models.InventoryLevel.available + delta,
+        models.InventoryLevel.on_hand: models.InventoryLevel.on_hand + delta,
+        models.InventoryLevel.updated_at: now,
+        models.InventoryLevel.last_fetched_at: now,
+    }, synchronize_session=False)
+    db.commit()

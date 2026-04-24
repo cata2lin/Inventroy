@@ -174,6 +174,16 @@ MUTATIONS = {
         }
       }
     """,
+    "inventoryAdjustQuantities": """
+      mutation AdjustQty($input: InventoryAdjustQuantitiesInput!) {
+        inventoryAdjustQuantities(input: $input) {
+          inventoryAdjustmentGroup {
+            changes { name delta quantityAfterChange }
+          }
+          userErrors { field message }
+        }
+      }
+    """,
 }
 
 FIND_CATEGORIES_QUERY = """
@@ -298,6 +308,27 @@ class ShopifyService:
             }
         }
         return self.execute_mutation("inventorySetQuantities", variables)
+
+    def adjust_inventory_quantities(self, changes: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Adjusts inventory quantities by delta for multiple items at once.
+        Uses the inventoryAdjustQuantities mutation (relative, not absolute).
+
+        Args:
+            changes: List of dicts with keys: inventoryItemId, locationId, delta
+                     Example: [{"inventoryItemId": "gid://...", "locationId": "gid://...", "delta": -1}]
+
+        Returns:
+            The API response containing any errors or changes made.
+        """
+        variables = {
+            "input": {
+                "reason": "correction",
+                "name": "available",
+                "changes": changes
+            }
+        }
+        return self.execute_mutation("inventoryAdjustQuantities", variables)
 
     def get_locations(self) -> List[Dict[str, Any]]:
         """Retrieves all inventory locations for a store using the REST API."""

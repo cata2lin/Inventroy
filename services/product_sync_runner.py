@@ -115,7 +115,14 @@ def run_product_sync_for_store(store_id: int, task_id: Optional[str] = None):
             except Exception as e:
                 db.rollback()
                 run.pages_failed += 1
-                crud_product.log_dead_letter(db, store_id, run.id, {"page": run.pages_ok + run.pages_failed}, f"Page processing failed: {e}")
+                page_num = run.pages_ok + run.pages_failed
+                crud_product.log_dead_letter(db, store_id, run.id, {"page": page_num}, f"Page processing failed: {e}")
+                # Log to system monitor so errors are visible in the UI
+                audit_logger.log_error("product_sync_runner.page_processing",
+                                       f"Page {page_num} failed for store {store_id}: {e}",
+                                       details={"store_id": store_id, "page": page_num,
+                                                "products_in_page": len(page_products)},
+                                       exc=e)
                 db.commit()
 
             if not page_info.get("hasNextPage"):

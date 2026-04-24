@@ -59,18 +59,25 @@ def cleanup_barcode_locks():
 def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str):
     """
     Process an inventory_levels/update webhook.
-    Core flow: deduplicate → suppress echoes → version check → propagate.
-
-    Propagation includes:
-    - ALL other stores with the same barcode
-    - ALL other variants on the SAME store with the same barcode (multi-listing support)
+    
+    DELTA-BASED PROPAGATION (replaces absolute-value propagation):
+    1. Compute delta = new_available - last_known_available
+    2. If delta == 0: this is an echo from our own write → skip
+    3. If delta != 0: adjust all other stores by delta using inventoryAdjustQuantities
+    4. Fallback: if last_known is unavailable, use absolute SET (legacy behavior)
+    
+    This correctly handles:
+    - Concurrent orders on different stores (both deltas are applied)
+    - Restocks (positive delta propagated to all stores)
+    - Manual corrections (delta propagated to all stores)
+    - xConnector fulfillments (delta propagated to all stores)
     """
     db: Session = SessionLocal()
 
     inventory_item_id = payload.get("inventory_item_id")
-    authoritative_quantity = payload.get("available")
+    new_available = payload.get("available")
 
-    if authoritative_quantity is None:
+    if new_available is None:
         print(f"[SYNC-ERROR] Webhook is missing 'available' quantity for inventory_item_id {inventory_item_id}")
         audit_logger.log_error("inventory_sync_service.handle_webhook",
                                f"Missing 'available' quantity for inventory_item_id {inventory_item_id}")
@@ -130,46 +137,61 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
 
         # BUG-17 FIX: Dedup with rollback safety
         try:
-            if _is_duplicate_webhook(db, store_id, barcode, authoritative_quantity, source_timestamp):
+            if _is_duplicate_webhook(db, store_id, barcode, new_available, source_timestamp):
                 print(f"[SYNC] Ignored: Duplicate webhook for {barcode} at store {store_id}.")
                 return
         except Exception as e:
             db.rollback()
             print(f"[SYNC-WARN] Dedup check failed, proceeding anyway: {e}")
 
-        if _is_echo(db, store_id, barcode, authoritative_quantity):
-            print(f"[SYNC] Suppressed echo for {barcode} at store {store_id}.")
+        # --- DELTA COMPUTATION ---
+        # Get the last known stock for this variant at this store's sync location.
+        # This is what WE think the stock was before this webhook event.
+        store = db.query(models.Store).filter(models.Store.id == store_id).first()
+        last_known = None
+        if store and store.sync_location_id:
+            inv_level = db.query(models.InventoryLevel).filter(
+                models.InventoryLevel.variant_id == variant.id,
+                models.InventoryLevel.location_id == store.sync_location_id,
+            ).first()
+            if inv_level and inv_level.available is not None:
+                last_known = inv_level.available
+
+        if last_known is not None:
+            delta = new_available - last_known
+        else:
+            delta = None  # First time — no baseline, use absolute fallback
+
+        # --- ECHO DETECTION (delta-based) ---
+        # If delta == 0, the stock didn't actually change from our perspective.
+        # This happens when our own propagation write bounces back as a webhook.
+        if delta is not None and delta == 0:
+            print(f"[SYNC] Suppressed echo for {barcode} at store {store_id} (delta=0).")
             return
 
+        # Also check legacy WriteIntent echoes (from reconciliation/absolute-SET operations)
+        if _is_echo(db, store_id, barcode, new_available):
+            print(f"[SYNC] Suppressed echo for {barcode} at store {store_id} (WriteIntent match).")
+            return
+
+        # --- VERSION CHECK ---
         is_authoritative = _is_new_authoritative_version(db, barcode, source_timestamp)
         if not is_authoritative:
             print(f"[SYNC] Ignored: Stale event for {barcode} from store {store_id}.")
             return
 
         # 1. Update the authoritative version
-        _update_authoritative_version(db, barcode, store_id, authoritative_quantity, source_timestamp)
+        _update_authoritative_version(db, barcode, store_id, new_available, source_timestamp)
 
-        # 2. Update the local database for the triggering variant
+        # 2. Update the local database for the triggering variant (absolute — this is the source of truth)
         source_location_id = payload.get("location_id")
         if source_location_id:
             crud_product.update_inventory_levels_for_variants(
                 db, variant_ids=[variant.id], location_id=source_location_id,
-                new_quantity=authoritative_quantity
+                new_quantity=new_available
             )
 
         # 3. Find ALL variants with this barcode to propagate to.
-        #    This includes:
-        #    - Other variants on the SAME store (multi-listing: same barcode on different products)
-        #    - All variants on OTHER stores
-        #    The triggering variant is excluded.
-        # FIX: Use .first() instead of .one() to prevent NoResultFound crash
-        # when a barcode is first seen via webhook before any full sync.
-        barcode_version_obj = db.query(models.BarcodeVersion).filter(
-            models.BarcodeVersion.barcode == barcode
-        ).first()
-
-        current_version = barcode_version_obj.version if barcode_version_obj else 0
-
         propagation_targets = _get_all_propagation_variants(
             db, barcode, exclude_variant_id=variant.id
         )
@@ -182,44 +204,62 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
                     store_map[pv.store_id] = []
                 store_map[pv.store_id].append(pv)
 
-            # Create WriteIntents for all target stores (echo suppression)
             target_store_ids = list(store_map.keys())
             target_stores = db.query(models.Store).filter(
                 models.Store.id.in_(target_store_ids),
                 models.Store.enabled == True
             ).all()
 
-            try:
-                _create_write_intents(db, barcode, authoritative_quantity, current_version, target_stores)
-            except Exception as e:
-                db.rollback()
-                print(f"[SYNC-WARN] Failed to create write intents for {barcode}: {e}")
-
             total_variants = sum(len(vs) for vs in store_map.values())
-            print(f"[SYNC] Propagating '{barcode}' qty={authoritative_quantity} to {total_variants} variants across {len(store_map)} stores.")
+            mode = "delta" if delta is not None else "absolute"
+            print(f"[SYNC] Propagating '{barcode}' {mode}={'+'+ str(delta) if delta and delta > 0 else delta} (new_qty={new_available}) to {total_variants} variants across {len(store_map)} stores.")
 
             # Audit log the propagation event
             audit_logger.log(
                 category="STOCK",
                 action="stock_propagation_started",
-                message=f"Propagating [{barcode}] qty={authoritative_quantity} to {total_variants} variants across {len(store_map)} stores",
+                message=f"Propagating [{barcode}] {mode}={delta} (qty={new_available}) to {total_variants} variants across {len(store_map)} stores",
                 store_id=store_id,
                 target=barcode,
                 details={
-                    "quantity": authoritative_quantity,
+                    "mode": mode,
+                    "delta": delta,
+                    "quantity": new_available,
+                    "last_known": last_known,
                     "target_stores": {str(k): len(v) for k, v in store_map.items()},
                     "total_variants": total_variants,
                     "inventory_item_id": inventory_item_id,
                 },
             )
 
-            try:
-                _execute_propagation(db, barcode, authoritative_quantity, target_stores, store_map)
-            except Exception as e:
-                audit_logger.log_error("inventory_sync_service.handle_webhook",
-                                       f"Propagation failed for barcode {barcode}",
-                                       details={"barcode": barcode, "quantity": authoritative_quantity},
-                                       exc=e)
+            if delta is not None:
+                # --- DELTA MODE: adjust all targets by delta ---
+                try:
+                    _execute_delta_propagation(db, barcode, delta, new_available, target_stores, store_map)
+                except Exception as e:
+                    audit_logger.log_error("inventory_sync_service.handle_webhook",
+                                           f"Delta propagation failed for barcode {barcode}",
+                                           details={"barcode": barcode, "delta": delta}, exc=e)
+            else:
+                # --- ABSOLUTE FALLBACK: first-time sync, no baseline available ---
+                # Use legacy SET approach with WriteIntents for echo suppression
+                barcode_version_obj = db.query(models.BarcodeVersion).filter(
+                    models.BarcodeVersion.barcode == barcode
+                ).first()
+                current_version = barcode_version_obj.version if barcode_version_obj else 0
+
+                try:
+                    _create_write_intents(db, barcode, new_available, current_version, target_stores)
+                except Exception as e:
+                    db.rollback()
+                    print(f"[SYNC-WARN] Failed to create write intents for {barcode}: {e}")
+
+                try:
+                    _execute_absolute_propagation(db, barcode, new_available, target_stores, store_map)
+                except Exception as e:
+                    audit_logger.log_error("inventory_sync_service.handle_webhook",
+                                           f"Absolute propagation failed for barcode {barcode}",
+                                           details={"barcode": barcode, "quantity": new_available}, exc=e)
         else:
             print(f"[SYNC] No other variants to propagate to for barcode {barcode}.")
 
@@ -512,7 +552,78 @@ def _create_write_intents(db: Session, barcode: str, quantity: int, version: int
         db.add(intent)
     db.commit()
 
-def _execute_propagation(
+def _execute_delta_propagation(
+    db: Session,
+    barcode: str,
+    delta: int,
+    new_source_qty: int,
+    target_stores: List[models.Store],
+    store_variant_map: Dict[int, List[models.ProductVariant]]
+):
+    """
+    Execute DELTA-based propagation to target stores.
+    Uses inventoryAdjustQuantities (relative delta) instead of inventorySetQuantities (absolute).
+    
+    This correctly handles concurrent orders: if Store A sells 1 unit (delta=-1),
+    all other stores are adjusted by -1 regardless of their current stock.
+    """
+    store_lookup = {s.id: s for s in target_stores}
+
+    for sid, variants_to_update in store_variant_map.items():
+        store = store_lookup.get(sid)
+        if not store or not store.sync_location_id:
+            if store:
+                print(f"[SYNC-ERROR] Cannot propagate to store '{store.name}': No sync location configured.")
+            continue
+
+        primary_location_gid = f"gid://shopify/Location/{store.sync_location_id}"
+
+        changes_payload = [
+            {
+                "inventoryItemId": f"gid://shopify/InventoryItem/{v.inventory_item_id}",
+                "locationId": primary_location_gid,
+                "delta": delta
+            }
+            for v in variants_to_update if v.inventory_item_id
+        ]
+
+        if not changes_payload:
+            continue
+
+        try:
+            service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+            result = service.adjust_inventory_quantities(changes_payload)
+
+            user_errors = result.get("inventoryAdjustQuantities", {}).get("userErrors", [])
+            if user_errors:
+                raise Exception(str(user_errors))
+
+            delta_str = f"+{delta}" if delta > 0 else str(delta)
+            print(f"[SYNC] Adjusted {delta_str} for barcode {barcode} on store '{store.name}' ({len(changes_payload)} variants).")
+
+            audit_logger.log_propagation(
+                barcode=barcode,
+                source_store="webhook",
+                target_store=store.name,
+                quantity=new_source_qty,
+                details={"variant_count": len(changes_payload), "delta": delta, "mode": "delta"},
+            )
+
+            # Update local DB using delta-based increment (atomic SQL operation)
+            variant_ids = [v.id for v in variants_to_update]
+            crud_product.adjust_inventory_levels_for_variants(
+                db, variant_ids=variant_ids, location_id=store.sync_location_id,
+                delta=delta
+            )
+
+        except Exception as e:
+            print(f"[SYNC-ERROR] Failed to adjust store '{store.name}': {e}")
+            audit_logger.log_error("inventory_sync_service._execute_delta_propagation",
+                                   f"Failed to adjust barcode {barcode} on store '{store.name}'",
+                                   details={"barcode": barcode, "delta": delta}, exc=e)
+
+
+def _execute_absolute_propagation(
     db: Session,
     barcode: str,
     desired_total: int,
@@ -520,13 +631,14 @@ def _execute_propagation(
     store_variant_map: Dict[int, List[models.ProductVariant]]
 ):
     """
-    Execute propagation to target stores. Uses a pre-built store→variant map
-    so the same store can appear as a target (for its OTHER variants with the same barcode).
+    Execute ABSOLUTE propagation to target stores (legacy fallback).
+    Used when no baseline is available (first-time sync) or by reconciliation.
+    Uses inventorySetQuantities with ignoreCompareQuantity=True.
     """
     store_lookup = {s.id: s for s in target_stores}
 
-    for store_id, variants_to_update in store_variant_map.items():
-        store = store_lookup.get(store_id)
+    for sid, variants_to_update in store_variant_map.items():
+        store = store_lookup.get(sid)
         if not store or not store.sync_location_id:
             if store:
                 print(f"[SYNC-ERROR] Cannot propagate to store '{store.name}': No sync location configured.")
@@ -558,17 +670,17 @@ def _execute_propagation(
             if result.get("inventorySetQuantities", {}).get("userErrors"):
                  raise Exception(str(result["inventorySetQuantities"]["userErrors"]))
 
-            print(f"[SYNC] Wrote qty {desired_total} for barcode {barcode} to store '{store.name}' ({len(quantities_payload)} variants).")
+            print(f"[SYNC] Set qty {desired_total} for barcode {barcode} on store '{store.name}' ({len(quantities_payload)} variants).")
 
             audit_logger.log_propagation(
                 barcode=barcode,
                 source_store="webhook",
                 target_store=store.name,
                 quantity=desired_total,
-                details={"variant_count": len(quantities_payload)},
+                details={"variant_count": len(quantities_payload), "mode": "absolute"},
             )
 
-            # Update local DB
+            # Update local DB with absolute value
             variant_ids = [v.id for v in variants_to_update]
             crud_product.update_inventory_levels_for_variants(
                 db, variant_ids=variant_ids, location_id=store.sync_location_id,
@@ -577,7 +689,7 @@ def _execute_propagation(
 
         except Exception as e:
             print(f"[SYNC-ERROR] Failed to write to store '{store.name}': {e}")
-            audit_logger.log_error("inventory_sync_service._execute_propagation",
+            audit_logger.log_error("inventory_sync_service._execute_absolute_propagation",
                                    f"Failed to write barcode {barcode} to store '{store.name}'",
                                    details={"barcode": barcode, "quantity": desired_total}, exc=e)
 
