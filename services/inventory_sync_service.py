@@ -491,8 +491,9 @@ def _is_echo(db: Session, store_id: int, barcode: str, observed_total: int) -> b
         models.WriteIntent.expires_at > datetime.now(timezone.utc)
     ).first()
     if intent:
-        db.delete(intent)
-        db.commit()
+        # BUG-34 FIX: Do NOT delete the WriteIntent. If Shopify fires duplicate webhooks 
+        # (or if multiple workers race), the intent must remain to suppress all echoes 
+        # within the TTL window.
         return True
     return False
 
@@ -568,6 +569,9 @@ def _execute_delta_propagation(
     all other stores are adjusted by -1 regardless of their current stock.
     """
     store_lookup = {s.id: s for s in target_stores}
+    
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=INTENT_TTL_SECONDS)
 
     for sid, variants_to_update in store_variant_map.items():
         store = store_lookup.get(sid)
@@ -575,6 +579,26 @@ def _execute_delta_propagation(
             if store:
                 print(f"[SYNC-ERROR] Cannot propagate to store '{store.name}': No sync location configured.")
             continue
+
+        # BUG-34 FIX: Calculate the expected absolute quantity and create WriteIntents 
+        # BEFORE executing the API call to prevent multi-worker race conditions on echoes.
+        try:
+            for v in variants_to_update:
+                level = db.query(models.InventoryLevel).filter(
+                    models.InventoryLevel.variant_id == v.id,
+                    models.InventoryLevel.location_id == store.sync_location_id,
+                ).first()
+                if level and level.available is not None:
+                    expected_qty = level.available + delta
+                    intent = models.WriteIntent(
+                        barcode=barcode, target_store_id=store.id, 
+                        quantity=expected_qty, barcode_version=0, expires_at=expires
+                    )
+                    db.add(intent)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"[SYNC-WARN] Could not create WriteIntent for delta on store {store.name}: {e}")
 
         primary_location_gid = f"gid://shopify/Location/{store.sync_location_id}"
 
