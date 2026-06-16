@@ -187,13 +187,18 @@ class WriteIntent(Base):
     id = Column(BIGINT, primary_key=True, autoincrement=True)
     barcode = Column(String(255), nullable=False, index=True)
     target_store_id = Column(Integer, ForeignKey("stores.id"), nullable=False)
+    # The specific inventory item we wrote to. Lets the echo guard match precisely
+    # (per-item) instead of by barcode alone, so multi-listing within a store can't
+    # cross-suppress a genuine change. NULL = store-level intent (legacy/absolute).
+    inventory_item_id = Column(BIGINT, nullable=True, index=True)
     quantity = Column(Integer, nullable=False)
     barcode_version = Column(BIGINT, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=False)
-    
+
     __table_args__ = (
         Index('ix_write_intents_lookup', 'barcode', 'target_store_id', 'quantity'),
+        Index('ix_write_intents_item', 'target_store_id', 'inventory_item_id', 'expires_at'),
     )
 
 class ProcessedWebhook(Base):

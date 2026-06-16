@@ -212,7 +212,10 @@ def _determine_authoritative_stock(db: Session, barcode: str) -> tuple:
                     }
                     """
                     result = svc._execute_query(query, {"inventoryItemId": inv_item_gid})
-                    inv_item = result.get("data", {}).get("inventoryItem")
+                    # _execute_query already returns the GraphQL `data` object, so read
+                    # inventoryItem directly. (Previously double-unwrapped via .get("data"),
+                    # which always returned None and silently fell back to the stale cache.)
+                    inv_item = result.get("inventoryItem")
                     
                     if inv_item:
                         for level in inv_item.get("inventoryLevels", {}).get("nodes", []):

@@ -17,7 +17,7 @@ from typing import Dict, Any, List, Optional
 import threading
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 import models
 from database import SessionLocal
@@ -169,9 +169,21 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
             print(f"[SYNC] Suppressed echo for {barcode} at store {store_id} (delta=0).")
             return
 
-        # Also check legacy WriteIntent echoes (from reconciliation/absolute-SET operations)
-        if _is_echo(db, store_id, barcode, new_available):
+        # Per-item WriteIntent echo guard (covers reconciliation/absolute-SET and any case
+        # where the local delta baseline drifted). Matching by inventory_item_id + value is
+        # precise and never suppresses a genuine different value (no oversell risk).
+        if _is_echo(db, store_id, barcode, new_available, inventory_item_id=inventory_item_id):
             print(f"[SYNC] Suppressed echo for {barcode} at store {store_id} (WriteIntent match).")
+            # Keep the local baseline exact so future deltas compute correctly.
+            source_location_id = payload.get("location_id")
+            if source_location_id:
+                try:
+                    crud_product.update_inventory_levels_for_variants(
+                        db, variant_ids=[variant.id], location_id=source_location_id,
+                        new_quantity=new_available
+                    )
+                except Exception:
+                    db.rollback()
             return
 
         # --- VERSION CHECK ---
@@ -295,10 +307,11 @@ def handle_catalog_webhook(store_id: int, topic: str, payload: Dict[str, Any]):
 
             crud_product.update_variant_from_webhook(db, payload)
 
-            # If the barcode changed, sync to the new group
+            # If the barcode changed, sync to the new group. force=True because a real
+            # barcode change is a genuine group-join — re-aligning is intended here.
             new_barcode = payload.get("barcode")
             if new_barcode and new_barcode != old_barcode and old_variant:
-                _sync_variant_to_barcode_group(db, store_id, old_variant.id, new_barcode)
+                _sync_variant_to_barcode_group(db, store_id, old_variant.id, new_barcode, force=True)
 
         elif topic == "inventory_items/delete":
             crud_product.delete_inventory_item_from_webhook(db, payload)
@@ -340,24 +353,63 @@ def _auto_sync_product_barcodes(db: Session, store_id: int, payload: Dict[str, A
                                exc=e)
 
 
-def _sync_variant_to_barcode_group(db: Session, store_id: int, variant_id: int, barcode: str):
+def _get_group_authoritative_qty(db: Session, barcode: str, exclude_variant_id: int) -> Optional[int]:
     """
-    Sync a single variant's stock to match its barcode group.
-    Called when a variant is created or its barcode changes.
+    Best estimate of a barcode group's CURRENT stock for aligning a newly-joined variant.
+    Prefers the most recently updated real InventoryLevel among other group members over
+    the BarcodeVersion cache (which can be stale — that stale cache was the source of the
+    'reset to 0' clobbering bug). Falls back to the cache only when no live value exists.
+    """
+    latest = (
+        db.query(models.InventoryLevel)
+        .join(models.ProductVariant, models.ProductVariant.id == models.InventoryLevel.variant_id)
+        .join(models.Product, models.Product.id == models.ProductVariant.product_id)
+        .join(models.Store, models.Store.id == models.ProductVariant.store_id)
+        .filter(
+            models.ProductVariant.barcode == barcode,
+            models.ProductVariant.id != exclude_variant_id,
+            models.Product.deleted_at.is_(None),
+            models.Store.enabled == True,
+            models.Store.sync_location_id.isnot(None),
+            models.InventoryLevel.location_id == models.Store.sync_location_id,
+            models.InventoryLevel.available.isnot(None),
+        )
+        .order_by(models.InventoryLevel.updated_at.desc())
+        .first()
+    )
+    if latest is not None and latest.available is not None:
+        return latest.available
 
-    Steps:
-    1. Skip placeholder/empty barcodes
-    2. Check if the barcode exists on other variants (a group exists)
-    3. Get the authoritative stock level from BarcodeVersion or existing inventory
-    4. Write that stock to this variant via Shopify API
-    5. Update local DB
+    version_obj = db.query(models.BarcodeVersion).filter(
+        models.BarcodeVersion.barcode == barcode
+    ).first()
+    if version_obj and version_obj.quantity is not None:
+        return version_obj.quantity
+    return None
+
+
+def _sync_variant_to_barcode_group(db: Session, store_id: int, variant_id: int, barcode: str, force: bool = False):
+    """
+    Align a single variant's stock to its barcode group. Triggered on products/create,
+    products/update, and real barcode changes (inventory_items/update).
+
+    CRITICAL BUG-FIX: this must NEVER overwrite an existing stock value on a routine
+    product update. Previously it force-set every matching variant to BarcodeVersion.quantity
+    on *every* products/update — and because that cache was frequently stale (0), Shopify's
+    constant products/update webhooks repeatedly reset real stock to 0 and reverted manual
+    additions (the race the user observed).
+
+    Rules:
+      - force=False (create/update): only write when the variant has NO existing stock
+        baseline at the store's sync location (genuinely new to the group). Never clobber.
+      - force=True (real barcode change): re-align even if a baseline exists, since the
+        variant just joined a different group.
     """
     if not barcode or barcode.strip() in PLACEHOLDER_BARCODES:
         return
-
     barcode = barcode.strip()
 
-    # Check: does this barcode already exist on OTHER variants?
+    # Does this barcode already exist on OTHER (non-deleted) variants? (a group exists)
     existing_count = (
         db.query(models.ProductVariant.id)
         .join(models.Product, models.Product.id == models.ProductVariant.product_id)
@@ -369,46 +421,9 @@ def _sync_variant_to_barcode_group(db: Session, store_id: int, variant_id: int, 
         )
         .count()
     )
-
     if existing_count == 0:
-        return  # No group — this is the only product with this barcode
+        return  # No group — nothing to align to.
 
-    # Determine target quantity from BarcodeVersion (most reliable)
-    target_quantity = None
-    version_obj = db.query(models.BarcodeVersion).filter(
-        models.BarcodeVersion.barcode == barcode
-    ).first()
-
-    if version_obj and version_obj.quantity is not None:
-        target_quantity = version_obj.quantity
-    else:
-        # Fallback: get stock from any existing variant in the group
-        existing_variant = (
-            db.query(models.ProductVariant)
-            .join(models.Product)
-            .filter(
-                models.ProductVariant.barcode == barcode,
-                models.ProductVariant.id != variant_id,
-                models.Product.deleted_at.is_(None),
-                models.ProductVariant.inventory_item_id.isnot(None),
-            )
-            .first()
-        )
-        if existing_variant and existing_variant.product and existing_variant.product.store:
-            ev_store = existing_variant.product.store
-            if ev_store.sync_location_id:
-                level = db.query(models.InventoryLevel).filter(
-                    models.InventoryLevel.variant_id == existing_variant.id,
-                    models.InventoryLevel.location_id == ev_store.sync_location_id,
-                ).first()
-                if level and level.available is not None:
-                    target_quantity = level.available
-
-    if target_quantity is None:
-        print(f"[SYNC-AUTO] Cannot determine group stock for barcode {barcode}, skipping auto-sync")
-        return
-
-    # Get the new variant from DB
     new_variant = db.query(models.ProductVariant).filter(
         models.ProductVariant.id == variant_id
     ).first()
@@ -419,18 +434,45 @@ def _sync_variant_to_barcode_group(db: Session, store_id: int, variant_id: int, 
     if not store or not store.sync_location_id or not store.enabled:
         return
 
-    # Create WriteIntent to suppress the echo webhook
-    try:
-        _create_write_intents(db, barcode, target_quantity, 
-                              version_obj.version if version_obj else 0, [store])
-    except Exception:
-        pass  # Non-critical, echo suppression is best-effort
+    # --- NON-CLOBBER GUARD (the core of the fix) ---
+    # If the variant already has a known stock value at the sync location and we are not
+    # explicitly forcing a re-align (real barcode change), do NOT touch it. This single
+    # guard stops routine products/update webhooks from resetting real stock to a cached value.
+    current_level = db.query(models.InventoryLevel).filter(
+        models.InventoryLevel.variant_id == new_variant.id,
+        models.InventoryLevel.location_id == store.sync_location_id,
+    ).first()
+    if not force and current_level is not None and current_level.available is not None:
+        return  # Already has stock — never overwrite on a routine update.
 
-    # Set stock on Shopify
+    # Serialize against the inventory_levels/update handler for this barcode.
+    lock = get_barcode_lock(barcode)
+    if not lock.acquire(timeout=LOCK_TIMEOUT_SECONDS):
+        print(f"[SYNC-AUTO] Could not acquire lock for barcode {barcode}; skipping auto-sync.")
+        return
+
     try:
+        target_quantity = _get_group_authoritative_qty(db, barcode, exclude_variant_id=variant_id)
+        if target_quantity is None:
+            print(f"[SYNC-AUTO] Cannot determine group stock for barcode {barcode}, skipping auto-sync")
+            return
+
+        version_obj = db.query(models.BarcodeVersion).filter(
+            models.BarcodeVersion.barcode == barcode
+        ).first()
+
+        # Per-item echo guard so the resulting webhook echo is suppressed.
+        try:
+            _create_write_intents(
+                db, barcode, target_quantity,
+                version_obj.version if version_obj else 0, [store],
+                inventory_item_id=new_variant.inventory_item_id,
+            )
+        except Exception:
+            db.rollback()  # best-effort
+
         location_gid = f"gid://shopify/Location/{store.sync_location_id}"
         service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
-
         variables = {
             "input": {
                 "name": "available",
@@ -443,34 +485,33 @@ def _sync_variant_to_barcode_group(db: Session, store_id: int, variant_id: int, 
                 }],
             }
         }
-
         result = service.execute_mutation("inventorySetQuantities", variables)
         user_errors = result.get("inventorySetQuantities", {}).get("userErrors", [])
         if user_errors:
             print(f"[SYNC-AUTO] Shopify userErrors for barcode {barcode}: {user_errors}")
             return
 
-        # Update local DB
         crud_product.update_inventory_levels_for_variants(
             db, variant_ids=[new_variant.id],
             location_id=store.sync_location_id,
             new_quantity=target_quantity,
         )
 
-        print(f"[SYNC-AUTO] Auto-synced barcode {barcode} on store '{store.name}' to qty {target_quantity}")
+        print(f"[SYNC-AUTO] Aligned barcode {barcode} on store '{store.name}' to qty {target_quantity} (force={force})")
         audit_logger.log_propagation(
             barcode=barcode,
             source_store="auto_sync",
             target_store=store.name,
             quantity=target_quantity,
-            details={"trigger": "barcode_group_join", "variant_id": variant_id},
+            details={"trigger": "barcode_group_join", "variant_id": variant_id, "force": force},
         )
-
     except Exception as e:
         print(f"[SYNC-AUTO-ERROR] Failed to auto-sync barcode {barcode} on store '{store.name}': {e}")
         audit_logger.log_error("inventory_sync_service._sync_variant_to_barcode_group",
                                f"Auto-sync failed for barcode {barcode} on store '{store.name}'",
                                details={"barcode": barcode, "variant_id": variant_id}, exc=e)
+    finally:
+        lock.release()
 
 # --- Helper Functions ---
 
@@ -483,16 +524,32 @@ def _is_duplicate_webhook(db: Session, store_id: int, barcode: str, total: int, 
     db.commit()
     return False
 
-def _is_echo(db: Session, store_id: int, barcode: str, observed_total: int) -> bool:
-    intent = db.query(models.WriteIntent).filter(
+def _is_echo(db: Session, store_id: int, barcode: str, observed_total: int,
+             inventory_item_id: Optional[int] = None) -> bool:
+    """
+    Detect whether an incoming inventory webhook is the echo of one of OUR OWN writes.
+
+    Matches a non-expired WriteIntent for this target store whose recorded quantity equals
+    the observed value (per-item when we know which item — so multi-listing within a store
+    can't cross-suppress, and a genuine *different* value is never suppressed → no oversell).
+    """
+    q = db.query(models.WriteIntent).filter(
         models.WriteIntent.target_store_id == store_id,
         models.WriteIntent.barcode == barcode,
         models.WriteIntent.quantity == observed_total,
-        models.WriteIntent.expires_at > datetime.now(timezone.utc)
-    ).first()
+        models.WriteIntent.expires_at > datetime.now(timezone.utc),
+    )
+    if inventory_item_id is not None:
+        # Prefer an item-specific intent; fall back to store-level (NULL item) intents
+        # created by the absolute/reconciliation paths.
+        q = q.filter(or_(
+            models.WriteIntent.inventory_item_id == inventory_item_id,
+            models.WriteIntent.inventory_item_id.is_(None),
+        ))
+    intent = q.first()
     if intent:
-        # BUG-34 FIX: Do NOT delete the WriteIntent. If Shopify fires duplicate webhooks 
-        # (or if multiple workers race), the intent must remain to suppress all echoes 
+        # BUG-34 FIX: Do NOT delete the WriteIntent. If Shopify fires duplicate webhooks
+        # (or if multiple workers race), the intent must remain to suppress all echoes
         # within the TTL window.
         return True
     return False
@@ -544,12 +601,15 @@ def _get_all_propagation_variants(db: Session, barcode: str, exclude_variant_id:
         .all()
     )
 
-def _create_write_intents(db: Session, barcode: str, quantity: int, version: int, target_stores: List[models.Store]):
+def _create_write_intents(db: Session, barcode: str, quantity: int, version: int,
+                          target_stores: List[models.Store], inventory_item_id: Optional[int] = None):
     now = datetime.now(timezone.utc)
     expires = now + timedelta(seconds=INTENT_TTL_SECONDS)
 
     for store in target_stores:
-        intent = models.WriteIntent(barcode=barcode, target_store_id=store.id, quantity=quantity, barcode_version=version, expires_at=expires)
+        intent = models.WriteIntent(barcode=barcode, target_store_id=store.id, quantity=quantity,
+                                    barcode_version=version, expires_at=expires,
+                                    inventory_item_id=inventory_item_id)
         db.add(intent)
     db.commit()
 
@@ -591,8 +651,9 @@ def _execute_delta_propagation(
                 if level and level.available is not None:
                     expected_qty = level.available + delta
                     intent = models.WriteIntent(
-                        barcode=barcode, target_store_id=store.id, 
-                        quantity=expected_qty, barcode_version=0, expires_at=expires
+                        barcode=barcode, target_store_id=store.id,
+                        quantity=expected_qty, barcode_version=0, expires_at=expires,
+                        inventory_item_id=v.inventory_item_id,
                     )
                     db.add(intent)
             db.commit()
