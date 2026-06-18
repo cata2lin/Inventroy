@@ -52,7 +52,7 @@ BACKFILL = [
         WHERE {_VALID}
         GROUP BY pv.barcode HAVING count(*) > 1
     ) q
-    ON CONFLICT (barcode_key) DO NOTHING
+    ON CONFLICT (barcode_key) WHERE barcode_key IS NOT NULL DO NOTHING
     """,
     # 2) members — mark SKU-less orphans (with a SKU'd sibling in the same store) as excluded
     f"""
