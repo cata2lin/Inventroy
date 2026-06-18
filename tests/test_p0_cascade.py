@@ -19,10 +19,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services import sync_guards as g
 
 
-def V(id, store_id, inv_item, is_barcode_primary=False, is_primary_variant=False):
+def V(id, store_id, inv_item, is_barcode_primary=False, is_primary_variant=False, sku="SKU"):
     """A lightweight stand-in for a ProductVariant (the guards are duck-typed)."""
     return SimpleNamespace(id=id, store_id=store_id, inventory_item_id=inv_item,
-                           is_barcode_primary=is_barcode_primary, is_primary_variant=is_primary_variant)
+                           is_barcode_primary=is_barcode_primary, is_primary_variant=is_primary_variant,
+                           sku=sku)
+
+
+def test_canonical_prefers_skud_variant_over_orphan():
+    """Forensic regression (barcode 7865789069743): a SKU-less orphan with a LOWER id must NOT
+    be chosen over the real SKU'd variant. Prevents propagation syncing the corrupt orphan."""
+    orphan = V(100, 7, 1, sku="")        # lower id, no SKU (the 74,272 orphan)
+    real = V(200, 7, 2, sku="HA-1234")   # higher id, real SKU (the 23,962 variant)
+    t = g.select_canonical_targets([orphan, real], origin_store_id=99)[0]
+    assert t.id == 200, "must prefer the SKU'd variant over the SKU-less orphan"
 
 
 # --- P0.1: canonical targets — the structural cascade fix ------------------------------

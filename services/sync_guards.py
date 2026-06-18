@@ -52,10 +52,18 @@ def propagation_enabled() -> bool:
 
 def _canonical_rank(v: Any) -> tuple:
     """Lower tuple sorts first => more canonical.
-    Order: is_barcode_primary, then is_primary_variant, then lowest id (stable)."""
+    Order: is_barcode_primary, then is_primary_variant, then HAS-SKU (prefer a properly
+    cataloged variant over a SKU-less orphan duplicate), then lowest id (stable).
+
+    The SKU tiebreak was added after forensic analysis found 209 (barcode,store) sites where
+    the lowest-id variant was a SKU-less orphan carrying a corrupt value (e.g. 74,272 vs the
+    real 23,962), so propagation was syncing the orphan and ignoring the real listing."""
+    sku = getattr(v, "sku", None)
+    has_sku = bool(sku and str(sku).strip())
     return (
         0 if bool(getattr(v, "is_barcode_primary", False)) else 1,
         0 if bool(getattr(v, "is_primary_variant", False)) else 1,
+        0 if has_sku else 1,
         getattr(v, "id", 0) or 0,
     )
 

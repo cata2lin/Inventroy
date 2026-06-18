@@ -73,18 +73,25 @@ def scan_duplicate_barcode_groups(db: Session, limit: int = 500) -> List[Dict[st
     return out
 
 
+# Canonical-variant ordering — MUST match services.sync_guards._canonical_rank so the
+# detectors measure the SAME variant propagation actually targets.
+CANON_ORDER = ("pv.is_barcode_primary DESC, pv.is_primary_variant DESC, "
+               "(CASE WHEN NULLIF(pv.sku,'') IS NOT NULL THEN 0 ELSE 1 END), pv.id ASC")
+
+
 def detect_divergence(db: Session, min_spread: int = 1, limit: int = 500) -> List[Dict[str, Any]]:
-    """Barcode groups whose per-store quantities disagree by more than min_spread (one
-    representative value per store)."""
+    """Barcode groups whose CANONICAL per-store quantities disagree by more than min_spread.
+    Uses the canonical variant per (barcode,store) — not max() — so SKU-less orphan duplicates
+    don't inflate the spread (they are a separate, classification problem)."""
     rows = db.execute(text(f"""
         WITH per_store AS (
-            SELECT pv.barcode, pv.store_id, max(il.available) AS avail
+            SELECT DISTINCT ON (pv.barcode, pv.store_id) pv.barcode, pv.store_id, il.available AS avail
             FROM product_variants pv
             JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
             JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
             JOIN inventory_levels il ON il.variant_id = pv.id AND il.location_id = s.sync_location_id
             WHERE {_placeholder_sql('pv.barcode')} AND il.available IS NOT NULL
-            GROUP BY pv.barcode, pv.store_id
+            ORDER BY pv.barcode, pv.store_id, {CANON_ORDER}
         )
         SELECT barcode, count(*) AS stores, min(avail) AS lo, max(avail) AS hi,
                max(avail) - min(avail) AS spread

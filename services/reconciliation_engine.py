@@ -41,16 +41,18 @@ AUTOHEAL_MAX_SPREAD = int(os.getenv("RECONCILE_AUTOHEAL_MAX_SPREAD", "100"))
 
 
 def _per_store_current(db: Session, barcode: str) -> List[Dict[str, Any]]:
-    """One representative (canonical) current value per enabled store for a barcode."""
+    """The CANONICAL variant's current value per enabled store (matches what propagation
+    targets — SKU-preferring canonical, not max()), so reconcile plans the real variant."""
     rows = db.execute(text(f"""
-        SELECT pv.store_id, s.name AS store, max(il.available) AS current
-        FROM product_variants pv
-        JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
-        JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
-        JOIN inventory_levels il ON il.variant_id = pv.id AND il.location_id = s.sync_location_id
-        WHERE pv.barcode = :b AND il.available IS NOT NULL
-        GROUP BY pv.store_id, s.name
-        ORDER BY s.name
+        SELECT store_id, store, current FROM (
+            SELECT DISTINCT ON (pv.barcode, pv.store_id) pv.store_id, s.name AS store, il.available AS current
+            FROM product_variants pv
+            JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
+            JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
+            JOIN inventory_levels il ON il.variant_id = pv.id AND il.location_id = s.sync_location_id
+            WHERE pv.barcode = :b AND il.available IS NOT NULL
+            ORDER BY pv.barcode, pv.store_id, {diagnostics.CANON_ORDER}
+        ) q ORDER BY store
     """), {"b": barcode}).mappings().all()
     return [dict(r) for r in rows]
 
