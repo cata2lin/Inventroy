@@ -91,7 +91,14 @@ def assert_stability():
     A regression (rising divergence or any recent guard trip) flips it to DEGRADED + alerts."""
     db = SessionLocal()
     try:
-        diverged = len(diagnostics.detect_divergence(db, min_spread=1, limit=10000))
+        # Count only PERSISTENT divergence: a group diverged in two reads ~3s apart. This
+        # filters mid-propagation transients (a snapshot catching one store updated and a
+        # sibling not yet), which always self-resolve within seconds under heavy traffic.
+        import time as _t
+        div1 = {p["barcode"] for p in diagnostics.detect_divergence(db, min_spread=1, limit=10000)}
+        _t.sleep(3)
+        div2 = {p["barcode"] for p in diagnostics.detect_divergence(db, min_spread=1, limit=10000)}
+        diverged = len(div1 & div2)
         neg = diagnostics.detect_negative_inventory(db, limit=1).get("summary", {}) or {}
         recent_bad = db.execute(text("""
             SELECT count(*) FROM audit_logs
