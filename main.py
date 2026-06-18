@@ -18,7 +18,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
 from database import engine, Base, get_db
-from routes import sync_control, config, products, mutations, stock, webhooks, snapshots, data_quality, system_monitor, diagnostics
+from routes import sync_control, config, products, mutations, stock, webhooks, snapshots, data_quality, system_monitor, diagnostics, classification
 from services import snapshot_runner
 from services.inventory_sync_service import cleanup_expired_records
 from services import audit_logger
@@ -161,6 +161,7 @@ app.include_router(snapshots.router)
 app.include_router(data_quality.router)
 app.include_router(system_monitor.router)
 app.include_router(diagnostics.router)
+app.include_router(classification.router)
 
 @app.on_event("shutdown")
 def shutdown_event():
