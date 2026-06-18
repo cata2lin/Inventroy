@@ -24,6 +24,7 @@ from services.inventory_sync_service import cleanup_expired_records
 from services import audit_logger
 from services import webhook_maintenance
 from services import monitoring
+from services import reconciliation_engine
 
 load_dotenv()
 
@@ -40,6 +41,8 @@ scheduler.add_job(cleanup_expired_records, 'interval', minutes=5)
 scheduler.add_job(webhook_maintenance.verify_and_recreate_webhooks, 'cron', day_of_week='sun', hour=3, minute=0)
 # P2.3: continuous self-monitoring — negative inventory, divergence, storm alerts + time series
 scheduler.add_job(monitoring.run_health_monitor, 'interval', minutes=10)
+# P1.4: scheduled divergence scan. REPORT/ALERT only unless RECONCILE_AUTOHEAL_ENABLED=true.
+scheduler.add_job(reconciliation_engine.auto_reconverge, 'interval', minutes=30)
 scheduler.start()
 # --- END SCHEDULER SETUP ---
 

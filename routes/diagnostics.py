@@ -6,8 +6,18 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from services import diagnostics
+from services import reconciliation_engine
 
 router = APIRouter(prefix="/api/diagnostics", tags=["Diagnostics"])
+
+
+@router.get("/reconcile-plan")
+def get_reconcile_plan(min_spread: int = Query(1, ge=0), limit: int = Query(500, le=10000),
+                       db: Session = Depends(get_db)):
+    """READ-ONLY convergence review report: proposed authoritative target + per-store moves
+    for every diverged barcode group. Applies nothing."""
+    plans = reconciliation_engine.plan_all_diverged(db, min_spread=min_spread, limit=limit)
+    return {"total": len(plans), "plans": plans}
 
 
 @router.get("/summary")
