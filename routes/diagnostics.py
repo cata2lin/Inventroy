@@ -59,3 +59,15 @@ def get_impossible_states(days: int = Query(14, le=90), db: Session = Depends(ge
 @router.get("/lock-status")
 def get_lock_status():
     return diagnostics.lock_status()
+
+
+@router.get("/replay/barcode/{barcode}")
+def replay_barcode(barcode: str, hours: int = Query(168, le=2160), db: Session = Depends(get_db)):
+    from services import forensic
+    return forensic.replay_barcode(db, barcode, hours=hours)
+
+
+@router.get("/replay/operation/{sync_op}")
+def replay_operation(sync_op: str, db: Session = Depends(get_db)):
+    from services import forensic
+    return forensic.replay_operation(db, sync_op)
