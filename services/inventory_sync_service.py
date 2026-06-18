@@ -27,6 +27,7 @@ from crud import product as crud_product
 from services import audit_logger
 from services import sync_guards
 from services import alerting
+from services import dist_lock
 
 # --- Configuration ---
 INTENT_TTL_SECONDS = 60
@@ -113,9 +114,22 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
 
     barcode = barcode_row.barcode
 
+    # In-process lock = cheap fast gate (serializes same-process threads for this barcode).
     lock = get_barcode_lock(barcode)
     if not lock.acquire(timeout=LOCK_TIMEOUT_SECONDS):
         print(f"[SYNC-ERROR] Could not acquire lock for barcode {barcode}. Task timed out.")
+        db.close()
+        return
+
+    # P2 distributed lock = cross-process/instance gate (Postgres advisory lock). Held for the
+    # whole critical section on a dedicated connection; auto-released if this worker crashes.
+    adv = dist_lock.acquire(f"barcode:{barcode}")
+    if adv is None:
+        print(f"[SYNC] Skipped {barcode}@{store_id}: distributed lock busy/unavailable.")
+        audit_logger.log(category="STOCK", action="dist_lock_contention",
+                         message=f"Skipped [{barcode}] — distributed lock busy/unavailable",
+                         store_id=store_id, target=barcode, severity="WARN")
+        lock.release()
         db.close()
         return
 
@@ -330,6 +344,7 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
             print(f"[SYNC] No other variants to propagate to for barcode {barcode}.")
 
     finally:
+        dist_lock.release(adv)
         lock.release()
         db.close()
 

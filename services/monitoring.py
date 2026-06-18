@@ -65,6 +65,17 @@ def run_health_monitor():
                               f"{recent_storms} storm/blocked-delta events in the last 15 min",
                               {"recent_storms": int(recent_storms)})
 
+        # P2 lock health
+        try:
+            lk = diagnostics.lock_status()
+            m = lk.get("metrics", {})
+            if m.get("timeouts", 0) or m.get("errors", 0) or m.get("waits_over_1s", 0):
+                alerting.warning("monitoring.lock_contention",
+                                 f"distributed-lock contention: timeouts={m.get('timeouts')} "
+                                 f"errors={m.get('errors')} waits>1s={m.get('waits_over_1s')}", lk)
+        except Exception:
+            pass
+
     except Exception as e:
         try:
             alerting.warning("monitoring.health_monitor", f"health monitor failed: {e}", {})

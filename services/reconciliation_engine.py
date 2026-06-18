@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 import models
 from shopify_service import ShopifyService
-from services import diagnostics, alerting, audit_logger, sync_guards
+from services import diagnostics, alerting, audit_logger, sync_guards, dist_lock
 from services import inventory_sync_service as iss
 from services.stock_reconciliation import _determine_authoritative_stock
 
@@ -119,6 +119,17 @@ def apply_plan(db: Session, plan: Dict[str, Any]) -> Dict[str, Any]:
     if target is None or not plan["moves"]:
         return {"barcode": barcode, "applied": 0, "skipped": "nothing to do"}
 
+    # P2: hold the SAME distributed lock as propagation so reconcile never races a webhook write.
+    _h = dist_lock.acquire(f"barcode:{barcode}")
+    if _h is None:
+        return {"barcode": barcode, "applied": 0, "skipped": "distributed lock busy"}
+    try:
+        return _apply_plan_locked(db, plan, barcode, target)
+    finally:
+        dist_lock.release(_h)
+
+
+def _apply_plan_locked(db: Session, plan: Dict[str, Any], barcode: str, target: int) -> Dict[str, Any]:
     sync_op = f"reconcile-{uuid.uuid4()}"
     applied = 0
     for mv in plan["moves"]:

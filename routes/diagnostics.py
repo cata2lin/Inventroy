@@ -54,3 +54,8 @@ def get_historical_storms(days: int = Query(14, le=90), db: Session = Depends(ge
 def get_impossible_states(days: int = Query(14, le=90), db: Session = Depends(get_db)):
     rows = diagnostics.detect_impossible_states(db, days=days)
     return {"total": len(rows), "barcodes": rows}
+
+
+@router.get("/lock-status")
+def get_lock_status():
+    return diagnostics.lock_status()

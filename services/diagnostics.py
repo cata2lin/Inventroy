@@ -164,6 +164,13 @@ def detect_impossible_states(db: Session, days: int = 14, limit: int = 200) -> L
              "worst_qty": r["worst_qty"], "last_seen": str(r["last_seen"])} for r in rows]
 
 
+def lock_status() -> Dict[str, Any]:
+    """P2 lock observability: in-process contention metrics + advisory locks currently held."""
+    from services import dist_lock
+    return {"metrics": dist_lock.metrics(), "advisory_locks_held": dist_lock.held_count(),
+            "enabled": dist_lock.DIST_LOCK_ENABLED}
+
+
 def summary(db: Session) -> Dict[str, Any]:
     """One-call rollup for the monitoring job / dashboard."""
     dups = scan_duplicate_barcode_groups(db, limit=10000)
