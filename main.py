@@ -18,11 +18,12 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
 from database import engine, Base, get_db
-from routes import sync_control, config, products, mutations, stock, webhooks, snapshots, data_quality, system_monitor
+from routes import sync_control, config, products, mutations, stock, webhooks, snapshots, data_quality, system_monitor, diagnostics
 from services import snapshot_runner
 from services.inventory_sync_service import cleanup_expired_records
 from services import audit_logger
 from services import webhook_maintenance
+from services import monitoring
 
 load_dotenv()
 
@@ -37,6 +38,8 @@ scheduler.add_job(snapshot_runner.run_daily_snapshot, 'cron', hour=23, minute=55
 scheduler.add_job(cleanup_expired_records, 'interval', minutes=5)
 # Verify and recreate missing webhooks every 7 days (Sundays at 3 AM UTC)
 scheduler.add_job(webhook_maintenance.verify_and_recreate_webhooks, 'cron', day_of_week='sun', hour=3, minute=0)
+# P2.3: continuous self-monitoring — negative inventory, divergence, storm alerts + time series
+scheduler.add_job(monitoring.run_health_monitor, 'interval', minutes=10)
 scheduler.start()
 # --- END SCHEDULER SETUP ---
 
@@ -154,6 +157,7 @@ app.include_router(webhooks.router)
 app.include_router(snapshots.router)
 app.include_router(data_quality.router)
 app.include_router(system_monitor.router)
+app.include_router(diagnostics.router)
 
 @app.on_event("shutdown")
 def shutdown_event():

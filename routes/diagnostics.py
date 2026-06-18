@@ -1,0 +1,46 @@
+# routes/diagnostics.py
+"""Read-only diagnostics & remediation API. Every endpoint is a pure SELECT — nothing here
+mutates production data."""
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.orm import Session
+
+from database import get_db
+from services import diagnostics
+
+router = APIRouter(prefix="/api/diagnostics", tags=["Diagnostics"])
+
+
+@router.get("/summary")
+def get_summary(db: Session = Depends(get_db)):
+    return diagnostics.summary(db)
+
+
+@router.get("/duplicate-barcodes")
+def get_duplicate_barcodes(limit: int = Query(500, le=10000), db: Session = Depends(get_db)):
+    rows = diagnostics.scan_duplicate_barcode_groups(db, limit=limit)
+    return {"total": len(rows), "groups": rows}
+
+
+@router.get("/divergence")
+def get_divergence(min_spread: int = Query(1, ge=0), limit: int = Query(500, le=10000),
+                   db: Session = Depends(get_db)):
+    rows = diagnostics.detect_divergence(db, min_spread=min_spread, limit=limit)
+    return {"total": len(rows), "groups": rows}
+
+
+@router.get("/negative-inventory")
+def get_negative_inventory(floor: int = 0, limit: int = Query(1000, le=10000),
+                           db: Session = Depends(get_db)):
+    return diagnostics.detect_negative_inventory(db, floor=floor, limit=limit)
+
+
+@router.get("/historical-storms")
+def get_historical_storms(days: int = Query(14, le=90), db: Session = Depends(get_db)):
+    rows = diagnostics.detect_historical_storms(db, days=days)
+    return {"total": len(rows), "events": rows}
+
+
+@router.get("/impossible-states")
+def get_impossible_states(days: int = Query(14, le=90), db: Session = Depends(get_db)):
+    rows = diagnostics.detect_impossible_states(db, days=days)
+    return {"total": len(rows), "barcodes": rows}
