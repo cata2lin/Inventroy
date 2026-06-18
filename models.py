@@ -208,6 +208,36 @@ class WriteIntent(Base):
     )
 
 
+class SyncGroup(Base):
+    """P3 — explicit synchronization group. Sync identity is the group, NOT the barcode.
+    A group can be quarantined, classified, or given an explicit authoritative variant. This
+    allows: same barcode WITHOUT syncing (different groups), syncing WITHOUT barcode equality
+    (one group, different barcodes), and manual overrides."""
+    __tablename__ = "sync_groups"
+    id = Column(BIGINT, primary_key=True, autoincrement=True)
+    # The barcode the group was seeded from — a LOOKUP HINT, not the sync identity.
+    barcode_key = Column(String(255), nullable=True, index=True)
+    # ACTIVE | VALID_SHARED | SUSPECT_DUPLICATE | CONFIRMED_ERROR | QUARANTINED
+    classification = Column(String(32), nullable=False, server_default="ACTIVE")
+    sync_enabled = Column(BOOLEAN, nullable=False, server_default="true")
+    authoritative_variant_id = Column(BIGINT, nullable=True)  # optional explicit canonical
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SyncGroupMember(Base):
+    """A variant's membership in a sync group. A variant belongs to at most one group.
+    excluded=True keeps a variant in the catalog/group record but OUT of propagation (e.g. a
+    SKU-less orphan duplicate) without deleting anything."""
+    __tablename__ = "sync_group_members"
+    variant_id = Column(BIGINT, primary_key=True)
+    sync_group_id = Column(BIGINT, ForeignKey("sync_groups.id"), nullable=False, index=True)
+    store_id = Column(Integer, nullable=False, index=True)
+    excluded = Column(BOOLEAN, nullable=False, server_default="false")
+    added_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class BarcodeCircuitBreaker(Base):
     """P0.2/P0.3 — a barcode that tripped the storm/abnormal-delta breaker. While a row
     exists and has not expired, the sync engine refuses to auto-propagate this barcode."""
