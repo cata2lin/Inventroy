@@ -48,6 +48,12 @@ def propagation_enabled() -> bool:
     return _env_bool("SYNC_PROPAGATION_ENABLED", True)
 
 
+def use_sync_groups() -> bool:
+    """When true, propagation targets are resolved via explicit sync_group membership
+    (P3) instead of raw barcode equality. Default false until the backfill is verified."""
+    return _env_bool("SYNC_USE_GROUPS", False)
+
+
 # --- P0.1: canonical target selection ---
 
 def _canonical_rank(v: Any) -> tuple:

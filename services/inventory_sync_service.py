@@ -258,9 +258,22 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
                              details={"delta": delta, "last_known": last_known, "quantity": new_available})
             return
 
-        # 3. Find candidate variants, then collapse to CANONICAL targets (P0.1):
-        #    at most one variant per store, origin store fully excluded.
-        raw_targets = _get_all_propagation_variants(db, barcode, exclude_variant_id=variant.id)
+        # 3. Resolve candidate variants. P3: prefer explicit sync_group membership (so a shared
+        #    barcode can be NON-syncing, orphans are excluded, and quarantined groups never sync).
+        #    Falls back to barcode grouping when the variant isn't group-mapped or the flag is off.
+        raw_targets = None
+        if sync_guards.use_sync_groups():
+            raw_targets, blocked = _resolve_group_targets(db, variant)
+            if blocked:
+                print(f"[SYNC] No propagation for {barcode}@{store_id}: {blocked}")
+                audit_logger.log(category="STOCK", action="propagation_group_blocked",
+                                 message=f"[{barcode}] blocked: {blocked}", store_id=store_id,
+                                 target=barcode, severity="INFO", details={"reason": blocked})
+                return
+        if raw_targets is None:
+            raw_targets = _get_all_propagation_variants(db, barcode, exclude_variant_id=variant.id)
+
+        # Collapse to CANONICAL targets (P0.1): at most one variant per store, origin excluded.
         propagation_targets = sync_guards.select_canonical_targets(
             raw_targets, origin_store_id=variant.store_id
         )
@@ -751,6 +764,45 @@ def _update_authoritative_version(db: Session, barcode: str, store_id: int, quan
         db.rollback()
         print(f"[SYNC-ERROR] Failed to update authoritative version for {barcode}: {e}")
         raise
+
+def _resolve_group_targets(db: Session, variant: models.ProductVariant):
+    """P3 — resolve propagation targets via explicit sync_group membership.
+
+    Returns (targets, blocked_reason):
+      - targets: non-excluded sibling variants in the same sync_group (None => fall back to barcode)
+      - blocked_reason: a string if this group/variant must NOT propagate (quarantine, excluded
+        orphan, sync disabled, confirmed error), else None.
+    """
+    member = db.query(models.SyncGroupMember).filter(
+        models.SyncGroupMember.variant_id == variant.id
+    ).first()
+    if member is None:
+        return None, None  # not group-mapped → caller falls back to barcode grouping
+
+    if member.excluded:
+        return [], "trigger is an excluded orphan (not a sync participant)"
+
+    group = db.query(models.SyncGroup).filter(models.SyncGroup.id == member.sync_group_id).first()
+    if group is None:
+        return None, None
+    if not group.sync_enabled or group.classification in ("QUARANTINED", "CONFIRMED_ERROR"):
+        return [], f"group {group.id} not syncing (classification={group.classification}, enabled={group.sync_enabled})"
+
+    targets = (
+        db.query(models.ProductVariant)
+        .join(models.SyncGroupMember, models.SyncGroupMember.variant_id == models.ProductVariant.id)
+        .join(models.Product, models.Product.id == models.ProductVariant.product_id)
+        .filter(
+            models.SyncGroupMember.sync_group_id == group.id,
+            models.SyncGroupMember.excluded == False,  # noqa: E712 — exclude orphans
+            models.ProductVariant.id != variant.id,
+            models.Product.deleted_at.is_(None),
+            models.ProductVariant.inventory_item_id.isnot(None),
+        )
+        .all()
+    )
+    return targets, None
+
 
 def _get_all_propagation_variants(db: Session, barcode: str, exclude_variant_id: int) -> List[models.ProductVariant]:
     """
