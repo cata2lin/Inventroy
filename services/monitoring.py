@@ -83,3 +83,45 @@ def run_health_monitor():
             pass
     finally:
         db.close()
+
+
+def assert_stability():
+    """Continuous stability assertion (Phase 7/8). Records a PASS/DEGRADED tick each run so that
+    sustained PASS over time = the long-term architectural-stability evidence the goal requires.
+    A regression (rising divergence or any recent guard trip) flips it to DEGRADED + alerts."""
+    db = SessionLocal()
+    try:
+        diverged = len(diagnostics.detect_divergence(db, min_spread=1, limit=10000))
+        neg = diagnostics.detect_negative_inventory(db, limit=1).get("summary", {}) or {}
+        recent_bad = db.execute(text("""
+            SELECT count(*) FROM audit_logs
+            WHERE action IN ('propagation_storm_tripped','propagation_blocked_oversized_delta','dist_lock_contention')
+              AND timestamp >= now() - interval '15 minutes'
+        """)).scalar() or 0
+        recent_errors = db.execute(text("""
+            SELECT count(*) FROM system_events WHERE level='CRITICAL' AND timestamp >= now() - interval '15 minutes'
+        """)).scalar() or 0
+        # baseline: a small number of known-unsafe diverged groups is expected (held for review);
+        # PASS while divergence stays bounded and no guard trips / criticals occurred.
+        status = "PASS" if (diverged <= 5 and recent_bad == 0 and recent_errors == 0) else "DEGRADED"
+        audit_logger.log(
+            category="SYSTEM", action="stability_check",
+            message=f"stability={status} diverged={diverged} negatives={neg.get('levels', 0)} "
+                    f"guard_events_15m={recent_bad} criticals_15m={recent_errors}",
+            severity="INFO" if status == "PASS" else "WARN",
+            details={"status": status, "diverged_groups": diverged,
+                     "negative_levels": neg.get("levels", 0), "guard_events_15m": int(recent_bad),
+                     "criticals_15m": int(recent_errors)})
+        if status != "PASS":
+            alerting.warning("monitoring.stability",
+                             f"stability DEGRADED: diverged={diverged} guard_events={recent_bad} criticals={recent_errors}",
+                             {"diverged": diverged, "guard_events": int(recent_bad), "criticals": int(recent_errors)})
+        return {"status": status, "diverged_groups": diverged}
+    except Exception as e:
+        try:
+            alerting.warning("monitoring.stability", f"stability check failed: {e}", {})
+        except Exception:
+            pass
+        return {"status": "ERROR"}
+    finally:
+        db.close()

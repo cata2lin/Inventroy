@@ -43,6 +43,8 @@ scheduler.add_job(webhook_maintenance.verify_and_recreate_webhooks, 'cron', day_
 scheduler.add_job(monitoring.run_health_monitor, 'interval', minutes=10)
 # P1.4: scheduled divergence scan. REPORT/ALERT only unless RECONCILE_AUTOHEAL_ENABLED=true.
 scheduler.add_job(reconciliation_engine.auto_reconverge, 'interval', minutes=30)
+# P7/8: continuous stability assertion — accumulates the long-term-stability time series.
+scheduler.add_job(monitoring.assert_stability, 'interval', minutes=15)
 scheduler.start()
 # --- END SCHEDULER SETUP ---
 
