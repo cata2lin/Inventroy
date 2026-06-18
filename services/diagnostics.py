@@ -104,6 +104,7 @@ def detect_negative_inventory(db: Session, floor: int = 0, limit: int = 1000) ->
         FROM inventory_levels il
         JOIN product_variants pv ON pv.id = il.variant_id
         JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
+        JOIN stores s ON s.id = pv.store_id
         WHERE il.available < :floor
         ORDER BY il.available ASC
         LIMIT :limit
