@@ -193,6 +193,12 @@ class WriteIntent(Base):
     inventory_item_id = Column(BIGINT, nullable=True, index=True)
     quantity = Column(Integer, nullable=False)
     barcode_version = Column(BIGINT, nullable=False)
+    # --- P0.2 propagation lineage: lets an inbound webhook be recognised as OUR OWN
+    # echo by (target_store_id, inventory_item_id) within a TTL, independent of value. ---
+    sync_operation_uuid = Column(String(64), nullable=True, index=True)
+    origin_store_id = Column(Integer, nullable=True)
+    origin_inventory_item_id = Column(BIGINT, nullable=True)
+    propagation_depth = Column(Integer, nullable=False, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
@@ -200,6 +206,17 @@ class WriteIntent(Base):
         Index('ix_write_intents_lookup', 'barcode', 'target_store_id', 'quantity'),
         Index('ix_write_intents_item', 'target_store_id', 'inventory_item_id', 'expires_at'),
     )
+
+
+class BarcodeCircuitBreaker(Base):
+    """P0.2/P0.3 — a barcode that tripped the storm/abnormal-delta breaker. While a row
+    exists and has not expired, the sync engine refuses to auto-propagate this barcode."""
+    __tablename__ = "barcode_circuit_breakers"
+    barcode = Column(String(255), primary_key=True)
+    reason = Column(Text, nullable=False)
+    tripped_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    details = Column(JSONB, nullable=True)
 
 class ProcessedWebhook(Base):
     __tablename__ = "processed_webhooks"

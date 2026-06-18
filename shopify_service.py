@@ -289,46 +289,46 @@ class ShopifyService:
         response = requests.delete(f"{self.rest_endpoint}/webhooks/{webhook_id}.json", headers=self.headers)
         response.raise_for_status()
 
-    def set_inventory_quantities(self, quantities: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def set_inventory_quantities(self, quantities: List[Dict[str, Any]],
+                                 reference_uri: Optional[str] = None,
+                                 ignore_compare: bool = True) -> Dict[str, Any]:
         """
         Sets absolute inventory quantities for multiple items at once.
-        
+
         Args:
             quantities: List of dicts with keys: inventoryItemId, locationId, quantity
-                        Example: [{"inventoryItemId": "gid://...", "locationId": "gid://...", "quantity": 10}]
-        
-        Returns:
-            The API response containing any errors or changes made.
+            reference_uri: optional referenceDocumentUri tag (P0 lineage — identifies this as
+                           our own sync write so the resulting webhook echo is attributable).
+            ignore_compare: when False, Shopify enforces compareQuantity (compare-and-set).
         """
-        variables = {
-            "input": {
-                "reason": "correction",
-                "name": "available",
-                "quantities": quantities
-            }
+        inp = {
+            "reason": "correction",
+            "name": "available",
+            "ignoreCompareQuantity": ignore_compare,
+            "quantities": quantities,
         }
-        return self.execute_mutation("inventorySetQuantities", variables)
+        if reference_uri:
+            inp["referenceDocumentUri"] = reference_uri
+        return self.execute_mutation("inventorySetQuantities", {"input": inp})
 
-    def adjust_inventory_quantities(self, changes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def adjust_inventory_quantities(self, changes: List[Dict[str, Any]],
+                                    reference_uri: Optional[str] = None) -> Dict[str, Any]:
         """
         Adjusts inventory quantities by delta for multiple items at once.
         Uses the inventoryAdjustQuantities mutation (relative, not absolute).
 
         Args:
             changes: List of dicts with keys: inventoryItemId, locationId, delta
-                     Example: [{"inventoryItemId": "gid://...", "locationId": "gid://...", "delta": -1}]
-
-        Returns:
-            The API response containing any errors or changes made.
+            reference_uri: optional referenceDocumentUri tag (P0 lineage).
         """
-        variables = {
-            "input": {
-                "reason": "correction",
-                "name": "available",
-                "changes": changes
-            }
+        inp = {
+            "reason": "correction",
+            "name": "available",
+            "changes": changes,
         }
-        return self.execute_mutation("inventoryAdjustQuantities", variables)
+        if reference_uri:
+            inp["referenceDocumentUri"] = reference_uri
+        return self.execute_mutation("inventoryAdjustQuantities", {"input": inp})
 
     def get_locations(self) -> List[Dict[str, Any]]:
         """Retrieves all inventory locations for a store using the REST API."""

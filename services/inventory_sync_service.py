@@ -12,6 +12,7 @@ Key behaviors:
 import hmac
 import hashlib
 import base64
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 import threading
@@ -24,6 +25,8 @@ from database import SessionLocal
 from shopify_service import ShopifyService
 from crud import product as crud_product
 from services import audit_logger
+from services import sync_guards
+from services import alerting
 
 # --- Configuration ---
 INTENT_TTL_SECONDS = 60
@@ -56,7 +59,8 @@ def cleanup_barcode_locks():
 
 # --- Main Service Logic ---
 
-def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str):
+def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str,
+                   webhook_id: Optional[str] = None):
     """
     Process an inventory_levels/update webhook.
     
@@ -135,14 +139,26 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
             print(f"[SYNC] Ignored: Variant belongs to a soft-deleted product (barcode={barcode}, product_id={variant.product_id})")
             return
 
-        # BUG-17 FIX: Dedup with rollback safety
+        # P0.5: idempotency by Shopify webhook id (stable across retries), with the legacy
+        # value-hash as a fallback when the header is absent.
         try:
-            if _is_duplicate_webhook(db, store_id, barcode, new_available, source_timestamp):
-                print(f"[SYNC] Ignored: Duplicate webhook for {barcode} at store {store_id}.")
+            if _is_duplicate_webhook(db, store_id, barcode, new_available, source_timestamp, webhook_id=webhook_id):
+                print(f"[SYNC] Ignored: Duplicate webhook for {barcode} at store {store_id} (id={webhook_id}).")
                 return
         except Exception as e:
             db.rollback()
             print(f"[SYNC-WARN] Dedup check failed, proceeding anyway: {e}")
+
+        # P0.5/P0.2: VALUE-INDEPENDENT self-echo suppression. If we wrote to THIS exact
+        # inventory item within the echo window, this webhook is the echo of our own write —
+        # regardless of the value it carries. This is the core fix for the stale-mirror
+        # phantom-delta problem: we never recompute a delta from a drifted baseline for our
+        # own echoes. We still resync the local mirror to the observed (authoritative) value.
+        echo_op = _find_self_echo(db, store_id, inventory_item_id)
+        if echo_op is not None:
+            print(f"[SYNC] Suppressed echo (lineage op={echo_op}) for {barcode}@{store_id}.")
+            _resync_local_baseline(db, variant.id, payload.get("location_id"), new_available)
+            return
 
         # --- DELTA COMPUTATION ---
         # Get the last known stock for this variant at this store's sync location.
@@ -192,20 +208,47 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
             print(f"[SYNC] Ignored: Stale event for {barcode} from store {store_id}.")
             return
 
-        # 1. Update the authoritative version
+        # 1. Update the authoritative version + keep the source store's local mirror exact.
         _update_authoritative_version(db, barcode, store_id, new_available, source_timestamp)
+        _resync_local_baseline(db, variant.id, payload.get("location_id"), new_available)
 
-        # 2. Update the local database for the triggering variant (absolute — this is the source of truth)
-        source_location_id = payload.get("location_id")
-        if source_location_id:
-            crud_product.update_inventory_levels_for_variants(
-                db, variant_ids=[variant.id], location_id=source_location_id,
-                new_quantity=new_available
-            )
+        # --- P0 PROPAGATION GUARDS (run after the local mirror is updated, so a blocked
+        #     propagation still leaves our state consistent and the next delta sane) ---
 
-        # 3. Find ALL variants with this barcode to propagate to.
-        propagation_targets = _get_all_propagation_variants(
-            db, barcode, exclude_variant_id=variant.id
+        # Kill switch: ingest + mirror, but emit nothing to other stores.
+        if not sync_guards.propagation_enabled():
+            audit_logger.log(category="STOCK", action="propagation_disabled",
+                             message=f"Propagation globally disabled; ingested [{barcode}]@{store_id} only",
+                             store_id=store_id, target=barcode, severity="WARN",
+                             details={"quantity": new_available})
+            return
+
+        # P0.2/P0.3 circuit breaker: this barcode tripped the storm/abnormal guard recently.
+        if _is_barcode_broken(db, barcode) or sync_guards.is_quarantined(barcode):
+            alerting.warning("inventory_sync.breaker",
+                             f"Skipped propagation for quarantined barcode {barcode}",
+                             {"barcode": barcode, "store_id": store_id, "quantity": new_available})
+            return
+
+        # P0.3 abnormal-delta guard: a single delta larger than MAX_ABS_DELTA is NOT
+        # propagated as a blind relative move — it is routed to reconciliation/review.
+        allowed, reason = sync_guards.check_delta(delta)
+        if not allowed:
+            alerting.critical("inventory_sync.delta_guard",
+                              f"Blocked oversized delta {delta} for barcode {barcode}",
+                              {"barcode": barcode, "store_id": store_id, "delta": delta,
+                               "last_known": last_known, "new_available": new_available, "reason": reason})
+            audit_logger.log(category="STOCK", action="propagation_blocked_oversized_delta",
+                             message=f"Blocked delta={delta} for [{barcode}] ({reason})",
+                             store_id=store_id, target=barcode, severity="CRITICAL",
+                             details={"delta": delta, "last_known": last_known, "quantity": new_available})
+            return
+
+        # 3. Find candidate variants, then collapse to CANONICAL targets (P0.1):
+        #    at most one variant per store, origin store fully excluded.
+        raw_targets = _get_all_propagation_variants(db, barcode, exclude_variant_id=variant.id)
+        propagation_targets = sync_guards.select_canonical_targets(
+            raw_targets, origin_store_id=variant.store_id
         )
 
         if propagation_targets:
@@ -222,11 +265,30 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
                 models.Store.enabled == True
             ).all()
 
+            # P0.2 storm breaker: if this barcode has been propagated too many times in the
+            # window, trip the circuit breaker, quarantine it, alert, and STOP (the cascade
+            # signature). One-off legitimate changes never trip this; a runaway does.
+            sync_guards.record_propagation(barcode)
+            if sync_guards.is_storming(barcode):
+                _trip_breaker(db, barcode, reason="propagation_storm",
+                              details={"window_s": sync_guards.STORM_WINDOW_SECONDS,
+                                       "max": sync_guards.STORM_MAX_PROPAGATIONS,
+                                       "store_id": store_id, "delta": delta})
+                alerting.critical("inventory_sync.storm",
+                                  f"Propagation storm on barcode {barcode} — quarantined",
+                                  {"barcode": barcode, "store_id": store_id, "delta": delta})
+                audit_logger.log(category="STOCK", action="propagation_storm_tripped",
+                                 message=f"Storm breaker tripped for [{barcode}] — quarantined",
+                                 store_id=store_id, target=barcode, severity="CRITICAL",
+                                 details={"delta": delta, "quantity": new_available})
+                return
+
+            sync_op = str(uuid.uuid4())
             total_variants = sum(len(vs) for vs in store_map.values())
             mode = "delta" if delta is not None else "absolute"
-            print(f"[SYNC] Propagating '{barcode}' {mode}={'+'+ str(delta) if delta and delta > 0 else delta} (new_qty={new_available}) to {total_variants} variants across {len(store_map)} stores.")
+            print(f"[SYNC] Propagating '{barcode}' {mode}={delta} (new_qty={new_available}) op={sync_op} to {total_variants} variants across {len(store_map)} stores.")
 
-            # Audit log the propagation event
+            # Audit log the propagation event (with lineage)
             audit_logger.log(
                 category="STOCK",
                 action="stock_propagation_started",
@@ -238,36 +300,28 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
                     "delta": delta,
                     "quantity": new_available,
                     "last_known": last_known,
+                    "sync_operation_uuid": sync_op,
+                    "origin_store_id": variant.store_id,
+                    "origin_inventory_item_id": inventory_item_id,
                     "target_stores": {str(k): len(v) for k, v in store_map.items()},
                     "total_variants": total_variants,
-                    "inventory_item_id": inventory_item_id,
                 },
             )
 
             if delta is not None:
-                # --- DELTA MODE: adjust all targets by delta ---
+                # --- DELTA MODE: adjust the one canonical target per store by delta ---
                 try:
-                    _execute_delta_propagation(db, barcode, delta, new_available, target_stores, store_map)
+                    _execute_delta_propagation(db, barcode, delta, new_available, target_stores, store_map,
+                                               sync_op, variant.store_id, inventory_item_id)
                 except Exception as e:
                     audit_logger.log_error("inventory_sync_service.handle_webhook",
                                            f"Delta propagation failed for barcode {barcode}",
                                            details={"barcode": barcode, "delta": delta}, exc=e)
             else:
                 # --- ABSOLUTE FALLBACK: first-time sync, no baseline available ---
-                # Use legacy SET approach with WriteIntents for echo suppression
-                barcode_version_obj = db.query(models.BarcodeVersion).filter(
-                    models.BarcodeVersion.barcode == barcode
-                ).first()
-                current_version = barcode_version_obj.version if barcode_version_obj else 0
-
                 try:
-                    _create_write_intents(db, barcode, new_available, current_version, target_stores)
-                except Exception as e:
-                    db.rollback()
-                    print(f"[SYNC-WARN] Failed to create write intents for {barcode}: {e}")
-
-                try:
-                    _execute_absolute_propagation(db, barcode, new_available, target_stores, store_map)
+                    _execute_absolute_propagation(db, barcode, new_available, target_stores, store_map,
+                                                  sync_op, variant.store_id, inventory_item_id)
                 except Exception as e:
                     audit_logger.log_error("inventory_sync_service.handle_webhook",
                                            f"Absolute propagation failed for barcode {barcode}",
@@ -515,14 +569,119 @@ def _sync_variant_to_barcode_group(db: Session, store_id: int, variant_id: int, 
 
 # --- Helper Functions ---
 
-def _is_duplicate_webhook(db: Session, store_id: int, barcode: str, total: int, timestamp: datetime) -> bool:
-    event_id = hashlib.sha256(f"{store_id}-{barcode}-{total}-{timestamp.isoformat()}".encode()).hexdigest()
+def _is_duplicate_webhook(db: Session, store_id: int, barcode: str, total: int, timestamp: datetime,
+                          webhook_id: Optional[str] = None) -> bool:
+    # P0.5: prefer Shopify's X-Shopify-Webhook-Id (stable across retries of the same event)
+    # over the weak value+timestamp hash, which collided on distinct cascade steps.
+    if webhook_id:
+        event_id = f"whid:{webhook_id}"
+    else:
+        event_id = hashlib.sha256(f"{store_id}-{barcode}-{total}-{timestamp.isoformat()}".encode()).hexdigest()
     if db.query(models.ProcessedWebhook).filter(models.ProcessedWebhook.id == event_id).first():
         return True
     new_record = models.ProcessedWebhook(id=event_id, expires_at=datetime.now(timezone.utc) + timedelta(seconds=DUPLICATE_TTL_SECONDS))
     db.add(new_record)
     db.commit()
     return False
+
+
+def _resync_local_baseline(db: Session, variant_id: int, location_id, new_available: int):
+    """Keep the source store's local mirror exactly equal to the observed (authoritative)
+    Shopify value. Never used as a propagation source of truth — only to keep deltas sane."""
+    if not location_id:
+        return
+    try:
+        crud_product.update_inventory_levels_for_variants(
+            db, variant_ids=[variant_id], location_id=location_id, new_quantity=new_available
+        )
+    except Exception:
+        db.rollback()
+
+
+def _find_self_echo(db: Session, store_id: int, inventory_item_id: Optional[int]) -> Optional[str]:
+    """P0.5: value-INDEPENDENT echo detection. If WE wrote to this exact (store, inventory_item)
+    within the echo window, return the originating sync_operation_uuid and CONSUME the marker
+    (one outbound write => exactly one expected echo). Consuming is safe because exact
+    redeliveries of the same echo are caught separately by webhook-id dedup; not consuming
+    would suppress a genuine later change to this item for the whole TTL (oversell risk)."""
+    if inventory_item_id is None:
+        return None
+    marker = (
+        db.query(models.WriteIntent)
+        .filter(
+            models.WriteIntent.target_store_id == store_id,
+            models.WriteIntent.inventory_item_id == inventory_item_id,
+            models.WriteIntent.sync_operation_uuid.isnot(None),
+            models.WriteIntent.expires_at > datetime.now(timezone.utc),
+        )
+        .order_by(models.WriteIntent.id.asc())  # FIFO: consume oldest first
+        .first()
+    )
+    if marker is None:
+        return None
+    op = marker.sync_operation_uuid
+    try:
+        db.delete(marker)
+        db.commit()
+    except Exception:
+        db.rollback()
+    return op
+
+
+def _create_echo_marker(db: Session, barcode: str, target_store_id: int, inventory_item_id: int,
+                        expected_qty: Optional[int], sync_op: str, origin_store_id: int,
+                        origin_item_id: Optional[int], depth: int = 1):
+    """Record an outbound-write lineage marker so the resulting webhook echo is recognised
+    (value-independently) as ours. expected_qty is stored for the legacy value-based fallback."""
+    db.add(models.WriteIntent(
+        barcode=barcode,
+        target_store_id=target_store_id,
+        inventory_item_id=inventory_item_id,
+        quantity=expected_qty if expected_qty is not None else 0,
+        barcode_version=0,
+        sync_operation_uuid=sync_op,
+        origin_store_id=origin_store_id,
+        origin_inventory_item_id=origin_item_id,
+        propagation_depth=depth,
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=sync_guards.ECHO_TTL_SECONDS),
+    ))
+
+
+def _is_barcode_broken(db: Session, barcode: str) -> bool:
+    """True if a live circuit-breaker row exists for this barcode (DB-persisted quarantine)."""
+    try:
+        row = (
+            db.query(models.BarcodeCircuitBreaker)
+            .filter(
+                models.BarcodeCircuitBreaker.barcode == barcode,
+                models.BarcodeCircuitBreaker.expires_at > datetime.now(timezone.utc),
+            )
+            .first()
+        )
+        return row is not None
+    except Exception:
+        db.rollback()
+        return False
+
+
+def _trip_breaker(db: Session, barcode: str, reason: str, details: Optional[Dict[str, Any]] = None):
+    """Persist a circuit-breaker row (and set the in-process quarantine) so this barcode is
+    refused for propagation until it expires."""
+    expires = datetime.now(timezone.utc) + timedelta(seconds=sync_guards.STORM_QUARANTINE_SECONDS)
+    try:
+        existing = db.query(models.BarcodeCircuitBreaker).filter_by(barcode=barcode).first()
+        if existing:
+            existing.reason = reason
+            existing.expires_at = expires
+            existing.tripped_at = datetime.now(timezone.utc)
+            existing.details = details
+        else:
+            db.add(models.BarcodeCircuitBreaker(barcode=barcode, reason=reason,
+                                                expires_at=expires, details=details))
+        db.commit()
+    except Exception:
+        db.rollback()
+    sync_guards.quarantine(barcode)
 
 def _is_echo(db: Session, store_id: int, barcode: str, observed_total: int,
              inventory_item_id: Optional[int] = None) -> bool:
@@ -619,19 +778,20 @@ def _execute_delta_propagation(
     delta: int,
     new_source_qty: int,
     target_stores: List[models.Store],
-    store_variant_map: Dict[int, List[models.ProductVariant]]
+    store_variant_map: Dict[int, List[models.ProductVariant]],
+    sync_op: str,
+    origin_store_id: int,
+    origin_item_id: Optional[int],
 ):
     """
-    Execute DELTA-based propagation to target stores.
-    Uses inventoryAdjustQuantities (relative delta) instead of inventorySetQuantities (absolute).
-    
-    This correctly handles concurrent orders: if Store A sells 1 unit (delta=-1),
-    all other stores are adjusted by -1 regardless of their current stock.
+    DELTA-based propagation to the canonical target variant of each store.
+
+    P0.4 floor: before each write we project current+delta; if it would breach the floor we
+    SET that item to the floor (absolute) instead of applying the raw negative delta, and alert.
+    P0.2 lineage: each write records a value-independent echo marker carrying the sync op + origin.
     """
     store_lookup = {s.id: s for s in target_stores}
-    
-    now = datetime.now(timezone.utc)
-    expires = now + timedelta(seconds=INTENT_TTL_SECONDS)
+    ref_uri = f"inventory-sync://op/{sync_op}"
 
     for sid, variants_to_update in store_variant_map.items():
         store = store_lookup.get(sid)
@@ -640,71 +800,83 @@ def _execute_delta_propagation(
                 print(f"[SYNC-ERROR] Cannot propagate to store '{store.name}': No sync location configured.")
             continue
 
-        # BUG-34 FIX: Calculate the expected absolute quantity and create WriteIntents 
-        # BEFORE executing the API call to prevent multi-worker race conditions on echoes.
+        location_gid = f"gid://shopify/Location/{store.sync_location_id}"
+        adjust_payload, adjust_ids = [], []
+        set_payload, set_ids = [], []
+
+        # Build per-variant operations (markers created BEFORE the API call), applying the floor.
         try:
             for v in variants_to_update:
+                if not v.inventory_item_id:
+                    continue
                 level = db.query(models.InventoryLevel).filter(
                     models.InventoryLevel.variant_id == v.id,
                     models.InventoryLevel.location_id == store.sync_location_id,
                 ).first()
-                if level and level.available is not None:
-                    expected_qty = level.available + delta
-                    intent = models.WriteIntent(
-                        barcode=barcode, target_store_id=store.id,
-                        quantity=expected_qty, barcode_version=0, expires_at=expires,
-                        inventory_item_id=v.inventory_item_id,
-                    )
-                    db.add(intent)
+                current = level.available if (level and level.available is not None) else None
+                op, value, clamped = sync_guards.apply_floor(current, delta)
+                expected = value if clamped else ((current + delta) if current is not None else None)
+
+                _create_echo_marker(db, barcode, store.id, v.inventory_item_id, expected,
+                                    sync_op, origin_store_id, origin_item_id, depth=1)
+
+                item_gid = f"gid://shopify/InventoryItem/{v.inventory_item_id}"
+                if clamped:
+                    set_payload.append({"inventoryItemId": item_gid, "locationId": location_gid, "quantity": value})
+                    set_ids.append(v.id)
+                    alerting.warning("inventory_sync.floor",
+                                     f"Floored {barcode} on '{store.name}' to {value} (delta {delta} would breach floor)",
+                                     {"barcode": barcode, "store": store.name, "current": current,
+                                      "delta": delta, "floored_to": value})
+                    audit_logger.log(category="STOCK", action="inventory_floor_clamp",
+                                     message=f"Floored [{barcode}] on '{store.name}' to {value} (would have been {(current or 0)+delta})",
+                                     store_id=store.id, target=barcode, severity="WARN",
+                                     details={"current": current, "delta": delta, "floored_to": value,
+                                              "sync_operation_uuid": sync_op})
+                else:
+                    adjust_payload.append({"inventoryItemId": item_gid, "locationId": location_gid, "delta": delta})
+                    adjust_ids.append(v.id)
             db.commit()
         except Exception as e:
             db.rollback()
-            print(f"[SYNC-WARN] Could not create WriteIntent for delta on store {store.name}: {e}")
-
-        primary_location_gid = f"gid://shopify/Location/{store.sync_location_id}"
-
-        changes_payload = [
-            {
-                "inventoryItemId": f"gid://shopify/InventoryItem/{v.inventory_item_id}",
-                "locationId": primary_location_gid,
-                "delta": delta
-            }
-            for v in variants_to_update if v.inventory_item_id
-        ]
-
-        if not changes_payload:
+            print(f"[SYNC-WARN] Could not stage propagation for store {store.name}: {e}")
             continue
 
         try:
             service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
-            result = service.adjust_inventory_quantities(changes_payload)
 
-            user_errors = result.get("inventoryAdjustQuantities", {}).get("userErrors", [])
-            if user_errors:
-                raise Exception(str(user_errors))
+            if adjust_payload:
+                result = service.adjust_inventory_quantities(adjust_payload, reference_uri=ref_uri)
+                ue = result.get("inventoryAdjustQuantities", {}).get("userErrors", [])
+                if ue:
+                    raise Exception(str(ue))
+                crud_product.adjust_inventory_levels_for_variants(
+                    db, variant_ids=adjust_ids, location_id=store.sync_location_id, delta=delta
+                )
 
-            delta_str = f"+{delta}" if delta > 0 else str(delta)
-            print(f"[SYNC] Adjusted {delta_str} for barcode {barcode} on store '{store.name}' ({len(changes_payload)} variants).")
+            if set_payload:
+                result = service.set_inventory_quantities(set_payload, reference_uri=ref_uri, ignore_compare=True)
+                ue = result.get("inventorySetQuantities", {}).get("userErrors", [])
+                if ue:
+                    raise Exception(str(ue))
+                # Each clamped item was set to the floor value.
+                for vid, item in zip(set_ids, set_payload):
+                    crud_product.update_inventory_levels_for_variants(
+                        db, variant_ids=[vid], location_id=store.sync_location_id, new_quantity=item["quantity"]
+                    )
 
+            print(f"[SYNC] Propagated {barcode} to '{store.name}' (adjust={len(adjust_payload)}, floor-set={len(set_payload)}).")
             audit_logger.log_propagation(
-                barcode=barcode,
-                source_store="webhook",
-                target_store=store.name,
+                barcode=barcode, source_store="webhook", target_store=store.name,
                 quantity=new_source_qty,
-                details={"variant_count": len(changes_payload), "delta": delta, "mode": "delta"},
+                details={"variant_count": len(adjust_payload) + len(set_payload), "delta": delta,
+                         "mode": "delta", "floored": len(set_payload),
+                         "sync_operation_uuid": sync_op, "origin_store_id": origin_store_id},
             )
-
-            # Update local DB using delta-based increment (atomic SQL operation)
-            variant_ids = [v.id for v in variants_to_update]
-            crud_product.adjust_inventory_levels_for_variants(
-                db, variant_ids=variant_ids, location_id=store.sync_location_id,
-                delta=delta
-            )
-
         except Exception as e:
-            print(f"[SYNC-ERROR] Failed to adjust store '{store.name}': {e}")
+            print(f"[SYNC-ERROR] Failed to propagate to store '{store.name}': {e}")
             audit_logger.log_error("inventory_sync_service._execute_delta_propagation",
-                                   f"Failed to adjust barcode {barcode} on store '{store.name}'",
+                                   f"Failed to propagate barcode {barcode} to store '{store.name}'",
                                    details={"barcode": barcode, "delta": delta}, exc=e)
 
 
@@ -713,14 +885,18 @@ def _execute_absolute_propagation(
     barcode: str,
     desired_total: int,
     target_stores: List[models.Store],
-    store_variant_map: Dict[int, List[models.ProductVariant]]
+    store_variant_map: Dict[int, List[models.ProductVariant]],
+    sync_op: str,
+    origin_store_id: int,
+    origin_item_id: Optional[int],
 ):
     """
-    Execute ABSOLUTE propagation to target stores (legacy fallback).
-    Used when no baseline is available (first-time sync) or by reconciliation.
-    Uses inventorySetQuantities with ignoreCompareQuantity=True.
+    ABSOLUTE propagation (first-time sync, no baseline). SETs the canonical target of each
+    store to desired_total (floored), recording value-independent echo markers + lineage.
     """
     store_lookup = {s.id: s for s in target_stores}
+    ref_uri = f"inventory-sync://op/{sync_op}"
+    value = max(desired_total, sync_guards.INVENTORY_FLOOR)
 
     for sid, variants_to_update in store_variant_map.items():
         store = store_lookup.get(sid)
@@ -729,54 +905,48 @@ def _execute_absolute_propagation(
                 print(f"[SYNC-ERROR] Cannot propagate to store '{store.name}': No sync location configured.")
             continue
 
-        primary_location_gid = f"gid://shopify/Location/{store.sync_location_id}"
-
-        quantities_payload = [
-            {
-                "inventoryItemId": f"gid://shopify/InventoryItem/{v.inventory_item_id}",
-                "locationId": primary_location_gid,
-                "quantity": desired_total
-            }
-            for v in variants_to_update if v.inventory_item_id
-        ]
+        location_gid = f"gid://shopify/Location/{store.sync_location_id}"
+        quantities_payload, variant_ids = [], []
+        try:
+            for v in variants_to_update:
+                if not v.inventory_item_id:
+                    continue
+                _create_echo_marker(db, barcode, store.id, v.inventory_item_id, value,
+                                    sync_op, origin_store_id, origin_item_id, depth=1)
+                quantities_payload.append({
+                    "inventoryItemId": f"gid://shopify/InventoryItem/{v.inventory_item_id}",
+                    "locationId": location_gid, "quantity": value,
+                })
+                variant_ids.append(v.id)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"[SYNC-WARN] Could not stage absolute propagation for store {store.name}: {e}")
+            continue
 
         if not quantities_payload:
             continue
 
         try:
             service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
-            variables = {
-                "input": {
-                    "name": "available", "reason": "correction", "ignoreCompareQuantity": True,
-                    "quantities": quantities_payload,
-                }
-            }
-            result = service.execute_mutation("inventorySetQuantities", variables)
+            result = service.set_inventory_quantities(quantities_payload, reference_uri=ref_uri, ignore_compare=True)
             if result.get("inventorySetQuantities", {}).get("userErrors"):
-                 raise Exception(str(result["inventorySetQuantities"]["userErrors"]))
+                raise Exception(str(result["inventorySetQuantities"]["userErrors"]))
 
-            print(f"[SYNC] Set qty {desired_total} for barcode {barcode} on store '{store.name}' ({len(quantities_payload)} variants).")
-
+            print(f"[SYNC] Set qty {value} for barcode {barcode} on store '{store.name}' ({len(quantities_payload)} variants).")
             audit_logger.log_propagation(
-                barcode=barcode,
-                source_store="webhook",
-                target_store=store.name,
-                quantity=desired_total,
-                details={"variant_count": len(quantities_payload), "mode": "absolute"},
+                barcode=barcode, source_store="webhook", target_store=store.name, quantity=value,
+                details={"variant_count": len(quantities_payload), "mode": "absolute",
+                         "sync_operation_uuid": sync_op, "origin_store_id": origin_store_id},
             )
-
-            # Update local DB with absolute value
-            variant_ids = [v.id for v in variants_to_update]
             crud_product.update_inventory_levels_for_variants(
-                db, variant_ids=variant_ids, location_id=store.sync_location_id,
-                new_quantity=desired_total
+                db, variant_ids=variant_ids, location_id=store.sync_location_id, new_quantity=value
             )
-
         except Exception as e:
             print(f"[SYNC-ERROR] Failed to write to store '{store.name}': {e}")
             audit_logger.log_error("inventory_sync_service._execute_absolute_propagation",
                                    f"Failed to write barcode {barcode} to store '{store.name}'",
-                                   details={"barcode": barcode, "quantity": desired_total}, exc=e)
+                                   details={"barcode": barcode, "quantity": value}, exc=e)
 
 
 # --- Scheduled Cleanup ---
@@ -794,10 +964,14 @@ def cleanup_expired_records():
             models.WriteIntent.expires_at < now
         ).delete(synchronize_session=False)
 
+        expired_breakers = db.query(models.BarcodeCircuitBreaker).filter(
+            models.BarcodeCircuitBreaker.expires_at < now
+        ).delete(synchronize_session=False)
+
         db.commit()
 
-        if expired_webhooks > 0 or expired_intents > 0:
-            print(f"[CLEANUP] Removed {expired_webhooks} expired webhooks and {expired_intents} expired intents.")
+        if expired_webhooks > 0 or expired_intents > 0 or expired_breakers > 0:
+            print(f"[CLEANUP] Removed {expired_webhooks} webhooks, {expired_intents} intents, {expired_breakers} breakers.")
 
         cleanup_barcode_locks()
 

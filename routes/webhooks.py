@@ -30,6 +30,7 @@ async def receive_webhook(
     x_shopify_hmac_sha256: str = Header(None),
     x_shopify_topic: str = Header(None),
     x_shopify_triggered_at: str = Header(None),
+    x_shopify_webhook_id: str = Header(None),
     db: Session = Depends(get_db)
 ):
     """
@@ -81,10 +82,11 @@ async def receive_webhook(
     # --- Dispatch to the correct service based on topic ---
     if x_shopify_topic == "inventory_levels/update":
         background_tasks.add_task(
-            inventory_sync_service.handle_webhook, 
-            store_id, 
+            inventory_sync_service.handle_webhook,
+            store_id,
             payload,
-            x_shopify_triggered_at
+            x_shopify_triggered_at,
+            x_shopify_webhook_id,
         )
     elif x_shopify_topic in ["products/create", "products/update", "products/delete", "inventory_items/update", "inventory_items/delete"]:
         background_tasks.add_task(
