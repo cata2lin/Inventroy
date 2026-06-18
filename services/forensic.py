@@ -57,8 +57,8 @@ def storm_window(db: Session, barcode: str, around_utc: str, window_minutes: int
                details->>'variant_count' AS vc, substring(message,1,100) AS message
         FROM audit_logs
         WHERE target = :b
-          AND timestamp BETWEEN (:t::timestamptz - (:w || ' minutes')::interval)
-                            AND (:t::timestamptz + (:w || ' minutes')::interval)
+          AND timestamp BETWEEN (CAST(:t AS timestamptz) - (:w || ' minutes')::interval)
+                            AND (CAST(:t AS timestamptz) + (:w || ' minutes')::interval)
         ORDER BY timestamp ASC LIMIT 1000
     """), {"b": barcode, "t": around_utc, "w": window_minutes}).mappings().all()
     return {"barcode": barcode, "center": around_utc, "events": [dict(r) for r in rows]}
