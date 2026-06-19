@@ -16,7 +16,7 @@ BUG-03 FIX: Create WriteIntents before calling Shopify to prevent echo cascades.
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, literal_column
+from sqlalchemy import func, and_, literal_column, case
 
 from database import SessionLocal
 import models
@@ -182,7 +182,11 @@ def _determine_authoritative_stock(db: Session, barcode: str) -> tuple:
         ).first()
         
         if auth_store and auth_store.enabled and auth_store.sync_location_id:
-            # Find a variant with this barcode on the authoritative store
+            # Find the CANONICAL variant with this barcode on the authoritative store.
+            # MUST match the canonical ordering used everywhere else (diagnostics.CANON_ORDER):
+            # prefer barcode-primary -> primary -> HAS-SKU -> lowest id. A plain .first() could
+            # pick an empty-SKU ORPHAN duplicate and read its (wrong) live qty, driving reconcile
+            # to converge everyone to the orphan's value (oversell). See incident 7865789547985.
             auth_variant = (
                 db.query(models.ProductVariant)
                 .join(models.Product)
@@ -191,6 +195,12 @@ def _determine_authoritative_stock(db: Session, barcode: str) -> tuple:
                     models.ProductVariant.store_id == auth_store.id,
                     models.ProductVariant.inventory_item_id.isnot(None),
                     models.Product.deleted_at.is_(None),
+                )
+                .order_by(
+                    models.ProductVariant.is_barcode_primary.desc(),
+                    models.ProductVariant.is_primary_variant.desc(),
+                    case((func.nullif(models.ProductVariant.sku, '').isnot(None), 0), else_=1),
+                    models.ProductVariant.id.asc(),
                 )
                 .first()
             )
