@@ -330,6 +330,43 @@ class ShopifyService:
             inp["referenceDocumentUri"] = reference_uri
         return self.execute_mutation("inventoryAdjustQuantities", {"input": inp})
 
+    @staticmethod
+    def _after_available(adjustment_group: Optional[Dict[str, Any]]) -> Optional[int]:
+        """Extract the post-write quantity of the `available` change ONLY.
+        Shopify returns one change per (item x quantity-name) — an `available` AND a side-effect
+        `on_hand` change with a DIFFERENT quantityAfterChange. The inbound webhook reports the
+        `available` value, so we MUST read that bucket (never on_hand) or echo-matching breaks."""
+        if not adjustment_group:
+            return None
+        for ch in (adjustment_group.get("changes") or []):
+            if ch.get("name") == "available":
+                return ch.get("quantityAfterChange")
+        return None
+
+    def adjust_inventory_quantities_single(self, inventory_item_gid: str, location_gid: str, delta: int,
+                                           reference_uri: Optional[str] = None) -> "tuple":
+        """SYNC_ECHO_AUTHORITATIVE: adjust ONE item by delta and return (raw_result, after_available),
+        where after_available is the authoritative post-write `available` quantity (None if absent).
+        Single-item so quantityAfterChange is unambiguously attributable to this inventory_item."""
+        inp = {"reason": "correction", "name": "available",
+               "changes": [{"inventoryItemId": inventory_item_gid, "locationId": location_gid, "delta": delta}]}
+        if reference_uri:
+            inp["referenceDocumentUri"] = reference_uri
+        result = self.execute_mutation("inventoryAdjustQuantities", {"input": inp})
+        after = self._after_available((result or {}).get("inventoryAdjustQuantities", {}).get("inventoryAdjustmentGroup"))
+        return result, after
+
+    def set_inventory_quantities_single(self, inventory_item_gid: str, location_gid: str, quantity: int,
+                                        reference_uri: Optional[str] = None, ignore_compare: bool = True) -> "tuple":
+        """SYNC_ECHO_AUTHORITATIVE: absolute-SET ONE item and return (raw_result, after_available)."""
+        inp = {"reason": "correction", "name": "available", "ignoreCompareQuantity": ignore_compare,
+               "quantities": [{"inventoryItemId": inventory_item_gid, "locationId": location_gid, "quantity": quantity}]}
+        if reference_uri:
+            inp["referenceDocumentUri"] = reference_uri
+        result = self.execute_mutation("inventorySetQuantities", {"input": inp})
+        after = self._after_available((result or {}).get("inventorySetQuantities", {}).get("inventoryAdjustmentGroup"))
+        return result, after
+
     def get_locations(self) -> List[Dict[str, Any]]:
         """Retrieves all inventory locations for a store using the REST API."""
         response = requests.get(f"{self.rest_endpoint}/locations.json", headers=self.headers)

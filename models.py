@@ -199,6 +199,10 @@ class WriteIntent(Base):
     origin_store_id = Column(Integer, nullable=True)
     origin_inventory_item_id = Column(BIGINT, nullable=True)
     propagation_depth = Column(Integer, nullable=False, server_default="0")
+    # SYNC_ECHO_AUTHORITATIVE: the Shopify-authoritative post-write `available` quantity captured
+    # from the single-item mutation response. NULL => fall back to value-INDEPENDENT echo suppression
+    # (today's behaviour). Non-NULL => the inbound echo's residual is observed - authoritative_qty.
+    authoritative_qty = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
