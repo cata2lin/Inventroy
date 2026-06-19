@@ -377,6 +377,22 @@ class ShopifyService:
         ue = (result or {}).get("inventorySetQuantities", {}).get("userErrors", []) or []
         return result, ue
 
+    def get_available_single(self, inventory_item_gid: str, location_gid: str) -> Optional[int]:
+        """Read the live `available` quantity for one inventory item at one location (or None).
+        Used to re-anchor a compare-and-set after a COMPARE_QUANTITY_STALE (the local mirror drifted)."""
+        q = ("query($i: ID!){ inventoryItem(id:$i){ inventoryLevels(first:20){ nodes{ "
+             "location{id} quantities(names:[\"available\"]){ name quantity } } } } }")
+        r = self._execute_query(q, {"i": inventory_item_gid})
+        ii = (r or {}).get("inventoryItem")
+        if not ii:
+            return None
+        for lvl in ii.get("inventoryLevels", {}).get("nodes", []):
+            if lvl.get("location", {}).get("id") == location_gid:
+                for qq in lvl.get("quantities", []):
+                    if qq.get("name") == "available":
+                        return qq.get("quantity")
+        return None
+
     def get_locations(self) -> List[Dict[str, Any]]:
         """Retrieves all inventory locations for a store using the REST API."""
         response = requests.get(f"{self.rest_endpoint}/locations.json", headers=self.headers)

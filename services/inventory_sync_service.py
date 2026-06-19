@@ -943,15 +943,35 @@ def _propagate_delta_single_item(db: Session, barcode: str, delta: int, new_sour
                         db, variant_ids=[v.id], location_id=store.sync_location_id, new_quantity=target)
                     authoritative, mode = target, "delta-cas"
                 elif any(e.get("code") == "COMPARE_QUANTITY_STALE" for e in ue):
-                    # Mirror drifted / concurrent change -> relative adjust (drift-safe),
-                    # value-INDEPENDENT marker. Exactly today's behaviour for this item.
-                    raw2, _a = service.adjust_inventory_quantities_single(item_gid, location_gid, delta, reference_uri=ref_uri)
-                    ue2 = (raw2 or {}).get("inventoryAdjustQuantities", {}).get("userErrors", [])
-                    if ue2:
-                        raise Exception(str(ue2))
-                    crud_product.adjust_inventory_levels_for_variants(
-                        db, variant_ids=[v.id], location_id=store.sync_location_id, delta=delta)
-                    mode = "delta-fallback"
+                    # Mirror drifted / a concurrent change moved it. READ Shopify's true current and
+                    # retry the compare-and-set at (C+delta) so we can STILL anchor (and heal the
+                    # drift). Bounded retries; only sustained concurrent change exhausts them.
+                    healed = False
+                    for _attempt in range(2):
+                        true_cur = service.get_available_single(item_gid, location_gid)
+                        if true_cur is None:
+                            break
+                        new_target = max(true_cur + delta, sync_guards.INVENTORY_FLOOR)
+                        raw_r, ue_r = service.set_inventory_quantities_single(
+                            item_gid, location_gid, new_target, reference_uri=ref_uri, compare_quantity=true_cur)
+                        if not ue_r:
+                            crud_product.update_inventory_levels_for_variants(
+                                db, variant_ids=[v.id], location_id=store.sync_location_id, new_quantity=new_target)
+                            authoritative, mode = new_target, "delta-cas-retry"
+                            healed = True
+                            break
+                        if not any(e.get("code") == "COMPARE_QUANTITY_STALE" for e in ue_r):
+                            raise Exception(str(ue_r))  # a real error, not a stale-compare
+                        # else: stale again (another concurrent change) -> loop and re-read
+                    if not healed:
+                        # Ultimate backstop: relative adjust (drift-safe), value-INDEPENDENT marker.
+                        raw2, _a = service.adjust_inventory_quantities_single(item_gid, location_gid, delta, reference_uri=ref_uri)
+                        ue2 = (raw2 or {}).get("inventoryAdjustQuantities", {}).get("userErrors", [])
+                        if ue2:
+                            raise Exception(str(ue2))
+                        crud_product.adjust_inventory_levels_for_variants(
+                            db, variant_ids=[v.id], location_id=store.sync_location_id, delta=delta)
+                        mode = "delta-fallback"
                 else:
                     raise Exception(str(ue))
             else:
