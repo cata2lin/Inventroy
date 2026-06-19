@@ -880,10 +880,13 @@ def _propagate_delta_single_item(db: Session, barcode: str, delta: int, new_sour
                                  store: models.Store, location_gid: str,
                                  variants_to_update: List[models.ProductVariant], ref_uri: str,
                                  sync_op: str, origin_store_id: int, origin_item_id: Optional[int]):
-    """SYNC_ECHO_AUTHORITATIVE path: write each target item via its OWN single-item Shopify mutation
-    so the post-write `available` quantity is unambiguously attributable, stamp it on that item's echo
-    marker as authoritative_qty, and resync the local mirror to that Shopify-authoritative value
-    (eliminating drift at the source). Floor-clamp behaviour matches the batched path."""
+    """SYNC_ECHO_AUTHORITATIVE path: write each target item via COMPARE-AND-SET so the authoritative
+    post-write value is known BY CONSTRUCTION (quantityAfterChange is null on these stores, so it
+    can't be read). We SET the item to (mirror M + delta) with compareQuantity=M: if it SUCCEEDS,
+    Shopify's current was M, so the result is exactly M+delta — stamp that on the echo marker. If the
+    compare FAILS (COMPARE_QUANTITY_STALE: mirror drifted or a concurrent sale moved it), fall back to
+    a relative adjust with a value-INDEPENDENT marker (drift-safe = today's behaviour). A floor-clamp
+    is an absolute SET to the floor (result known = floor)."""
     service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
     for v in variants_to_update:
         if not v.inventory_item_id:
@@ -893,12 +896,13 @@ def _propagate_delta_single_item(db: Session, barcode: str, delta: int, new_sour
             models.InventoryLevel.location_id == store.sync_location_id,
         ).first()
         current = level.available if (level and level.available is not None) else None
-        op, value, clamped = sync_guards.apply_floor(current, delta)
-        expected = value if clamped else ((current + delta) if current is not None else None)
+        op, floor_value, clamped = sync_guards.apply_floor(current, delta)
+        # The absolute target we intend to land on this item.
+        target = floor_value if clamped else ((current + delta) if current is not None else None)
         item_gid = f"gid://shopify/InventoryItem/{v.inventory_item_id}"
 
-        # Marker FIRST (authoritative_qty filled in after the write returns Shopify truth).
-        marker = _create_echo_marker(db, barcode, store.id, v.inventory_item_id, expected,
+        # Marker FIRST (authoritative_qty stamped only once the post-write value is known).
+        marker = _create_echo_marker(db, barcode, store.id, v.inventory_item_id, target,
                                      sync_op, origin_store_id, origin_item_id, depth=1,
                                      authoritative_qty=None)
         try:
@@ -908,46 +912,66 @@ def _propagate_delta_single_item(db: Session, barcode: str, delta: int, new_sour
             print(f"[SYNC-WARN] Could not stage single-item marker for {store.name}: {barcode}")
             continue
 
+        authoritative = None
+        mode = "delta-fallback"
         try:
             if clamped:
-                raw, after = service.set_inventory_quantities_single(
-                    item_gid, location_gid, value, reference_uri=ref_uri, ignore_compare=True)
-                ue = (raw or {}).get("inventorySetQuantities", {}).get("userErrors", [])
+                # Absolute SET to the floor; result is known (= floor). Ignore compare so the floor
+                # always lands (we are deliberately overriding to prevent going negative).
+                raw, ue = service.set_inventory_quantities_single(item_gid, location_gid, target, reference_uri=ref_uri)
                 if ue:
                     raise Exception(str(ue))
+                crud_product.update_inventory_levels_for_variants(
+                    db, variant_ids=[v.id], location_id=store.sync_location_id, new_quantity=target)
+                authoritative, mode = target, "delta-clamp"
                 alerting.warning("inventory_sync.floor",
-                                 f"Floored {barcode} on '{store.name}' to {value} (delta {delta} would breach floor)",
+                                 f"Floored {barcode} on '{store.name}' to {target} (delta {delta} would breach floor)",
                                  {"barcode": barcode, "store": store.name, "current": current,
-                                  "delta": delta, "floored_to": value})
+                                  "delta": delta, "floored_to": target})
                 audit_logger.log(category="STOCK", action="inventory_floor_clamp",
-                                 message=f"Floored [{barcode}] on '{store.name}' to {value} (would have been {(current or 0)+delta})",
+                                 message=f"Floored [{barcode}] on '{store.name}' to {target} (would have been {(current or 0)+delta})",
                                  store_id=store.id, target=barcode, severity="WARN",
-                                 details={"current": current, "delta": delta, "floored_to": value,
+                                 details={"current": current, "delta": delta, "floored_to": target,
                                           "sync_operation_uuid": sync_op})
-            else:
-                raw, after = service.adjust_inventory_quantities_single(
-                    item_gid, location_gid, delta, reference_uri=ref_uri)
-                ue = (raw or {}).get("inventoryAdjustQuantities", {}).get("userErrors", [])
-                if ue:
+            elif current is not None:
+                # COMPARE-AND-SET to current+delta. Success (no userErrors) => Shopify current WAS
+                # `current`, so the post-write value is exactly `target` (authoritative, known).
+                raw, ue = service.set_inventory_quantities_single(
+                    item_gid, location_gid, target, reference_uri=ref_uri, compare_quantity=current)
+                if not ue:
+                    crud_product.update_inventory_levels_for_variants(
+                        db, variant_ids=[v.id], location_id=store.sync_location_id, new_quantity=target)
+                    authoritative, mode = target, "delta-cas"
+                elif any(e.get("code") == "COMPARE_QUANTITY_STALE" for e in ue):
+                    # Mirror drifted / concurrent change -> relative adjust (drift-safe),
+                    # value-INDEPENDENT marker. Exactly today's behaviour for this item.
+                    raw2, _a = service.adjust_inventory_quantities_single(item_gid, location_gid, delta, reference_uri=ref_uri)
+                    ue2 = (raw2 or {}).get("inventoryAdjustQuantities", {}).get("userErrors", [])
+                    if ue2:
+                        raise Exception(str(ue2))
+                    crud_product.adjust_inventory_levels_for_variants(
+                        db, variant_ids=[v.id], location_id=store.sync_location_id, delta=delta)
+                    mode = "delta-fallback"
+                else:
                     raise Exception(str(ue))
-
-            # Update local mirror: prefer Shopify-authoritative truth (kills drift), else fall back.
-            if after is not None:
-                crud_product.update_inventory_levels_for_variants(
-                    db, variant_ids=[v.id], location_id=store.sync_location_id, new_quantity=after)
-                marker.authoritative_qty = after
-            elif clamped:
-                crud_product.update_inventory_levels_for_variants(
-                    db, variant_ids=[v.id], location_id=store.sync_location_id, new_quantity=value)
             else:
+                # No baseline to compare against -> relative adjust, value-independent marker.
+                raw2, _a = service.adjust_inventory_quantities_single(item_gid, location_gid, delta, reference_uri=ref_uri)
+                ue2 = (raw2 or {}).get("inventoryAdjustQuantities", {}).get("userErrors", [])
+                if ue2:
+                    raise Exception(str(ue2))
                 crud_product.adjust_inventory_levels_for_variants(
                     db, variant_ids=[v.id], location_id=store.sync_location_id, delta=delta)
+                mode = "delta-nobaseline"
+
+            if authoritative is not None:
+                marker.authoritative_qty = authoritative
             db.commit()
 
             audit_logger.log_propagation(
                 barcode=barcode, source_store="webhook", target_store=store.name, quantity=new_source_qty,
-                details={"variant_count": 1, "delta": delta, "mode": "delta-single",
-                         "floored": 1 if clamped else 0, "authoritative_qty": after,
+                details={"variant_count": 1, "delta": delta, "mode": mode,
+                         "floored": 1 if clamped else 0, "authoritative_qty": authoritative,
                          "sync_operation_uuid": sync_op, "origin_store_id": origin_store_id})
         except Exception as e:
             db.rollback()

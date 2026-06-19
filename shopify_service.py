@@ -357,15 +357,25 @@ class ShopifyService:
         return result, after
 
     def set_inventory_quantities_single(self, inventory_item_gid: str, location_gid: str, quantity: int,
-                                        reference_uri: Optional[str] = None, ignore_compare: bool = True) -> "tuple":
-        """SYNC_ECHO_AUTHORITATIVE: absolute-SET ONE item and return (raw_result, after_available)."""
-        inp = {"reason": "correction", "name": "available", "ignoreCompareQuantity": ignore_compare,
-               "quantities": [{"inventoryItemId": inventory_item_gid, "locationId": location_gid, "quantity": quantity}]}
+                                        reference_uri: Optional[str] = None,
+                                        compare_quantity: Optional[int] = None) -> "tuple":
+        """Absolute-SET ONE item and return (raw_result, user_errors).
+        When compare_quantity is given, use COMPARE-AND-SET (ignoreCompareQuantity=False): the SET
+        applies ONLY if Shopify's current `available` still equals compare_quantity, else it changes
+        NOTHING and returns a COMPARE_QUANTITY_STALE userError. On success (empty user_errors) the
+        post-write `available` is exactly `quantity` by construction — no quantityAfterChange needed
+        (that field comes back null on these stores)."""
+        q = {"inventoryItemId": inventory_item_gid, "locationId": location_gid, "quantity": quantity}
+        if compare_quantity is not None:
+            q["compareQuantity"] = compare_quantity
+        inp = {"reason": "correction", "name": "available",
+               "ignoreCompareQuantity": compare_quantity is None,
+               "quantities": [q]}
         if reference_uri:
             inp["referenceDocumentUri"] = reference_uri
         result = self.execute_mutation("inventorySetQuantities", {"input": inp})
-        after = self._after_available((result or {}).get("inventorySetQuantities", {}).get("inventoryAdjustmentGroup"))
-        return result, after
+        ue = (result or {}).get("inventorySetQuantities", {}).get("userErrors", []) or []
+        return result, ue
 
     def get_locations(self) -> List[Dict[str, Any]]:
         """Retrieves all inventory locations for a store using the REST API."""
