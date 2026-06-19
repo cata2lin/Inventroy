@@ -54,6 +54,35 @@ def use_sync_groups() -> bool:
     return _env_bool("SYNC_USE_GROUPS", False)
 
 
+def echo_authoritative_enabled() -> bool:
+    """When true, delta propagation writes each item via its OWN single-item Shopify mutation and
+    stamps the Shopify-authoritative post-write `available` quantity onto the echo marker. An inbound
+    webhook then computes residual = observed - authoritative_qty: residual 0 => pure echo (suppress);
+    residual != 0 => a real change rode in on the same echo window (propagate exactly that residual,
+    anchored to Shopify truth, never the drifted local mirror). This closes the propagation/sale race
+    that drops a real delta. Default OFF => behaviour is byte-identical to the value-independent path,
+    and any marker without a captured authoritative_qty always falls back to that safe path, so the
+    stale-mirror phantom-delta cascade can never be re-opened."""
+    return _env_bool("SYNC_ECHO_AUTHORITATIVE", False)
+
+
+def echo_authoritative_barcodes() -> set:
+    """Optional canary allowlist (comma-separated barcodes). When non-empty, the authoritative-anchored
+    path applies ONLY to these barcodes (so it can be validated on one barcode before going broad).
+    Empty => applies to all barcodes once the master flag is on."""
+    raw = os.getenv("SYNC_ECHO_AUTHORITATIVE_BARCODES", "").strip()
+    return {b.strip() for b in raw.split(",") if b.strip()}
+
+
+def echo_authoritative_for(barcode: str) -> bool:
+    """True if the authoritative-anchored echo path should be used for THIS barcode: master flag on
+    AND (no canary allowlist set OR this barcode is on it)."""
+    if not echo_authoritative_enabled():
+        return False
+    allow = echo_authoritative_barcodes()
+    return (not allow) or (barcode in allow)
+
+
 # --- P0.1: canonical target selection ---
 
 def _canonical_rank(v: Any) -> tuple:

@@ -163,58 +163,72 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
             db.rollback()
             print(f"[SYNC-WARN] Dedup check failed, proceeding anyway: {e}")
 
-        # P0.5/P0.2: VALUE-INDEPENDENT self-echo suppression. If we wrote to THIS exact
-        # inventory item within the echo window, this webhook is the echo of our own write —
-        # regardless of the value it carries. This is the core fix for the stale-mirror
-        # phantom-delta problem: we never recompute a delta from a drifted baseline for our
-        # own echoes. We still resync the local mirror to the observed (authoritative) value.
-        echo_op = _find_self_echo(db, store_id, inventory_item_id)
-        if echo_op is not None:
-            print(f"[SYNC] Suppressed echo (lineage op={echo_op}) for {barcode}@{store_id}.")
+        # P0.5/P0.2: self-echo suppression. If we wrote to THIS exact inventory item within the
+        # echo window, this webhook is (at least partly) the echo of our own write.
+        #   - VALUE-INDEPENDENT path (default; flag off OR no captured authoritative qty): suppress
+        #     regardless of value — the core defence against the stale-mirror phantom-delta cascade
+        #     (we never recompute a delta from a drifted baseline for our own echoes).
+        #   - AUTHORITATIVE-anchored path (SYNC_ECHO_AUTHORITATIVE on for this barcode + a Shopify
+        #     post-write value captured): residual = observed - authoritative_qty. 0 => pure echo
+        #     (suppress); != 0 => a real change rode in on the same window, so propagate exactly that
+        #     residual — anchored to Shopify truth, never the drifted mirror.
+        # Either way we resync the local mirror to the observed (authoritative) value.
+        authoritative_residual = False
+        echo = _find_self_echo(db, store_id, inventory_item_id, new_available, barcode)
+        if echo is not None:
+            echo_op, residual = echo
             _resync_local_baseline(db, variant.id, payload.get("location_id"), new_available)
-            return
+            if residual is None or residual == 0:
+                print(f"[SYNC] Suppressed echo (lineage op={echo_op}) for {barcode}@{store_id}.")
+                return
+            print(f"[SYNC] Authoritative echo for {barcode}@{store_id}: residual={residual} "
+                  f"(real change layered on our write op={echo_op}) — propagating residual.")
+            delta = residual
+            last_known = new_available - residual  # == authoritative_qty; keep baseline consistent
+            authoritative_residual = True
 
-        # --- DELTA COMPUTATION ---
-        # Get the last known stock for this variant at this store's sync location.
-        # This is what WE think the stock was before this webhook event.
-        store = db.query(models.Store).filter(models.Store.id == store_id).first()
-        last_known = None
-        if store and store.sync_location_id:
-            inv_level = db.query(models.InventoryLevel).filter(
-                models.InventoryLevel.variant_id == variant.id,
-                models.InventoryLevel.location_id == store.sync_location_id,
-            ).first()
-            if inv_level and inv_level.available is not None:
-                last_known = inv_level.available
+        # --- DELTA COMPUTATION (skipped when we already have an authoritative residual) ---
+        if not authoritative_residual:
+            # Get the last known stock for this variant at this store's sync location.
+            # This is what WE think the stock was before this webhook event.
+            store = db.query(models.Store).filter(models.Store.id == store_id).first()
+            last_known = None
+            if store and store.sync_location_id:
+                inv_level = db.query(models.InventoryLevel).filter(
+                    models.InventoryLevel.variant_id == variant.id,
+                    models.InventoryLevel.location_id == store.sync_location_id,
+                ).first()
+                if inv_level and inv_level.available is not None:
+                    last_known = inv_level.available
 
-        if last_known is not None:
-            delta = new_available - last_known
-        else:
-            delta = None  # First time — no baseline, use absolute fallback
+            if last_known is not None:
+                delta = new_available - last_known
+            else:
+                delta = None  # First time — no baseline, use absolute fallback
 
-        # --- ECHO DETECTION (delta-based) ---
-        # If delta == 0, the stock didn't actually change from our perspective.
-        # This happens when our own propagation write bounces back as a webhook.
-        if delta is not None and delta == 0:
-            print(f"[SYNC] Suppressed echo for {barcode} at store {store_id} (delta=0).")
-            return
+            # --- ECHO DETECTION (delta-based) ---
+            # If delta == 0, the stock didn't actually change from our perspective.
+            # This happens when our own propagation write bounces back as a webhook.
+            if delta is not None and delta == 0:
+                print(f"[SYNC] Suppressed echo for {barcode} at store {store_id} (delta=0).")
+                return
 
-        # Per-item WriteIntent echo guard (covers reconciliation/absolute-SET and any case
-        # where the local delta baseline drifted). Matching by inventory_item_id + value is
-        # precise and never suppresses a genuine different value (no oversell risk).
-        if _is_echo(db, store_id, barcode, new_available, inventory_item_id=inventory_item_id):
-            print(f"[SYNC] Suppressed echo for {barcode} at store {store_id} (WriteIntent match).")
-            # Keep the local baseline exact so future deltas compute correctly.
-            source_location_id = payload.get("location_id")
-            if source_location_id:
-                try:
-                    crud_product.update_inventory_levels_for_variants(
-                        db, variant_ids=[variant.id], location_id=source_location_id,
-                        new_quantity=new_available
-                    )
-                except Exception:
-                    db.rollback()
-            return
+            # Per-item WriteIntent echo guard (covers reconciliation/absolute-SET and any case
+            # where the local delta baseline drifted). Matching by inventory_item_id + value is
+            # precise and never suppresses a genuine different value (no oversell risk).
+            if _is_echo(db, store_id, barcode, new_available, inventory_item_id=inventory_item_id):
+                print(f"[SYNC] Suppressed echo for {barcode} at store {store_id} (WriteIntent match).")
+                # Keep the local baseline exact so future deltas compute correctly.
+                source_location_id = payload.get("location_id")
+                if source_location_id:
+                    try:
+                        crud_product.update_inventory_levels_for_variants(
+                            db, variant_ids=[variant.id], location_id=source_location_id,
+                            new_quantity=new_available
+                        )
+                    except Exception:
+                        db.rollback()
+                return
 
         # --- VERSION CHECK ---
         is_authoritative = _is_new_authoritative_version(db, barcode, source_timestamp)
@@ -626,12 +640,20 @@ def _resync_local_baseline(db: Session, variant_id: int, location_id, new_availa
         db.rollback()
 
 
-def _find_self_echo(db: Session, store_id: int, inventory_item_id: Optional[int]) -> Optional[str]:
-    """P0.5: value-INDEPENDENT echo detection. If WE wrote to this exact (store, inventory_item)
-    within the echo window, return the originating sync_operation_uuid and CONSUME the marker
-    (one outbound write => exactly one expected echo). Consuming is safe because exact
-    redeliveries of the same echo are caught separately by webhook-id dedup; not consuming
-    would suppress a genuine later change to this item for the whole TTL (oversell risk)."""
+def _find_self_echo(db: Session, store_id: int, inventory_item_id: Optional[int],
+                    observed: Optional[int] = None, barcode: Optional[str] = None):
+    """If WE wrote to this exact (store, inventory_item) within the echo window, this webhook is
+    (at least partly) the echo of our own write. CONSUMES the matched marker (one outbound write =>
+    exactly one expected echo; exact redeliveries are caught separately by webhook-id dedup).
+
+    Returns:
+      None                 -> no marker: not our echo.
+      (op, None)           -> matched, VALUE-INDEPENDENT path (flag off or no authoritative_qty):
+                              caller suppresses outright (today's behaviour; cascade-safe).
+      (op, residual:int)   -> matched WITH Shopify-authoritative anchoring: residual =
+                              observed - authoritative_qty. 0 => pure echo (suppress); != 0 => a real
+                              change rode in on our write (caller propagates exactly the residual).
+    """
     if inventory_item_id is None:
         return None
     marker = (
@@ -648,20 +670,31 @@ def _find_self_echo(db: Session, store_id: int, inventory_item_id: Optional[int]
     if marker is None:
         return None
     op = marker.sync_operation_uuid
+    auth = marker.authoritative_qty
+    # The authoritative-anchored branch is taken ONLY when the master flag is on for this barcode AND
+    # we actually captured a Shopify post-write value. Any other case => value-INDEPENDENT suppression,
+    # so a drifted mirror can NEVER inject a phantom delta (the stale-mirror cascade stays closed) and
+    # flipping the flag off instantly reverts behaviour even for already-stamped markers.
+    use_auth = (auth is not None and observed is not None and barcode is not None
+                and sync_guards.echo_authoritative_for(barcode))
+    residual = (observed - auth) if use_auth else None
     try:
         db.delete(marker)
         db.commit()
     except Exception:
         db.rollback()
-    return op
+    return (op, residual)
 
 
 def _create_echo_marker(db: Session, barcode: str, target_store_id: int, inventory_item_id: int,
                         expected_qty: Optional[int], sync_op: str, origin_store_id: int,
-                        origin_item_id: Optional[int], depth: int = 1):
-    """Record an outbound-write lineage marker so the resulting webhook echo is recognised
-    (value-independently) as ours. expected_qty is stored for the legacy value-based fallback."""
-    db.add(models.WriteIntent(
+                        origin_item_id: Optional[int], depth: int = 1,
+                        authoritative_qty: Optional[int] = None):
+    """Record an outbound-write lineage marker so the resulting webhook echo is recognised as ours.
+    expected_qty feeds the legacy value-based fallback. authoritative_qty (when set, from a single-item
+    mutation's Shopify-authoritative post-write `available` quantity) enables exact residual detection.
+    Returns the created marker so the caller can patch authoritative_qty after the write returns."""
+    marker = models.WriteIntent(
         barcode=barcode,
         target_store_id=target_store_id,
         inventory_item_id=inventory_item_id,
@@ -671,8 +704,11 @@ def _create_echo_marker(db: Session, barcode: str, target_store_id: int, invento
         origin_store_id=origin_store_id,
         origin_inventory_item_id=origin_item_id,
         propagation_depth=depth,
+        authoritative_qty=authoritative_qty,
         expires_at=datetime.now(timezone.utc) + timedelta(seconds=sync_guards.ECHO_TTL_SECONDS),
-    ))
+    )
+    db.add(marker)
+    return marker
 
 
 def _is_barcode_broken(db: Session, barcode: str) -> bool:
@@ -839,6 +875,88 @@ def _create_write_intents(db: Session, barcode: str, quantity: int, version: int
         db.add(intent)
     db.commit()
 
+
+def _propagate_delta_single_item(db: Session, barcode: str, delta: int, new_source_qty: int,
+                                 store: models.Store, location_gid: str,
+                                 variants_to_update: List[models.ProductVariant], ref_uri: str,
+                                 sync_op: str, origin_store_id: int, origin_item_id: Optional[int]):
+    """SYNC_ECHO_AUTHORITATIVE path: write each target item via its OWN single-item Shopify mutation
+    so the post-write `available` quantity is unambiguously attributable, stamp it on that item's echo
+    marker as authoritative_qty, and resync the local mirror to that Shopify-authoritative value
+    (eliminating drift at the source). Floor-clamp behaviour matches the batched path."""
+    service = ShopifyService(store_url=store.shopify_url, token=store.api_token)
+    for v in variants_to_update:
+        if not v.inventory_item_id:
+            continue
+        level = db.query(models.InventoryLevel).filter(
+            models.InventoryLevel.variant_id == v.id,
+            models.InventoryLevel.location_id == store.sync_location_id,
+        ).first()
+        current = level.available if (level and level.available is not None) else None
+        op, value, clamped = sync_guards.apply_floor(current, delta)
+        expected = value if clamped else ((current + delta) if current is not None else None)
+        item_gid = f"gid://shopify/InventoryItem/{v.inventory_item_id}"
+
+        # Marker FIRST (authoritative_qty filled in after the write returns Shopify truth).
+        marker = _create_echo_marker(db, barcode, store.id, v.inventory_item_id, expected,
+                                     sync_op, origin_store_id, origin_item_id, depth=1,
+                                     authoritative_qty=None)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            print(f"[SYNC-WARN] Could not stage single-item marker for {store.name}: {barcode}")
+            continue
+
+        try:
+            if clamped:
+                raw, after = service.set_inventory_quantities_single(
+                    item_gid, location_gid, value, reference_uri=ref_uri, ignore_compare=True)
+                ue = (raw or {}).get("inventorySetQuantities", {}).get("userErrors", [])
+                if ue:
+                    raise Exception(str(ue))
+                alerting.warning("inventory_sync.floor",
+                                 f"Floored {barcode} on '{store.name}' to {value} (delta {delta} would breach floor)",
+                                 {"barcode": barcode, "store": store.name, "current": current,
+                                  "delta": delta, "floored_to": value})
+                audit_logger.log(category="STOCK", action="inventory_floor_clamp",
+                                 message=f"Floored [{barcode}] on '{store.name}' to {value} (would have been {(current or 0)+delta})",
+                                 store_id=store.id, target=barcode, severity="WARN",
+                                 details={"current": current, "delta": delta, "floored_to": value,
+                                          "sync_operation_uuid": sync_op})
+            else:
+                raw, after = service.adjust_inventory_quantities_single(
+                    item_gid, location_gid, delta, reference_uri=ref_uri)
+                ue = (raw or {}).get("inventoryAdjustQuantities", {}).get("userErrors", [])
+                if ue:
+                    raise Exception(str(ue))
+
+            # Update local mirror: prefer Shopify-authoritative truth (kills drift), else fall back.
+            if after is not None:
+                crud_product.update_inventory_levels_for_variants(
+                    db, variant_ids=[v.id], location_id=store.sync_location_id, new_quantity=after)
+                marker.authoritative_qty = after
+            elif clamped:
+                crud_product.update_inventory_levels_for_variants(
+                    db, variant_ids=[v.id], location_id=store.sync_location_id, new_quantity=value)
+            else:
+                crud_product.adjust_inventory_levels_for_variants(
+                    db, variant_ids=[v.id], location_id=store.sync_location_id, delta=delta)
+            db.commit()
+
+            audit_logger.log_propagation(
+                barcode=barcode, source_store="webhook", target_store=store.name, quantity=new_source_qty,
+                details={"variant_count": 1, "delta": delta, "mode": "delta-single",
+                         "floored": 1 if clamped else 0, "authoritative_qty": after,
+                         "sync_operation_uuid": sync_op, "origin_store_id": origin_store_id})
+        except Exception as e:
+            db.rollback()
+            print(f"[SYNC-ERROR] Failed single-item propagate to '{store.name}': {e}")
+            audit_logger.log_error("inventory_sync_service._propagate_delta_single_item",
+                                   f"Failed to propagate barcode {barcode} to store '{store.name}'",
+                                   details={"barcode": barcode, "delta": delta}, exc=e)
+
+
 def _execute_delta_propagation(
     db: Session,
     barcode: str,
@@ -868,6 +986,14 @@ def _execute_delta_propagation(
             continue
 
         location_gid = f"gid://shopify/Location/{store.sync_location_id}"
+
+        # SYNC_ECHO_AUTHORITATIVE: write each item via its own single-item mutation so the
+        # Shopify-authoritative post-write quantity is attributable and stamped on the marker.
+        if sync_guards.echo_authoritative_for(barcode):
+            _propagate_delta_single_item(db, barcode, delta, new_source_qty, store, location_gid,
+                                         variants_to_update, ref_uri, sync_op, origin_store_id, origin_item_id)
+            continue
+
         adjust_payload, adjust_ids = [], []
         set_payload, set_ids = [], []
 
@@ -975,11 +1101,15 @@ def _execute_absolute_propagation(
         location_gid = f"gid://shopify/Location/{store.sync_location_id}"
         quantities_payload, variant_ids = [], []
         try:
+            # For an absolute SET the post-write `available` IS `value`, so it is itself the
+            # authoritative echo anchor (no single-item capture needed) when the flag is on.
+            abs_auth = value if sync_guards.echo_authoritative_for(barcode) else None
             for v in variants_to_update:
                 if not v.inventory_item_id:
                     continue
                 _create_echo_marker(db, barcode, store.id, v.inventory_item_id, value,
-                                    sync_op, origin_store_id, origin_item_id, depth=1)
+                                    sync_op, origin_store_id, origin_item_id, depth=1,
+                                    authoritative_qty=abs_auth)
                 quantities_payload.append({
                     "inventoryItemId": f"gid://shopify/InventoryItem/{v.inventory_item_id}",
                     "locationId": location_gid, "quantity": value,
