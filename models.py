@@ -276,6 +276,43 @@ class PoolState(Base):
     # Phase 2: when the pool first went diverged on LIVE Shopify (cleared on convergence). Drives the
     # permanent-divergence detector + convergence-SLA (unresolved_duration = now - diverged_since).
     diverged_since = Column(DateTime(timezone=True), nullable=True)
+    # Phase 3: a pool may only become WRITE-AUTHORITATIVE (canary) once its Q was seeded from a
+    # CONFIRMED live-truth backfill — never from a bootstrapped shadow estimate. backfilled_at is the
+    # eligibility gate the canary write path enforces.
+    backfilled_at = Column(DateTime(timezone=True), nullable=True)
+    backfill_source_store = Column(Integer, nullable=True)
+
+
+class PoolBackfill(Base):
+    """Phase 3A — append-only, replayable, REVERSIBLE log of every backfill operation (incl. dry-runs
+    and skips). Retains the live snapshot and the prior PoolState so a backfill can be audited and
+    rolled back to its previous quantity/version."""
+    __tablename__ = "pool_backfills"
+    id = Column(BIGINT, primary_key=True, autoincrement=True)
+    barcode = Column(String(255), nullable=False, index=True)
+    action = Column(String(40), nullable=False)            # backfilled | dry_run | skipped_*
+    reason = Column(Text, nullable=True)
+    prev_quantity = Column(Integer, nullable=True)
+    prev_version = Column(BIGINT, nullable=True)
+    new_quantity = Column(Integer, nullable=True)
+    new_version = Column(BIGINT, nullable=True)
+    spread = Column(Integer, nullable=True)
+    source_store = Column(Integer, nullable=True)
+    live_snapshot = Column(JSONB, nullable=True)           # per-store live quantities at backfill time
+    operator_confirmed = Column(BOOLEAN, nullable=False, server_default="false")
+    dry_run = Column(BOOLEAN, nullable=False, server_default="false")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
+class PoolCanaryRollback(Base):
+    """Phase 3B — an ACTIVE canary rollback marker. While a row exists for a barcode, the canary write
+    path is disabled for it and the legacy delta path serves it again (safe mode). Append/clear is
+    audited; the row is the deterministic source of truth for 'this barcode reverted to legacy'."""
+    __tablename__ = "pool_canary_rollbacks"
+    barcode = Column(String(255), primary_key=True)
+    reason = Column(String(80), nullable=False)
+    details = Column(JSONB, nullable=True)
+    rolled_back_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class PoolEvent(Base):

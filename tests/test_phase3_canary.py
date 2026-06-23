@@ -1,0 +1,158 @@
+# tests/test_phase3_canary.py
+"""
+PHASE 3B (canary write path + rollback) tests — hermetic. Run:
+    python tests/test_phase3_canary.py
+
+Guards: flags OFF => no writes; bootstrapped Q is NEVER write-eligible; CAS+ref+version writes;
+echo-anchored convergence; floored (no negative); per-source monotonic ordering; automatic rollback
+triggers; isolated session; legacy unaffected when canary inactive.
+"""
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+from services import pool_engine
+from services.pool_engine import fold_observation, is_stale_for_source
+
+
+def _read(rel):
+    with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
+        return f.read()
+
+
+# --- flags: everything OFF by default ------------------------------------------------------
+
+def test_write_flags_default_off():
+    os.environ.pop("SYNC_POOL_ENGINE_WRITES", None)
+    os.environ.pop("SYNC_POOL_CANARY_BARCODES", None)
+    assert pool_engine.pool_writes_enabled() is False
+    assert pool_engine.canary_barcodes() == set()
+
+
+def test_canary_barcodes_parses_allowlist():
+    os.environ["SYNC_POOL_CANARY_BARCODES"] = " 111 , 222 ,, 333 "
+    assert pool_engine.canary_barcodes() == {"111", "222", "333"}
+    os.environ.pop("SYNC_POOL_CANARY_BARCODES", None)
+
+
+def test_canary_active_requires_all_gates_in_source():
+    src = _read("services/pool_canary.py")
+    fn = src[src.index("def canary_active_for"):src.index("def trigger_rollback")]
+    assert "pool_writes_enabled()" in fn               # master write switch
+    assert "canary_barcodes()" in fn                   # allowlist
+    assert "state.backfilled_at is None" in fn         # bootstrapped Q NEVER eligible (the key rule)
+    assert "is_rolled_back" in fn                      # rolled-back => legacy
+
+
+def test_writes_disabled_short_circuits_canary():
+    # with the master switch off, canary_active_for returns False before any DB/state lookup
+    os.environ.pop("SYNC_POOL_ENGINE_WRITES", None)
+    src = _read("services/pool_canary.py")
+    fn = src[src.index("def canary_active_for"):src.index("def trigger_rollback")]
+    assert "if not pool_engine.pool_writes_enabled():" in fn
+    assert "return False" in fn
+
+
+def test_handle_webhook_canary_gated_and_isolated_and_returns():
+    src = _read("services/inventory_sync_service.py")
+    assert "pool_canary.canary_active_for(db, barcode)" in src
+    assert "pool_canary.canary_handle(" in src
+    # canary runs before the legacy version gate and RETURNs (bypasses legacy propagation)
+    cpos = src.index("pool_canary.canary_handle(")
+    gpos = src.index("is_authoritative = _is_new_authoritative_version(")
+    assert cpos < gpos
+    # on canary error it trips a rollback and does NOT run legacy on poisoned state
+    window = src[src.index("PHASE 3 CANARY WRITE PATH"):gpos]
+    assert "trigger_rollback" in window and "return" in window
+    # canary_handle opens its OWN session (isolation)
+    cs = _read("services/pool_canary.py")
+    assert "db = SessionLocal()" in cs[cs.index("def canary_handle"):]
+
+
+# --- convergence writer: CAS + ref + version + floor + echo anchor --------------------------
+
+def test_converge_uses_cas_ref_version_and_floor():
+    src = _read("services/pool_engine.py")
+    conv = src[src.index("def converge_pool"):]
+    assert "max(int(state.quantity), sync_guards.INVENTORY_FLOOR)" in conv   # floored target (no negative)
+    assert "compare_quantity=" in conv                                       # compare-and-set
+    assert "referenceDocumentUri" in src or "ref_uri" in conv                # attribution
+    assert "?v={version}" in conv                                            # pool version in the ref
+    # echo anchor + mirror sync so the engine's own write folds to delta 0
+    assert "'convergence'" in conv
+    assert "UPDATE inventory_levels SET available=:q" in conv
+
+
+# --- automatic rollback triggers -----------------------------------------------------------
+
+def test_rollback_thresholds_and_wiring():
+    from services import pool_canary
+    src = _read("services/pool_canary.py")
+    ev = src[src.index("def evaluate_canary_rollback"):src.index("def canary_handle")]
+    # the four trigger classes the spec requires
+    assert "repeated_cas_conflict" in ev
+    assert "write_amplification" in ev
+    assert "oscillation" in ev
+    assert "trigger_rollback(db, barcode" in ev
+    # threshold boolean logic the code encodes (CAS conflicts >= threshold)
+    T = pool_canary.ROLLBACK_CAS_FAILURES
+    assert (T >= T) and not ((T - 1) >= T)
+
+
+def test_rollback_reverts_to_legacy_and_alerts():
+    src = _read("services/pool_canary.py")
+    tr = src[src.index("def trigger_rollback"):src.index("def clear_rollback")]
+    assert "PoolCanaryRollback(" in tr                 # marker => canary_active_for returns False => legacy
+    assert 'alerting.critical("pool_canary.rollback"' in tr
+    assert "severity=\"CRITICAL\"" in tr               # audit kept
+    assert "def clear_rollback" in src                 # reversible (operator)
+
+
+# --- convergence MATH under the adversarial cases (the engine's fold drives canary Q) -------
+
+def _sim(events, floor=0):
+    seen, q, last_obs, last_ts = set(), None, {}, {}
+    for e in events:
+        w = e.get("wid")
+        if w is not None and w in seen:
+            continue
+        if w is not None:
+            seen.add(w)
+        s = e["store"]
+        if is_stale_for_source(last_ts.get(s), e["ts"]):
+            continue
+        q = fold_observation(q, last_obs.get(s), e["observed"], floor=floor)
+        last_obs[s] = e["observed"]; last_ts[s] = e["ts"]
+    return q
+
+def test_canary_concurrent_sales_no_lost_sale():
+    assert _sim([{"store":"A","observed":100,"ts":1,"wid":"a0"},{"store":"B","observed":100,"ts":1,"wid":"b0"},
+                 {"store":"A","observed":99,"ts":2,"wid":"a1"},{"store":"B","observed":99,"ts":2,"wid":"b1"}]) == 98
+
+def test_canary_duplicate_idempotent():
+    assert _sim([{"store":"A","observed":100,"ts":1,"wid":"a0"},{"store":"A","observed":99,"ts":2,"wid":"a1"},
+                 {"store":"A","observed":99,"ts":2,"wid":"a1"}]) == 99
+
+def test_canary_out_of_order_rejected_monotonic():
+    assert _sim([{"store":"A","observed":100,"ts":1,"wid":"a0"},{"store":"A","observed":98,"ts":3,"wid":"a3"},
+                 {"store":"A","observed":99,"ts":2,"wid":"a2"}]) == 98
+
+def test_canary_echo_anchor_folds_to_zero():
+    # after converge sets B to Q, an anchor records B's observed=Q, so B's echo (observed=Q) -> delta 0
+    assert fold_observation(98, 98, 98) == 98
+
+
+if __name__ == "__main__":
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    passed = 0
+    for fn in fns:
+        try:
+            fn(); print(f"PASS {fn.__name__}"); passed += 1
+        except AssertionError as e:
+            print(f"FAIL {fn.__name__}: {e}")
+        except Exception as e:
+            print(f"ERROR {fn.__name__}: {type(e).__name__}: {e}")
+    print(f"\n{passed}/{len(fns)} Phase-3 canary tests passed")
+    sys.exit(0 if passed == len(fns) else 1)

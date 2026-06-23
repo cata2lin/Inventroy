@@ -46,24 +46,57 @@ convergence-SLA checks. **Alert-only.**
 **Go to Phase 3 when:** for stable pools, `PoolState.quantity` matches live Shopify (or the explainable
 offset); the engine would have *correctly* converged the known-diverged pools.
 
-## Phase 3 — Canary writes
+## Phase 3 — Canary writes (BUILT, dormant) — operational runbook
 
-1. **Backfill** `PoolState.quantity` for the canary barcodes from a live-truth read (seed Q = the
-   operator-confirmed correct value), so the first convergence is to truth, not a folded estimate.
-2. Add the barcode to `SYNC_POOL_CANARY_BARCODES` + `SYNC_POOL_ENGINE=true`. The engine becomes
-   authoritative for those barcodes only (real CAS-to-Q); all others stay legacy.
-3. Ramp: **1 → 5 → 25 → 100** barcodes, only while metrics stay healthy at each step.
-4. Canary picks: low-volume, historically stable, multi-store, low-risk.
+Infrastructure shipped & flag-off: `services/pool_backfill.py` (3A), `services/pool_canary.py` (3B),
+`services/pool_ops.py` + `/api/diagnostics/pool/*` (3C), tests `test_phase3_backfill.py` /
+`test_phase3_canary.py` (3D). Write flags: `SYNC_POOL_ENGINE_WRITES=false`, `SYNC_POOL_CANARY_BARCODES=[]`.
 
-**Automatic rollback** (per barcode): if live spread exceeds threshold, repeated CAS failures,
-oscillation, or negative pressure → trip the `BarcodeCircuitBreaker`, drop the barcode from the canary
-list, revert to legacy, emit CRITICAL. (Reuses the existing breaker + live-truth detector.)
+**Eligibility (enforced in `pool_canary.canary_active_for`, all required):** `SYNC_POOL_ENGINE_WRITES`
+on · barcode in `SYNC_POOL_CANARY_BARCODES` · `pool_states.backfilled_at IS NOT NULL` (a confirmed
+live-truth backfill — bootstrapped Q is NEVER write-authoritative) · no active rollback marker.
+
+### Pre-canary checklist (all must hold)
+- [ ] Phase 1 shadow + Phase 2 validation ran clean for ≥ a few days.
+- [ ] No unexplained `delta_difference` / no unexplained `pool_validation_diverged`; 0 `pool_shadow.negative`.
+- [ ] `/api/diagnostics/pool/dashboard` healthy; `convergence_sla` empty (no permanent divergence).
+- [ ] **Backfill done** for each candidate: `POST`-style operator run
+  `pool_backfill.backfill_pool_state_from_live_truth([bc], dry_run=False, operator_confirmed=True)` →
+  must return `backfilled` (not `skipped_*`). Dry-run first (`/api/diagnostics/pool/backfill-plan?barcode=`).
+- [ ] Candidates are low-volume, historically stable, multi-store, low-risk.
+
+### Canary sequence — **1 → 5 → 25 → 100**
+At each step: backfill the new barcodes → add them to `SYNC_POOL_CANARY_BARCODES` (drop-in) → restart.
+`SYNC_POOL_ENGINE_WRITES=true` is set once, at step 1.
+
+### Observation between steps (minimum healthy runtime ≥ 24h, then expand)
+Watch `/api/diagnostics/pool/dashboard`:
+- `metrics.convergence_success_rate` ≈ 1.0; `cas_conflicts` low; `avg_latency_ms` stable.
+- `canary_health[*].health_score` high; **zero `rollback_events`**.
+- `convergence_sla` empty; `live_vs_canonical` empty (engine Q == live).
+
+**Expand criteria:** all green for the full window. **Escalate/hold:** any rollback, any SLA breach,
+any persistent `live_vs_canonical` mismatch.
+
+### Automatic rollback (per barcode, built in `evaluate_canary_rollback`)
+Trips on: repeated CAS conflicts (`POOL_CANARY_ROLLBACK_CAS_FAILURES`), write amplification
+(`..._AMPLIFICATION`/60s), oscillation (`..._OSCILLATION` sign flips), or a canary exception. Effect:
+writes a `pool_canary_rollbacks` marker → `canary_active_for` returns False → **barcode instantly
+reverts to the legacy delta path**, audit retained, CRITICAL alert. No global impact.
+
+### Emergency rollback (manual)
+- **One barcode:** `pool_canary.trigger_rollback(db, bc, "manual", {...})` (reverts to legacy now).
+- **All canary writes, instantly:** set `SYNC_POOL_ENGINE_WRITES=false` + restart — every barcode
+  falls back to legacy in one flip. (Legacy code is never removed before Phase 4 is proven.)
+- **Undo a bad backfill:** `pool_backfill.reverse_backfill(backfill_id)` restores the prior Q and
+  clears write-eligibility.
 
 ## Phase 4 — Full absolute convergence
 
-`SYNC_POOL_ENGINE=true` with an empty canary list (global). Legacy `_execute_delta_propagation` is
-disabled. Every propagation is CAS-to-Q, version-protected, idempotent, ref-attributed. Keep the
-legacy code in place (dormant) for one release as the rollback path.
+`SYNC_POOL_ENGINE_WRITES=true` with an empty `SYNC_POOL_CANARY_BARCODES` (global; every backfilled
+pool writes). Legacy `_execute_delta_propagation` is disabled. Every propagation is CAS-to-Q,
+version-protected, idempotent, ref-attributed. Keep the legacy code in place (dormant) for one release
+as the rollback path.
 
 ## Phase 5 — Hardening
 

@@ -7,8 +7,28 @@ from sqlalchemy.orm import Session
 from database import get_db
 from services import diagnostics
 from services import reconciliation_engine
+from services import pool_ops, pool_backfill
 
 router = APIRouter(prefix="/api/diagnostics", tags=["Diagnostics"])
+
+
+@router.get("/pool/dashboard")
+def get_pool_dashboard():
+    """Phase 3C operational dashboard data: flags, headline metrics, per-canary health, rollback
+    events, SLA breaches, live-vs-canonical diffs. Read-only."""
+    return pool_ops.dashboard()
+
+
+@router.get("/pool/health")
+def get_pool_health():
+    return pool_ops.canary_health()
+
+
+@router.get("/pool/backfill-plan")
+def get_pool_backfill_plan(barcode: str = Query(...), db: Session = Depends(get_db)):
+    """READ-ONLY backfill dry-run for one barcode: live per-store quantities, computed Q, spread,
+    and the safety verdict. Mutates nothing (the real backfill is an explicit operator action)."""
+    return pool_backfill.plan_backfill(db, barcode)
 
 
 @router.get("/reconcile-plan")

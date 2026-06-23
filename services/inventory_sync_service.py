@@ -29,6 +29,7 @@ from services import sync_guards
 from services import alerting
 from services import dist_lock
 from services import pool_engine
+from services import pool_canary
 
 # --- Configuration ---
 INTENT_TTL_SECONDS = 60
@@ -245,6 +246,27 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
                     legacy_quantity=new_available, caller_holds_lock=True)
             except Exception as _sh:
                 print(f"[SHADOW-WARN] pool shadow_observe failed (ignored): {_sh}")
+
+        # --- PHASE 3 CANARY WRITE PATH (engine authoritative for backfilled canary barcodes) ---
+        # For a canary-active barcode the engine OWNS convergence: it ingests + folds + CAS-to-Q and
+        # we RETURN, bypassing the legacy version gate + delta propagation below. Dormant unless
+        # SYNC_POOL_ENGINE_WRITES + canary allowlist + a live-truth backfill (canary_active_for).
+        # Fully isolated (own session); on ANY error we trip a rollback to legacy and never run the
+        # legacy path on a possibly-poisoned state.
+        try:
+            if pool_canary.canary_active_for(db, barcode):
+                pool_canary.canary_handle(
+                    barcode=barcode, source_store_id=store_id, source_variant_id=variant.id,
+                    inventory_item_id=inventory_item_id, observed_quantity=new_available,
+                    source_timestamp=source_timestamp, webhook_id=webhook_id)
+                return
+        except Exception as _cw:
+            print(f"[CANARY-ERROR] canary_handle failed for {barcode}, rolling back to legacy: {_cw}")
+            try:
+                pool_canary.trigger_rollback(db, barcode, "canary_exception", {"error": str(_cw)})
+            except Exception:
+                db.rollback()
+            return
 
         # --- VERSION CHECK ---
         is_authoritative = _is_new_authoritative_version(db, barcode, source_timestamp)

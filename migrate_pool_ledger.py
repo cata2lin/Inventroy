@@ -46,6 +46,37 @@ DDL = [
     "CREATE INDEX IF NOT EXISTS ix_pool_events_created ON pool_events (created_at)",
     # Phase 2: unresolved-duration tracking for the permanent-divergence detector.
     "ALTER TABLE pool_states ADD COLUMN IF NOT EXISTS diverged_since TIMESTAMPTZ",
+    # Phase 3: write-eligibility gate (only live-truth-backfilled pools may enter canary).
+    "ALTER TABLE pool_states ADD COLUMN IF NOT EXISTS backfilled_at TIMESTAMPTZ",
+    "ALTER TABLE pool_states ADD COLUMN IF NOT EXISTS backfill_source_store INTEGER",
+    """
+    CREATE TABLE IF NOT EXISTS pool_backfills (
+        id                 BIGSERIAL PRIMARY KEY,
+        barcode            VARCHAR(255) NOT NULL,
+        action             VARCHAR(40) NOT NULL,
+        reason             TEXT,
+        prev_quantity      INTEGER,
+        prev_version       BIGINT,
+        new_quantity       INTEGER,
+        new_version        BIGINT,
+        spread             INTEGER,
+        source_store       INTEGER,
+        live_snapshot      JSONB,
+        operator_confirmed BOOLEAN NOT NULL DEFAULT false,
+        dry_run            BOOLEAN NOT NULL DEFAULT false,
+        created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_pool_backfills_barcode ON pool_backfills (barcode)",
+    "CREATE INDEX IF NOT EXISTS ix_pool_backfills_created ON pool_backfills (created_at)",
+    """
+    CREATE TABLE IF NOT EXISTS pool_canary_rollbacks (
+        barcode        VARCHAR(255) PRIMARY KEY,
+        reason         VARCHAR(80) NOT NULL,
+        details        JSONB,
+        rolled_back_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
 ]
 
 

@@ -50,6 +50,18 @@ def pool_shadow_enabled() -> bool:
 SHADOW_ALERT_DELTA = int(os.getenv("SYNC_POOL_SHADOW_ALERT_DELTA", "5"))  # |Q - observed| to alert on
 
 
+def pool_writes_enabled() -> bool:
+    """Phase 3 master WRITE switch. Even when on, only canary-listed + backfilled barcodes write."""
+    return os.getenv("SYNC_POOL_ENGINE_WRITES", "false").strip().lower() in ("1", "true", "yes", "on")
+
+
+def canary_barcodes() -> set:
+    """Phase 3 canary allowlist (SYNC_POOL_CANARY_BARCODES, comma-separated). Empty + writes-on =
+    GLOBAL (Phase 4); empty + writes-off = nothing writes."""
+    raw = os.getenv("SYNC_POOL_CANARY_BARCODES", "").strip()
+    return {b.strip() for b in raw.split(",") if b.strip()}
+
+
 # --------------------------------------------------------------------------------------------------
 # PURE CONVERGENCE CORE (no I/O — this is the part whose correctness is proven by tests)
 # --------------------------------------------------------------------------------------------------
@@ -193,9 +205,12 @@ def converge_pool(db: Session, barcode: str, exclude_store_id: Optional[int] = N
     op = f"pool-{uuid.uuid4()}"
     ref_uri = f"inventory-sync://pool/{op}"
 
+    version = state.version
+    ref_uri = f"inventory-sync://pool/{op}?v={version}"   # ref carries the pool version (attribution)
     rows = db.execute(text(f"""
         SELECT DISTINCT ON (pv.barcode, pv.store_id)
-               pv.store_id, s.name store, s.shopify_url, s.api_token, s.sync_location_id, pv.inventory_item_id
+               pv.id AS variant_id, pv.store_id, s.name store, s.shopify_url, s.api_token,
+               s.sync_location_id, pv.inventory_item_id
         FROM product_variants pv
         JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
         JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
@@ -203,43 +218,73 @@ def converge_pool(db: Session, barcode: str, exclude_store_id: Optional[int] = N
         ORDER BY pv.barcode, pv.store_id, {diagnostics.CANON_ORDER}
     """), {"b": barcode}).mappings().all()
 
-    converged, skipped, failed = 0, 0, 0
+    converged, skipped, failed, retries = 0, 0, 0, 0
+    per_store, live_quantities = [], {}
     for r in rows:
         if exclude_store_id is not None and r["store_id"] == exclude_store_id:
             continue
         item_gid = f"gid://shopify/InventoryItem/{r['inventory_item_id']}"
         loc_gid = f"gid://shopify/Location/{r['sync_location_id']}"
+        cas_result, n_try = "skip", 0
         try:
             svc = ShopifyService(store_url=r["shopify_url"], token=r["api_token"])
             live = svc.get_available_single(item_gid, loc_gid)
+            live_quantities[r["store"]] = live
             if live == target:
                 skipped += 1
-                continue
-            _raw, ue = svc.set_inventory_quantities_single(item_gid, loc_gid, target,
-                                                           reference_uri=ref_uri, compare_quantity=live)
-            if ue:
-                # stale compare → one bounded re-read+retry (a concurrent sale moved it)
-                live2 = svc.get_available_single(item_gid, loc_gid)
-                if live2 is not None and live2 != target:
-                    _raw2, ue2 = svc.set_inventory_quantities_single(item_gid, loc_gid, target,
-                                                                     reference_uri=ref_uri, compare_quantity=live2)
-                    if ue2:
-                        failed += 1
-                        continue
-                elif live2 == target:
-                    skipped += 1
-                    continue
-            converged += 1
+                cas_result = "already"
+            else:
+                _raw, ue = svc.set_inventory_quantities_single(item_gid, loc_gid, target,
+                                                               reference_uri=ref_uri, compare_quantity=live)
+                n_try += 1
+                if ue:
+                    retries += 1
+                    live2 = svc.get_available_single(item_gid, loc_gid)
+                    if live2 == target:
+                        skipped += 1; cas_result = "already_after_retry"
+                    elif live2 is not None:
+                        _r2, ue2 = svc.set_inventory_quantities_single(item_gid, loc_gid, target,
+                                                                       reference_uri=ref_uri, compare_quantity=live2)
+                        n_try += 1
+                        if ue2:
+                            failed += 1; cas_result = "cas_conflict"
+                        else:
+                            converged += 1; cas_result = "set_after_retry"
+                    else:
+                        failed += 1; cas_result = "unreadable"
+                else:
+                    converged += 1; cas_result = "set"
+            # On a landed write (set/already), keep mirror + ledger baseline at Q so the store's
+            # resulting echo webhook folds to delta 0 (no self-amplification).
+            if cas_result in ("set", "set_after_retry", "already", "already_after_retry"):
+                db.execute(text("""UPDATE inventory_levels SET available=:q, updated_at=now()
+                                   WHERE variant_id=:vid AND location_id=:loc"""),
+                           {"q": target, "vid": r["variant_id"], "loc": r["sync_location_id"]})
+                db.execute(text("""INSERT INTO pool_events
+                                   (barcode, source_store_id, source_variant_id, inventory_item_id,
+                                    observed_quantity, source_timestamp, kind)
+                                   VALUES (:b,:s,:v,:i,:q, now(), 'convergence')"""),
+                           {"b": barcode, "s": r["store_id"], "v": r["variant_id"],
+                            "i": r["inventory_item_id"], "q": target})
         except Exception:
-            failed += 1
+            failed += 1; cas_result = "error"
+        per_store.append({"store": r["store"], "cas_result": cas_result, "retries": n_try,
+                          "live_before": live_quantities.get(r["store"]), "target": target})
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
     audit_logger.log(category="STOCK", action="pool_converged",
-                     message=f"[{barcode}] converged stores to Q={target} v{state.version} "
-                             f"(set={converged}, already={skipped}, failed={failed})",
+                     message=f"[{barcode}] converged stores to Q={target} v{version} "
+                             f"(set={converged}, already={skipped}, cas_conflict={failed}, retries={retries})",
                      target=barcode, severity="INFO" if not failed else "WARN",
-                     details={"target": target, "version": state.version, "op": op,
-                              "set": converged, "already": skipped, "failed": failed})
-    return {"barcode": barcode, "target": target, "version": state.version,
-            "converged": converged, "already": skipped, "failed": failed}
+                     details={"barcode": barcode, "canonical_Q": target, "pool_version": version, "op": op,
+                              "set": converged, "already": skipped, "failed": failed, "retries": retries,
+                              "live_quantities": live_quantities, "per_store": per_store})
+    return {"barcode": barcode, "target": target, "version": version,
+            "converged": converged, "already": skipped, "failed": failed, "retries": retries,
+            "per_store": per_store, "live_quantities": live_quantities}
 
 
 # --------------------------------------------------------------------------------------------------
