@@ -232,27 +232,13 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
                         db.rollback()
                 return
 
-        # --- PHASE 1 SHADOW MODE (no Shopify writes) ---
-        # Run the pool engine in parallel on this genuine (non-echo) observation BEFORE the legacy
-        # version gate, so the engine also "sees" events the buggy cross-store timestamp gate would
-        # drop. shadow_observe opens its OWN db session and is fully best-effort: it can never affect
-        # the authoritative legacy path below. Gated by SYNC_POOL_SHADOW (kill switch).
-        if pool_engine.pool_shadow_enabled():
-            try:
-                pool_engine.shadow_observe(
-                    barcode=barcode, source_store_id=store_id, source_variant_id=variant.id,
-                    inventory_item_id=inventory_item_id, observed_quantity=new_available,
-                    source_timestamp=source_timestamp, webhook_id=webhook_id,
-                    legacy_quantity=new_available, caller_holds_lock=True)
-            except Exception as _sh:
-                print(f"[SHADOW-WARN] pool shadow_observe failed (ignored): {_sh}")
-
         # --- PHASE 3 CANARY WRITE PATH (engine authoritative for backfilled canary barcodes) ---
-        # For a canary-active barcode the engine OWNS convergence: it ingests + folds + CAS-to-Q and
-        # we RETURN, bypassing the legacy version gate + delta propagation below. Dormant unless
+        # MUST run BEFORE shadow: for a canary barcode the engine OWNS the event (ingest + fold +
+        # CAS-to-Q) and we RETURN, bypassing shadow + the legacy version gate + delta propagation. If
+        # shadow ran first it would idempotently consume the webhook_id, and canary would then see a
+        # DUPLICATE and never converge (sale folded but not propagated -> divergence). Dormant unless
         # SYNC_POOL_ENGINE_WRITES + canary allowlist + a live-truth backfill (canary_active_for).
-        # Fully isolated (own session); on ANY error we trip a rollback to legacy and never run the
-        # legacy path on a possibly-poisoned state.
+        # Isolated session; on ANY error trip a rollback to legacy and don't run legacy on bad state.
         try:
             if pool_canary.canary_active_for(db, barcode):
                 pool_canary.canary_handle(
@@ -267,6 +253,21 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
             except Exception:
                 db.rollback()
             return
+
+        # --- PHASE 1 SHADOW MODE (no Shopify writes) — only for NON-canary barcodes ---
+        # Runs the pool engine in parallel on this genuine (non-echo) observation BEFORE the legacy
+        # version gate (so it also "sees" events the cross-store gate would drop). Canary-active
+        # barcodes already returned above, so shadow never double-ingests them. Own session,
+        # best-effort: it can never affect the authoritative legacy path below.
+        if pool_engine.pool_shadow_enabled():
+            try:
+                pool_engine.shadow_observe(
+                    barcode=barcode, source_store_id=store_id, source_variant_id=variant.id,
+                    inventory_item_id=inventory_item_id, observed_quantity=new_available,
+                    source_timestamp=source_timestamp, webhook_id=webhook_id,
+                    legacy_quantity=new_available, caller_holds_lock=True)
+            except Exception as _sh:
+                print(f"[SHADOW-WARN] pool shadow_observe failed (ignored): {_sh}")
 
         # --- VERSION CHECK ---
         is_authoritative = _is_new_authoritative_version(db, barcode, source_timestamp)

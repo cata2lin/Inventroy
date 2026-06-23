@@ -73,6 +73,14 @@ def test_handle_webhook_canary_gated_and_isolated_and_returns():
 
 # --- convergence writer: CAS + ref + version + floor + echo anchor --------------------------
 
+def test_canary_runs_before_shadow():
+    # both ingest the webhook_id idempotently; if shadow ran first, canary would see a duplicate and
+    # never converge (sale folded but not propagated). Canary MUST be first for canary barcodes.
+    src = _read("services/inventory_sync_service.py")
+    assert src.index("pool_canary.canary_handle(") < src.index("pool_engine.shadow_observe("), \
+        "canary write path must run BEFORE shadow"
+
+
 def test_converge_uses_cas_ref_version_and_floor():
     src = _read("services/pool_engine.py")
     conv = src[src.index("def converge_pool"):]
