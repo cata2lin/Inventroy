@@ -156,6 +156,16 @@ def backfill_pool_state_from_live_truth(barcodes: Optional[List[str]] = None, *,
                 state.backfilled_at = now
                 state.backfill_source_store = plan["source_store"]
                 state.diverged_since = None
+            # CRITICAL: seed a per-store ledger BASELINE at Q. Without this, the conservation fold
+            # sees no prior observation for a store and treats its FIRST real sale as a "replica
+            # joining" (no pool move) — then convergence reverts the sale (oversell). Seeding each
+            # store's last-observed=Q makes the first sale compute delta = observed - Q correctly.
+            for cr in live_truth._canonical_rows(db, bc):
+                db.execute(text("""INSERT INTO pool_events
+                    (barcode, source_store_id, source_variant_id, inventory_item_id,
+                     observed_quantity, source_timestamp, kind, applied)
+                    VALUES (:b,:s,NULL,:i,:q, now(), 'backfill_baseline', true)"""),
+                    {"b": bc, "s": cr["store_id"], "i": cr["inventory_item_id"], "q": new_q})
             _log_backfill(db, barcode=bc, action="backfilled", reason="seeded Q from confirmed live truth",
                           plan=plan, prev_q=prev_q, prev_v=prev_v, new_q=new_q, new_v=new_v,
                           operator_confirmed=True, dry_run=False)

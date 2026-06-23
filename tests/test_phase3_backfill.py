@@ -67,6 +67,14 @@ def test_backfill_grants_write_eligibility():
     assert "state.backfilled_at = now" in SRC or "backfilled_at=now" in SRC
 
 
+def test_backfill_seeds_per_store_ledger_baseline():
+    # CRITICAL (caught live): backfill must seed a per-store ledger baseline at Q, else the fold
+    # treats each store's FIRST sale as a 'join' (no pool move) and convergence reverts the sale.
+    assert "backfill_baseline" in SRC
+    assert "_canonical_rows" in SRC
+    assert "observed_quantity" in SRC and "INSERT INTO pool_events" in SRC
+
+
 def test_replayable_and_reversible():
     assert "PoolBackfill(" in SRC                       # append-only log of every op (incl dry-run/skip)
     assert "prev_quantity" in SRC and "prev_version" in SRC   # prior state retained for reversal
