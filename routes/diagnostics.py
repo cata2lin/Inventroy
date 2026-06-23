@@ -7,14 +7,14 @@ from sqlalchemy.orm import Session
 from database import get_db
 from services import diagnostics
 from services import reconciliation_engine
-from services import pool_ops, pool_backfill
+from services import pool_ops, pool_backfill, pool_canary_ops
 
 router = APIRouter(prefix="/api/diagnostics", tags=["Diagnostics"])
 
 
 @router.get("/pool/dashboard")
 def get_pool_dashboard():
-    """Phase 3C operational dashboard data: flags, headline metrics, per-canary health, rollback
+    """Phase 3C/4E operational dashboard: flags, metrics, safety signals, per-canary health, rollback
     events, SLA breaches, live-vs-canonical diffs. Read-only."""
     return pool_ops.dashboard()
 
@@ -29,6 +29,36 @@ def get_pool_backfill_plan(barcode: str = Query(...), db: Session = Depends(get_
     """READ-ONLY backfill dry-run for one barcode: live per-store quantities, computed Q, spread,
     and the safety verdict. Mutates nothing (the real backfill is an explicit operator action)."""
     return pool_backfill.plan_backfill(db, barcode)
+
+
+@router.get("/pool/candidates")
+def get_pool_candidates(limit: int = Query(10, le=50)):
+    """Phase 4B — ranked canary candidates (multi-store, converged, low-volume, stable). Advisory."""
+    return pool_canary_ops.select_canary_candidates(limit=limit)
+
+
+@router.get("/pool/prepare")
+def get_pool_prepare(barcode: str = Query(...)):
+    """Phase 4B — pre-enablement snapshot (live + PoolState + mirror) + eligibility checks. Read-only."""
+    return pool_canary_ops.prepare_canary(barcode)
+
+
+@router.get("/pool/validate")
+def get_pool_validate(barcode: str = Query(...), window_minutes: int = Query(120, le=1440)):
+    """Phase 4C — automated live-canary validation + timeline + healthy verdict. Read-only."""
+    return pool_canary_ops.validate_canary(barcode, window_minutes=window_minutes)
+
+
+@router.get("/pool/replay")
+def get_pool_replay(barcode: str = Query(...), hours: int = Query(24, le=168)):
+    """Phase 4D — forensic replay from immutable golden events + ledger. Read-only; touches nothing."""
+    return pool_canary_ops.forensic_replay(barcode, hours=hours)
+
+
+@router.get("/pool/report")
+def get_pool_report(barcode: str = Query(...), window_minutes: int = Query(240, le=1440)):
+    """Phase 4E — comprehensive canary report + recommendation (expand/hold/rollback). Read-only."""
+    return pool_canary_ops.canary_report(barcode, window_minutes=window_minutes)
 
 
 @router.get("/reconcile-plan")

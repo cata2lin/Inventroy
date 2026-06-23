@@ -258,7 +258,7 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
                 pool_canary.canary_handle(
                     barcode=barcode, source_store_id=store_id, source_variant_id=variant.id,
                     inventory_item_id=inventory_item_id, observed_quantity=new_available,
-                    source_timestamp=source_timestamp, webhook_id=webhook_id)
+                    source_timestamp=source_timestamp, webhook_id=webhook_id, raw_payload=payload)
                 return
         except Exception as _cw:
             print(f"[CANARY-ERROR] canary_handle failed for {barcode}, rolling back to legacy: {_cw}")

@@ -304,6 +304,22 @@ class PoolBackfill(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
 
+class PoolGoldenEvent(Base):
+    """Phase 4A — IMMUTABLE forensic capture for canary barcodes. Append-only; NEVER cleaned during
+    the initial rollout (cleanup_expired_records ignores it). Captures the full causal record needed
+    to replay an incident without touching production: raw webhook payloads, canonical transitions,
+    CAS attempts/results, retries, rollback decisions, live Shopify reads, reconciliation observations."""
+    __tablename__ = "pool_golden_events"
+    id = Column(BIGINT, primary_key=True, autoincrement=True)
+    barcode = Column(String(255), nullable=False, index=True)
+    kind = Column(String(40), nullable=False)   # webhook | transition | cas | rollback | live_read | reconcile
+    pool_version = Column(BIGINT, nullable=True)
+    webhook_id = Column(String(255), nullable=True)
+    payload = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    __table_args__ = (Index('ix_pool_golden_barcode_id', 'barcode', 'id'),)
+
+
 class PoolCanaryRollback(Base):
     """Phase 3B — an ACTIVE canary rollback marker. While a row exists for a barcode, the canary write
     path is disabled for it and the legacy delta path serves it again (safe mode). Append/clear is

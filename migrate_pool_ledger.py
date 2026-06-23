@@ -77,6 +77,20 @@ DDL = [
         rolled_back_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
+    # Phase 4: immutable forensic capture for canary barcodes (append-only, never auto-cleaned).
+    """
+    CREATE TABLE IF NOT EXISTS pool_golden_events (
+        id            BIGSERIAL PRIMARY KEY,
+        barcode       VARCHAR(255) NOT NULL,
+        kind          VARCHAR(40) NOT NULL,
+        pool_version  BIGINT,
+        webhook_id    VARCHAR(255),
+        payload       JSONB,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_pool_golden_barcode_id ON pool_golden_events (barcode, id)",
+    "CREATE INDEX IF NOT EXISTS ix_pool_golden_created ON pool_golden_events (created_at)",
 ]
 
 

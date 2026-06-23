@@ -132,6 +132,29 @@ def live_vs_canonical(limit: int = 50) -> List[Dict[str, Any]]:
         db.close()
 
 
+def safety_signals(hours: int = 6) -> Dict[str, Any]:
+    """Phase 4E safety views: API error rate, CAS contention, propagation latency, webhook-retry
+    pressure, write amplification."""
+    db = SessionLocal()
+    try:
+        row = db.execute(text("""
+          SELECT
+            count(*) FILTER (WHERE category='STOCK' AND severity IN ('ERROR','CRITICAL')) stock_errors,
+            count(*) FILTER (WHERE action='dist_lock_contention') lock_contention,
+            coalesce(sum((details->>'failed')::int) FILTER (WHERE action='pool_converged'),0) cas_conflicts,
+            coalesce(avg((details->>'propagation_latency_ms')::numeric) FILTER (WHERE action='pool_canary_write'),0) avg_latency_ms,
+            coalesce(max((details->>'propagation_latency_ms')::int) FILTER (WHERE action='pool_canary_write'),0) max_latency_ms,
+            count(*) FILTER (WHERE action IN ('pool_canary_dup_suppressed','pool_shadow_dup_suppressed')) dup_suppressions,
+            count(*) FILTER (WHERE action='pool_converged') convergence_writes
+          FROM audit_logs WHERE timestamp >= now() - (:h || ' hours')::interval
+        """), {"h": hours}).mappings().first()
+        s = dict(row)
+        s["window_hours"] = hours
+        return s
+    finally:
+        db.close()
+
+
 def dashboard() -> Dict[str, Any]:
     """One call powering the operational dashboard."""
     return {
@@ -141,6 +164,7 @@ def dashboard() -> Dict[str, Any]:
             "canary_barcodes": sorted(pool_engine.canary_barcodes()),
         },
         "metrics": metrics_summary(),
+        "safety_signals": safety_signals(),
         "canary_health": canary_health(),
         "rollback_events": rollback_events(),
         "convergence_sla": convergence_sla(),
