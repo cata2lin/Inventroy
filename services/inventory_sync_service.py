@@ -28,6 +28,7 @@ from services import audit_logger
 from services import sync_guards
 from services import alerting
 from services import dist_lock
+from services import pool_engine
 
 # --- Configuration ---
 INTENT_TTL_SECONDS = 60
@@ -229,6 +230,21 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
                     except Exception:
                         db.rollback()
                 return
+
+        # --- PHASE 1 SHADOW MODE (no Shopify writes) ---
+        # Run the pool engine in parallel on this genuine (non-echo) observation BEFORE the legacy
+        # version gate, so the engine also "sees" events the buggy cross-store timestamp gate would
+        # drop. shadow_observe opens its OWN db session and is fully best-effort: it can never affect
+        # the authoritative legacy path below. Gated by SYNC_POOL_SHADOW (kill switch).
+        if pool_engine.pool_shadow_enabled():
+            try:
+                pool_engine.shadow_observe(
+                    barcode=barcode, source_store_id=store_id, source_variant_id=variant.id,
+                    inventory_item_id=inventory_item_id, observed_quantity=new_available,
+                    source_timestamp=source_timestamp, webhook_id=webhook_id,
+                    legacy_quantity=new_available, caller_holds_lock=True)
+            except Exception as _sh:
+                print(f"[SHADOW-WARN] pool shadow_observe failed (ignored): {_sh}")
 
         # --- VERSION CHECK ---
         is_authoritative = _is_new_authoritative_version(db, barcode, source_timestamp)
