@@ -96,7 +96,8 @@ def prepare_canary(barcode: str) -> Dict[str, Any]:
             "live_readable": len(lives) == len(rows) and len(rows) >= 2,
             "live_converged": live_spread == 0,
             "backfilled": bool(state and state.backfilled_at),
-            "no_unresolved_divergence": bool(state and state.diverged_since is None),
+            # a pool with no PoolState yet (never shadow-observed) has no unresolved divergence
+            "no_unresolved_divergence": (state is None) or (state.diverged_since is None),
             "low_volume": vol_7d < 200,
         }
         eligible = all(v for k, v in checks.items() if k != "backfilled")  # backfill is the next step
