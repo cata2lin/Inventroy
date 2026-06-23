@@ -259,6 +259,44 @@ class ProcessedWebhook(Base):
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
 
+class PoolState(Base):
+    """STAGE 2 — canonical shared-pool state per barcode: the single source of truth that every
+    store is a replica of. `quantity` is the converged pool quantity; `version` is a monotonic
+    counter that ALL writers advance under the per-barcode advisory lock (the convergence clock);
+    `source_event_id` is the pool_events row that last set it. Stores are driven to `quantity` via
+    idempotent absolute compare-and-set. Flag-gated (SYNC_POOL_ENGINE); inert until Stage 2 cutover."""
+    __tablename__ = "pool_states"
+    barcode = Column(String(255), primary_key=True)
+    quantity = Column(Integer, nullable=False)
+    version = Column(BIGINT, nullable=False, default=1)
+    source_event_id = Column(BIGINT, nullable=True)
+    source_store_id = Column(Integer, nullable=True)
+    source_timestamp = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PoolEvent(Base):
+    """STAGE 2 — append-only event ledger. Every accepted inventory observation is recorded exactly
+    ONCE (webhook_id UNIQUE → idempotent ingest via INSERT … ON CONFLICT DO NOTHING). The canonical
+    pool quantity is reconstructable from this ledger; nothing is mutated in place. This is what makes
+    lost/dup/reordered deltas detectable and the pool quantity auditable (audit MEDIUM-2)."""
+    __tablename__ = "pool_events"
+    event_id = Column(BIGINT, primary_key=True, autoincrement=True)
+    barcode = Column(String(255), nullable=False, index=True)
+    source_store_id = Column(Integer, nullable=True)
+    source_variant_id = Column(BIGINT, nullable=True)
+    inventory_item_id = Column(BIGINT, nullable=True)
+    observed_quantity = Column(Integer, nullable=False)
+    source_timestamp = Column(DateTime(timezone=True), nullable=True)
+    webhook_id = Column(String(255), nullable=True, unique=True)
+    kind = Column(String(40), nullable=False, server_default="observation")
+    applied = Column(BOOLEAN, nullable=False, server_default="false")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    __table_args__ = (
+        Index('ix_pool_events_barcode_ts', 'barcode', 'source_timestamp'),
+    )
+
+
 class AuditLog(Base):
     """
     Central audit trail for ALL system operations.
