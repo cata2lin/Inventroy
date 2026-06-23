@@ -23,10 +23,20 @@ import models
 from shopify_service import ShopifyService
 from . import sync_tracker
 from . import audit_logger
+import os
 import time
 
 # Echo suppression TTL for reconciliation writes (same as inventory_sync_service)
 INTENT_TTL_SECONDS = 60
+
+
+def _legacy_reconcile_enabled() -> bool:
+    """Stage 0 kill switch. The legacy reconcile writer (_reconcile_single_barcode) is LOCKLESS,
+    COMPARE-LESS and FLOOR-LESS — it can SET every store in a pool to a stale/negative/orphan value
+    mid-sale with no advisory lock and no clamp (the source of observed -2..-17 negative cascades).
+    Disabled by default; the safe, locked, floored, gated reconciliation_engine.auto_reconverge is
+    the canonical reconciler now. Set LEGACY_RECONCILE_ENABLED=true only to temporarily re-enable."""
+    return os.getenv("LEGACY_RECONCILE_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
 def reconcile_stock_by_barcode(task_id: Optional[str] = None) -> Dict[str, Any]:
@@ -41,6 +51,14 @@ def reconcile_stock_by_barcode(task_id: Optional[str] = None) -> Dict[str, Any]:
 
     Returns a summary of what was reconciled.
     """
+    if not _legacy_reconcile_enabled():
+        # Stage 0: the lockless/floorless writer is disabled. Do NOT silently no-op without a trace.
+        audit_logger.log(category="RECONCILIATION", action="legacy_reconcile_skipped",
+                         message="Legacy reconcile_stock_by_barcode is DISABLED (lockless/floorless). "
+                                 "Use reconciliation_engine.auto_reconverge (locked + floored + gated).",
+                         severity="INFO")
+        return {"barcodes_processed": 0, "variants_updated": 0, "skipped_aligned": 0,
+                "errors": [], "details": [], "disabled": True}
     db: Session = SessionLocal()
     results = {
         "barcodes_processed": 0,

@@ -25,6 +25,7 @@ from services import audit_logger
 from services import webhook_maintenance
 from services import monitoring
 from services import reconciliation_engine
+from services import live_truth
 
 load_dotenv()
 
@@ -45,6 +46,9 @@ scheduler.add_job(monitoring.run_health_monitor, 'interval', minutes=10)
 scheduler.add_job(reconciliation_engine.auto_reconverge, 'interval', minutes=30)
 # P7/8: continuous stability assertion — accumulates the long-term-stability time series.
 scheduler.add_job(monitoring.assert_stability, 'interval', minutes=15)
+# Stage 0: LIVE-TRUTH sweep — reads actual Shopify quantities (not the mirror) to surface divergence
+# the mirror is structurally blind to (dropped/missed writes). Read-only, alert-only.
+scheduler.add_job(live_truth.run_live_truth_sweep, 'interval', minutes=20)
 scheduler.start()
 # --- END SCHEDULER SETUP ---
 

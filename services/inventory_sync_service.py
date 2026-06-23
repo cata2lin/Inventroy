@@ -876,6 +876,19 @@ def _create_write_intents(db: Session, barcode: str, quantity: int, version: int
     db.commit()
 
 
+def _is_stale_compare(ue: Optional[List[Dict[str, Any]]]) -> bool:
+    """True if a Shopify userErrors list signals a compare-and-set mismatch. Matches the typed
+    `code` (now that the mutations select it) AND, belt-and-suspenders, the message text — so the
+    stale-compare healer can never silently regress to dead code if Shopify changes the enum."""
+    for e in (ue or []):
+        if e.get("code") == "COMPARE_QUANTITY_STALE":
+            return True
+        msg = (e.get("message") or "").lower()
+        if "comparequantity" in msg or "compare quantity" in msg or "no longer matches" in msg:
+            return True
+    return False
+
+
 def _propagate_delta_single_item(db: Session, barcode: str, delta: int, new_source_qty: int,
                                  store: models.Store, location_gid: str,
                                  variants_to_update: List[models.ProductVariant], ref_uri: str,
@@ -942,7 +955,7 @@ def _propagate_delta_single_item(db: Session, barcode: str, delta: int, new_sour
                     crud_product.update_inventory_levels_for_variants(
                         db, variant_ids=[v.id], location_id=store.sync_location_id, new_quantity=target)
                     authoritative, mode = target, "delta-cas"
-                elif any(e.get("code") == "COMPARE_QUANTITY_STALE" for e in ue):
+                elif _is_stale_compare(ue):
                     # Mirror drifted / a concurrent change moved it. READ Shopify's true current and
                     # retry the compare-and-set at (C+delta) so we can STILL anchor (and heal the
                     # drift). Bounded retries; only sustained concurrent change exhausts them.
@@ -960,7 +973,7 @@ def _propagate_delta_single_item(db: Session, barcode: str, delta: int, new_sour
                             authoritative, mode = new_target, "delta-cas-retry"
                             healed = True
                             break
-                        if not any(e.get("code") == "COMPARE_QUANTITY_STALE" for e in ue_r):
+                        if not _is_stale_compare(ue_r):
                             raise Exception(str(ue_r))  # a real error, not a stale-compare
                         # else: stale again (another concurrent change) -> loop and re-read
                     if not healed:

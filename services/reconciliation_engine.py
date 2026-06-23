@@ -131,6 +131,15 @@ def apply_plan(db: Session, plan: Dict[str, Any]) -> Dict[str, Any]:
 
 def _apply_plan_locked(db: Session, plan: Dict[str, Any], barcode: str, target: int) -> Dict[str, Any]:
     sync_op = f"reconcile-{uuid.uuid4()}"
+    # NEGATIVE PROTECTION (Stage 0): never SET a store below the floor, even if the authoritative
+    # value was computed as negative (stale/orphan source). An absolute reconcile write is exactly
+    # where a negative value would be propagated pool-wide, so clamp here unconditionally.
+    if target is not None and target < sync_guards.INVENTORY_FLOOR:
+        audit_logger.log(category="RECONCILIATION", action="reconcile_floor_clamp",
+                         message=f"[{barcode}] authoritative target {target} < floor; clamped to {sync_guards.INVENTORY_FLOOR}",
+                         target=barcode, severity="WARN",
+                         details={"raw_target": target, "floor": sync_guards.INVENTORY_FLOOR})
+        target = sync_guards.INVENTORY_FLOOR
     applied = 0
     for mv in plan["moves"]:
         store = db.query(models.Store).filter(models.Store.id == mv["store_id"]).first()

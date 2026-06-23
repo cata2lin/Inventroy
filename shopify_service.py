@@ -170,7 +170,7 @@ MUTATIONS = {
           inventoryAdjustmentGroup {
             changes { name delta quantityAfterChange }
           }
-          userErrors { field message }
+          userErrors { field message code }
         }
       }
     """,
@@ -180,7 +180,7 @@ MUTATIONS = {
           inventoryAdjustmentGroup {
             changes { name delta quantityAfterChange }
           }
-          userErrors { field message }
+          userErrors { field message code }
         }
       }
     """,
