@@ -38,19 +38,21 @@ def select_canary_candidates(limit: int = 10) -> List[Dict[str, Any]]:
             SELECT barcode, count(*) stores, max(av)-min(av) spread, max(av) maxq, min(av) minq
             FROM canon GROUP BY barcode HAVING count(*)>1
           )
-          SELECT g.barcode, g.stores, g.spread, g.maxq,
-                 (SELECT count(*) FROM audit_logs a WHERE a.target=g.barcode
-                    AND a.action='stock_propagation_started' AND a.timestamp >= now() - interval '7 days') vol_7d,
-                 (SELECT count(*) FROM audit_logs a WHERE a.target=g.barcode
-                    AND a.action IN ('propagation_storm_tripped','propagation_blocked_oversized_delta')
-                    AND a.timestamp >= now() - interval '14 days') storms,
-                 (SELECT count(*) FROM barcode_circuit_breakers b WHERE b.barcode=g.barcode) breaker
-          FROM grp g
-          WHERE g.spread = 0          -- currently converged on the mirror
-            AND g.minq >= 0           -- NOT oversold (never canary a negative pool)
-            AND g.maxq > 0            -- has real positive stock (a meaningful canary)
+          SELECT * FROM (
+            SELECT g.barcode, g.stores, g.spread, g.maxq,
+                   (SELECT count(*) FROM audit_logs a WHERE a.target=g.barcode
+                      AND a.action='stock_propagation_started' AND a.timestamp >= now() - interval '7 days') vol_7d,
+                   (SELECT count(*) FROM audit_logs a WHERE a.target=g.barcode
+                      AND a.action IN ('propagation_storm_tripped','propagation_blocked_oversized_delta')
+                      AND a.timestamp >= now() - interval '14 days') storms,
+                   (SELECT count(*) FROM barcode_circuit_breakers b WHERE b.barcode=g.barcode) breaker
+            FROM grp g
+            WHERE g.spread = 0          -- currently converged on the mirror
+              AND g.minq >= 0           -- NOT oversold (never canary a negative pool)
+              AND g.maxq > 0            -- has real positive stock (a meaningful canary)
+          ) x
           -- prefer low-but-ACTIVE (nonzero volume exercises the path), stable, modest stock:
-          ORDER BY storms ASC, breaker ASC, (vol_7d = 0) ASC, vol_7d ASC, g.maxq ASC
+          ORDER BY storms ASC, breaker ASC, (vol_7d = 0) ASC, vol_7d ASC, maxq ASC
           LIMIT :lim
         """), {"lim": limit}).mappings().all()
         out = []
