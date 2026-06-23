@@ -273,6 +273,9 @@ class PoolState(Base):
     source_store_id = Column(Integer, nullable=True)
     source_timestamp = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    # Phase 2: when the pool first went diverged on LIVE Shopify (cleared on convergence). Drives the
+    # permanent-divergence detector + convergence-SLA (unresolved_duration = now - diverged_since).
+    diverged_since = Column(DateTime(timezone=True), nullable=True)
 
 
 class PoolEvent(Base):

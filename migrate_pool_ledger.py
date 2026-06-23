@@ -44,6 +44,8 @@ DDL = [
     "CREATE INDEX IF NOT EXISTS ix_pool_events_barcode ON pool_events (barcode)",
     "CREATE INDEX IF NOT EXISTS ix_pool_events_barcode_ts ON pool_events (barcode, source_timestamp)",
     "CREATE INDEX IF NOT EXISTS ix_pool_events_created ON pool_events (created_at)",
+    # Phase 2: unresolved-duration tracking for the permanent-divergence detector.
+    "ALTER TABLE pool_states ADD COLUMN IF NOT EXISTS diverged_since TIMESTAMPTZ",
 ]
 
 

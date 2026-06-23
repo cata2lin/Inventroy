@@ -26,6 +26,7 @@ from services import webhook_maintenance
 from services import monitoring
 from services import reconciliation_engine
 from services import live_truth
+from services import pool_validation
 
 load_dotenv()
 
@@ -49,6 +50,9 @@ scheduler.add_job(monitoring.assert_stability, 'interval', minutes=15)
 # Stage 0: LIVE-TRUTH sweep — reads actual Shopify quantities (not the mirror) to surface divergence
 # the mirror is structurally blind to (dropped/missed writes). Read-only, alert-only.
 scheduler.add_job(live_truth.run_live_truth_sweep, 'interval', minutes=20)
+# Phase 2: validate the canonical PoolState against LIVE Shopify (engine-vs-truth + permanent-
+# divergence detector + SLA). Read-only, alert-only; meaningful once shadow mode has populated pools.
+scheduler.add_job(pool_validation.run_pool_validation_sweep, 'interval', minutes=30)
 scheduler.start()
 # --- END SCHEDULER SETUP ---
 
