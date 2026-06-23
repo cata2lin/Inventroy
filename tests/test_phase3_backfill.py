@@ -55,6 +55,13 @@ def test_unsafe_emits_critical_alert():
     assert 'alerting.critical("pool_backfill.unsafe"' in SRC
 
 
+def test_backfill_refuses_negative_converged_pool():
+    # a pool converged at a negative value (oversold across all stores) must NOT be backfilled —
+    # seeding + converging would floor it to 0 (a live inventory change). Caught by prepare/dry-run.
+    assert "skipped_negative" in SRC
+    assert "computed_q < sync_guards.INVENTORY_FLOOR" in SRC
+
+
 def test_backfill_grants_write_eligibility():
     # applying a backfill stamps backfilled_at (the canary write-eligibility gate)
     assert "state.backfilled_at = now" in SRC or "backfilled_at=now" in SRC

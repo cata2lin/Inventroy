@@ -26,7 +26,7 @@ from typing import Dict, Any, List, Optional
 
 from sqlalchemy import text
 from database import SessionLocal
-from services import audit_logger, alerting, live_truth
+from services import audit_logger, alerting, live_truth, sync_guards
 import models
 
 
@@ -63,8 +63,16 @@ def plan_backfill(db, barcode: str) -> Dict[str, Any]:
                 "spread": spread, "safe": False, "action": "skipped_diverged",
                 "reason": f"stores disagree (spread {spread} > {BACKFILL_MAX_SPREAD}); operator must converge first",
                 "source_store": source_store}
-    # SAFE: all stores agree -> the agreed value is the confirmed live truth.
     computed_q = max(lives)
+    # Never seed a NEGATIVE pool as write-authoritative: a converged-negative pool is oversold across
+    # all stores (a real data problem). Backfilling it + converging would floor it to 0 — a live
+    # inventory change, not a no-op. Refuse; operator must correct the oversell first.
+    if computed_q < sync_guards.INVENTORY_FLOOR:
+        return {"barcode": barcode, "live_quantities": live_quantities, "computed_Q": computed_q,
+                "spread": spread, "safe": False, "action": "skipped_negative",
+                "reason": f"converged at negative {computed_q} (oversold); resolve before backfill",
+                "source_store": source_store}
+    # SAFE: all stores agree on a non-negative value -> the confirmed live truth.
     return {"barcode": barcode, "live_quantities": live_quantities, "computed_Q": computed_q,
             "spread": spread, "safe": True, "action": "backfill", "reason": "stores converged on live",
             "source_store": source_store}

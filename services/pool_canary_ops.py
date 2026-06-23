@@ -35,7 +35,7 @@ def select_canary_candidates(limit: int = 10) -> List[Dict[str, Any]]:
             WHERE pv.barcode IS NOT NULL AND pv.barcode<>'' AND il.available IS NOT NULL
             ORDER BY pv.barcode, pv.store_id, {live_truth.diagnostics.CANON_ORDER}
           ), grp AS (
-            SELECT barcode, count(*) stores, max(av)-min(av) spread, max(av) maxq
+            SELECT barcode, count(*) stores, max(av)-min(av) spread, max(av) maxq, min(av) minq
             FROM canon GROUP BY barcode HAVING count(*)>1
           )
           SELECT g.barcode, g.stores, g.spread, g.maxq,
@@ -46,8 +46,11 @@ def select_canary_candidates(limit: int = 10) -> List[Dict[str, Any]]:
                     AND a.timestamp >= now() - interval '14 days') storms,
                  (SELECT count(*) FROM barcode_circuit_breakers b WHERE b.barcode=g.barcode) breaker
           FROM grp g
-          WHERE g.spread = 0                                  -- currently converged on the mirror
-          ORDER BY storms ASC, breaker ASC, vol_7d ASC, g.maxq ASC
+          WHERE g.spread = 0          -- currently converged on the mirror
+            AND g.minq >= 0           -- NOT oversold (never canary a negative pool)
+            AND g.maxq > 0            -- has real positive stock (a meaningful canary)
+          -- prefer low-but-ACTIVE (nonzero volume exercises the path), stable, modest stock:
+          ORDER BY storms ASC, breaker ASC, (vol_7d = 0) ASC, vol_7d ASC, g.maxq ASC
           LIMIT :lim
         """), {"lim": limit}).mappings().all()
         out = []
