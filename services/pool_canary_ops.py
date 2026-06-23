@@ -37,16 +37,19 @@ def select_canary_candidates(limit: int = 10) -> List[Dict[str, Any]]:
           ), grp AS (
             SELECT barcode, count(*) stores, max(av)-min(av) spread, max(av) maxq, min(av) minq
             FROM canon GROUP BY barcode HAVING count(*)>1
+          ), recent AS (   -- ONE pass over recent audit_logs instead of N correlated scans
+            SELECT target barcode,
+                   count(*) FILTER (WHERE action='stock_propagation_started'
+                                    AND timestamp >= now() - interval '7 days') vol_7d,
+                   count(*) FILTER (WHERE action IN ('propagation_storm_tripped','propagation_blocked_oversized_delta')) storms
+            FROM audit_logs WHERE target IS NOT NULL AND timestamp >= now() - interval '14 days'
+            GROUP BY target
           )
           SELECT * FROM (
             SELECT g.barcode, g.stores, g.spread, g.maxq,
-                   (SELECT count(*) FROM audit_logs a WHERE a.target=g.barcode
-                      AND a.action='stock_propagation_started' AND a.timestamp >= now() - interval '7 days') vol_7d,
-                   (SELECT count(*) FROM audit_logs a WHERE a.target=g.barcode
-                      AND a.action IN ('propagation_storm_tripped','propagation_blocked_oversized_delta')
-                      AND a.timestamp >= now() - interval '14 days') storms,
+                   coalesce(r.vol_7d,0) vol_7d, coalesce(r.storms,0) storms,
                    (SELECT count(*) FROM barcode_circuit_breakers b WHERE b.barcode=g.barcode) breaker
-            FROM grp g
+            FROM grp g LEFT JOIN recent r ON r.barcode = g.barcode
             WHERE g.spread = 0          -- currently converged on the mirror
               AND g.minq >= 0           -- NOT oversold (never canary a negative pool)
               AND g.maxq > 0            -- has real positive stock (a meaningful canary)
