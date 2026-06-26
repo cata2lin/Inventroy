@@ -152,6 +152,49 @@ def test_canary_echo_anchor_folds_to_zero():
     assert fold_observation(98, 98, 98) == 98
 
 
+# --- REGRESSION: the 2026-06-26 spike-zeroing bug (converge must reseed ALL baselines) -------------
+
+def test_converge_reseeds_all_store_baselines_not_only_landed():
+    # converge_pool MUST reseed every processed store's ledger baseline to Q (insert a 'convergence'
+    # anchor) even when its CAS did NOT land. A mirror-blind / cas_conflict store that keeps a stale,
+    # spiked source_prev makes the next real observation fold catastrophically (pool floored to 0).
+    src = _read("services/pool_engine.py")
+    conv = src[src.index("def converge_pool"):src.index("def simulate_convergence")]
+    anchor = conv.index("'convergence'")                                     # the baseline-reseed INSERT
+    landed_guard = conv.index('if cas_result in ("set", "set_after_retry"')  # the landed-only guard
+    mirror = conv.index("UPDATE inventory_levels SET available=:q")
+    # anchor reseed happens for ALL stores (before/outside the landed guard); mirror stays gated.
+    assert anchor < landed_guard, "convergence anchor must reseed EVERY store, not only landed-CAS ones"
+    assert landed_guard < mirror, "mirror UPDATE must stay inside the landed-cas guard (never lie)"
+
+
+def test_spike_does_not_zero_when_converge_reseeds_baselines():
+    # WITH the fix: each converge reseeds every store's baseline to Q, so a transient spike that is
+    # later reverted folds cleanly instead of flooring the pool to 0.
+    Q = 990
+    last = {"E": 990, "G": 990}
+    def observe(store, val):
+        nonlocal Q
+        Q = fold_observation(Q, last[store], val)
+        last[store] = val
+        for s in last:            # converge reseeds EVERY store's baseline to the new Q (the fix)
+            last[s] = Q
+        return Q
+    assert observe("E", 2050) == 2050          # spike up
+    assert observe("E", 991) == 991            # revert folds 991-2050 against Q=2050 -> 991 (NOT 0)
+    assert observe("G", 990) == 990            # subsequent normal sale folds correctly
+
+
+def test_spike_zeroes_without_baseline_reseed_is_the_bug():
+    # WITHOUT reseeding the spiking store's baseline (the pre-fix behaviour), an intervening converge
+    # moves Q but leaves the stale spike baseline -> the revert floors the pool to 0. Documents the bug.
+    Q = 990
+    Q = fold_observation(Q, 990, 2050)         # Esteban spike -> Q=2050, baseline left at 2050
+    Q = 992                                    # an intervening converge pulls Q to the other store's 992
+    Q = fold_observation(Q, 2050, 991)         # 992 + (991-2050) = -67 -> floored to 0  (the wipe)
+    assert Q == 0
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0

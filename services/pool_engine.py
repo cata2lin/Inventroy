@@ -254,18 +254,25 @@ def converge_pool(db: Session, barcode: str, exclude_store_id: Optional[int] = N
                         failed += 1; cas_result = "unreadable"
                 else:
                     converged += 1; cas_result = "set"
-            # On a landed write (set/already), keep mirror + ledger baseline at Q so the store's
-            # resulting echo webhook folds to delta 0 (no self-amplification).
+            # ALWAYS reseed THIS store's ledger baseline to Q via a 'convergence' anchor — even when
+            # the CAS write did NOT land (mirror-blind store / cas_conflict / unreadable). Otherwise
+            # that store keeps a STALE source_prev (e.g. a transient spike value), and its next real
+            # observation folds against it catastrophically. This is the 2026-06-26 spike-zeroing bug:
+            # Esteban spiked 990->2050, an intervening converge pulled Q to 992 but Esteban's CAS was
+            # mirror-blind so its baseline stayed ~2049; the next real Esteban obs 991 folded as
+            # 992 + (991 - 2049) = -66 -> floored to 0, wiping a 990-unit store. Reseeding every
+            # store's baseline to Q makes the revert fold cleanly (991 - 2050 against Q=2050 -> 991).
+            # The MIRROR is updated ONLY on a landed write, so the mirror never lies about Shopify.
+            db.execute(text("""INSERT INTO pool_events
+                               (barcode, source_store_id, source_variant_id, inventory_item_id,
+                                observed_quantity, source_timestamp, kind)
+                               VALUES (:b,:s,:v,:i,:q, now(), 'convergence')"""),
+                       {"b": barcode, "s": r["store_id"], "v": r["variant_id"],
+                        "i": r["inventory_item_id"], "q": target})
             if cas_result in ("set", "set_after_retry", "already", "already_after_retry"):
                 db.execute(text("""UPDATE inventory_levels SET available=:q, updated_at=now()
                                    WHERE variant_id=:vid AND location_id=:loc"""),
                            {"q": target, "vid": r["variant_id"], "loc": r["sync_location_id"]})
-                db.execute(text("""INSERT INTO pool_events
-                                   (barcode, source_store_id, source_variant_id, inventory_item_id,
-                                    observed_quantity, source_timestamp, kind)
-                                   VALUES (:b,:s,:v,:i,:q, now(), 'convergence')"""),
-                           {"b": barcode, "s": r["store_id"], "v": r["variant_id"],
-                            "i": r["inventory_item_id"], "q": target})
         except Exception:
             failed += 1; cas_result = "error"
         per_store.append({"store": r["store"], "cas_result": cas_result, "retries": n_try,
