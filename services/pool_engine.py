@@ -23,6 +23,7 @@ The pure fold below is the mathematically-verified core and is unit-tested indep
 """
 import os
 import uuid
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 
 from sqlalchemy import text
@@ -62,6 +63,21 @@ def canary_barcodes() -> set:
     return {b.strip() for b in raw.split(",") if b.strip()}
 
 
+def spike_corroboration_enabled() -> bool:
+    """P0 transient-spike guard. When on, an UP jump is corroborated against the SOURCE store's LIVE
+    Shopify value BEFORE it folds into the pool; a phantom webhook (a claimed increase Shopify never
+    actually had — the 2026-06-26 990->2050 spike) is corrected to live truth so it can neither
+    propagate nor poison the per-source baseline (the zeroing-on-revert mechanism). Magnitude-agnostic:
+    it checks PERSISTENCE in live truth, never jump size, so real 6k-12k restocks pass untouched.
+    Kill switch: SYNC_POOL_SPIKE_CORROBORATION=false."""
+    return os.getenv("SYNC_POOL_SPIKE_CORROBORATION", "true").strip().lower() in ("1", "true", "yes", "on")
+
+
+# How far live truth may sit BELOW a claimed UP jump and still corroborate it — absorbs sales that
+# happen between the webhook firing and our live re-read, and ignores tiny jumps entirely.
+SPIKE_CORROBORATION_TOLERANCE = int(os.getenv("POOL_SPIKE_CORROBORATION_TOLERANCE", "10"))
+
+
 # --------------------------------------------------------------------------------------------------
 # PURE CONVERGENCE CORE (no I/O — this is the part whose correctness is proven by tests)
 # --------------------------------------------------------------------------------------------------
@@ -91,6 +107,31 @@ def is_stale_for_source(prev_source_timestamp, new_source_timestamp) -> bool:
     if prev_source_timestamp is None or new_source_timestamp is None:
         return False
     return new_source_timestamp < prev_source_timestamp
+
+
+def corroboration_verdict(prev: Optional[int], observed: int, live: Optional[int], tol: int) -> str:
+    """PURE decision for the transient-spike guard (P0). Returns the value the pool should fold:
+        'fold'    -> use `observed` as-is (no corroboration needed or live confirms it).
+        'correct' -> use `live` instead of `observed` (a phantom UP jump live truth refutes).
+
+    'correct' fires ONLY when ALL hold:
+        • there is a prior source value to compare against (prev is not None),
+        • the webhook claims a real increase           : observed >  prev + tol,
+        • live truth shows NO real increase            : live    <= prev + tol  (live readable).
+    Every other case folds `observed`: not an up jump, live unreadable (FAIL-OPEN — never block real
+    inventory), or live corroborates the jump. This is magnitude-agnostic — it compares live against
+    the PRE-JUMP baseline, never the size of the jump — so a genuine restock (live reflects the new
+    high, even partly sold down) always folds, while a 990->2050 phantom whose live is still ~990 is
+    corrected to 990."""
+    if prev is None:
+        return "fold"
+    if observed <= prev + tol:
+        return "fold"
+    if live is None:
+        return "fold"
+    if live <= prev + tol:
+        return "correct"
+    return "fold"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -188,6 +229,57 @@ def apply_event(db: Session, event_id: int, skip_lock: bool = False) -> Optional
 
 
 # --------------------------------------------------------------------------------------------------
+# TRANSIENT-SPIKE CORROBORATION (P0) — refute a phantom UP jump against the source's LIVE truth
+# BEFORE it folds, so it can neither propagate nor poison the per-source baseline.
+# --------------------------------------------------------------------------------------------------
+
+def latest_source_observed(db: Session, barcode: str, source_store_id: Optional[int]) -> Optional[int]:
+    """The most recent recorded quantity for this (barcode, source_store) across the ledger — the same
+    baseline apply_event will fold the next observation against (observations AND convergence/baseline
+    anchors, newest wins). None if this source has never been recorded."""
+    row = db.execute(text("""
+        SELECT observed_quantity FROM pool_events
+        WHERE barcode = :b AND source_store_id IS NOT DISTINCT FROM :s
+        ORDER BY event_id DESC LIMIT 1
+    """), {"b": barcode, "s": source_store_id}).first()
+    return row[0] if row else None
+
+
+def _read_source_live(db: Session, source_store_id: Optional[int], inventory_item_id: Optional[int]) -> Optional[int]:
+    """Read the SOURCE store's live Shopify `available` for this item. None on any failure (fail-open)."""
+    if source_store_id is None or inventory_item_id is None:
+        return None
+    from services import live_truth
+    row = db.execute(text("""
+        SELECT shopify_url, api_token, sync_location_id FROM stores
+        WHERE id = :sid AND enabled AND sync_location_id IS NOT NULL
+    """), {"sid": source_store_id}).mappings().first()
+    if not row:
+        return None
+    return live_truth._read_live(row["shopify_url"], row["api_token"], inventory_item_id,
+                                 row["sync_location_id"])
+
+
+def corroborate_up_jump(db: Session, *, barcode: str, source_store_id: Optional[int],
+                        inventory_item_id: Optional[int], observed: int,
+                        tol: Optional[int] = None) -> tuple:
+    """Returns (observed_to_use, correction_info). For a claimed UP jump, re-reads the source's LIVE
+    Shopify value and applies `corroboration_verdict`. On 'correct' it substitutes the live value (so
+    the pool folds truth, never the phantom) and returns the forensic detail; otherwise it returns the
+    original observation and None. Fail-open: a failed/missing live read folds `observed` unchanged."""
+    if tol is None:
+        tol = SPIKE_CORROBORATION_TOLERANCE
+    prev = latest_source_observed(db, barcode, source_store_id)
+    # Cheap pre-check: only an UP jump beyond tolerance is worth a live read.
+    if prev is None or observed <= prev + tol:
+        return observed, None
+    live = _read_source_live(db, source_store_id, inventory_item_id)
+    if corroboration_verdict(prev, observed, live, tol) == "correct":
+        return live, {"prev": prev, "claimed": observed, "live": live, "tol": tol}
+    return observed, None
+
+
+# --------------------------------------------------------------------------------------------------
 # CONVERGENCE WRITER (idempotent absolute compare-and-set to Q)  — the Stage-2 cutover wires this in
 # --------------------------------------------------------------------------------------------------
 
@@ -273,6 +365,21 @@ def converge_pool(db: Session, barcode: str, exclude_store_id: Optional[int] = N
                 db.execute(text("""UPDATE inventory_levels SET available=:q, updated_at=now()
                                    WHERE variant_id=:vid AND location_id=:loc"""),
                            {"q": target, "vid": r["variant_id"], "loc": r["sync_location_id"]})
+            if cas_result in ("set", "set_after_retry"):
+                # P0 ECHO SUPPRESSION: the engine's OWN CAS write bounces back as a fresh inbound
+                # webhook (new webhook_id -> the ledger's webhook_id dedup misses it). Record a
+                # value-anchored WriteIntent so handle_webhook's _is_echo gate — which runs BEFORE the
+                # canary block — recognises and DROPS that echo instead of re-ingesting it as an
+                # observation. Without this the engine's own writes feed the oscillation detector and
+                # trip FALSE rollbacks to legacy (the 4-day soak quarantined real restocks this way).
+                # Deliberately value-based (quantity=target) with NO sync_operation_uuid: a REAL change
+                # that rides in on the window (observed != target) is therefore NOT suppressed — it
+                # flows to the canary path and folds correctly. inventory_item_id keeps it per-listing
+                # precise so multi-listing within a store cannot cross-suppress.
+                db.add(models.WriteIntent(
+                    barcode=barcode, target_store_id=r["store_id"],
+                    inventory_item_id=r["inventory_item_id"], quantity=target, barcode_version=0,
+                    expires_at=datetime.now(timezone.utc) + timedelta(seconds=sync_guards.ECHO_TTL_SECONDS)))
         except Exception:
             failed += 1; cas_result = "error"
         per_store.append({"store": r["store"], "cas_result": cas_result, "retries": n_try,
@@ -281,6 +388,17 @@ def converge_pool(db: Session, barcode: str, exclude_store_id: Optional[int] = N
         db.commit()
     except Exception:
         db.rollback()
+
+    # P3: a fully-successful convergence drives every processed store to Q, so they now AGREE and any
+    # customer-facing divergence is resolved. Clear the SLA clock immediately instead of waiting for
+    # the next validation sweep (removes stale 'permanent divergence' CRITICAL noise). Only clears —
+    # if the stores secretly still disagree, the next live-truth sweep re-arms diverged_since.
+    if failed == 0 and (converged + skipped) > 0 and state.diverged_since is not None:
+        try:
+            state.diverged_since = None
+            db.commit()
+        except Exception:
+            db.rollback()
 
     audit_logger.log(category="STOCK", action="pool_converged",
                      message=f"[{barcode}] converged stores to Q={target} v{version} "

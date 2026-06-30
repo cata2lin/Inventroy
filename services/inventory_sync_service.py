@@ -259,7 +259,16 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
         # version gate (so it also "sees" events the cross-store gate would drop). Canary-active
         # barcodes already returned above, so shadow never double-ingests them. Own session,
         # best-effort: it can never affect the authoritative legacy path below.
-        if pool_engine.pool_shadow_enabled():
+        # P1: skip shadow for ROLLED-BACK barcodes — they are served by legacy, and folding their
+        # observations into PoolState WITHOUT ever converging silently drifts pool_q away from reality
+        # (the stale-Q that makes a naive clear_rollback dangerous). Freezing PoolState while rolled
+        # back keeps re-enablement a pure re-backfill from live truth.
+        rolled_back = False
+        try:
+            rolled_back = pool_canary.is_rolled_back(db, barcode)
+        except Exception:
+            db.rollback()
+        if pool_engine.pool_shadow_enabled() and not rolled_back:
             try:
                 pool_engine.shadow_observe(
                     barcode=barcode, source_store_id=store_id, source_variant_id=variant.id,

@@ -195,6 +195,79 @@ def test_spike_zeroes_without_baseline_reseed_is_the_bug():
     assert Q == 0
 
 
+# --- P0a: ENGINE ECHO SUPPRESSION (converge writes a value-anchored WriteIntent the _is_echo gate drops) -
+
+def test_converge_creates_value_anchored_echo_marker():
+    # The engine's OWN CAS writes echo back as fresh webhooks (new webhook_id -> ledger dedup misses
+    # them). converge_pool must record a value-anchored WriteIntent so handle_webhook's _is_echo gate
+    # (which runs BEFORE the canary block) suppresses the echo instead of re-ingesting it as an
+    # observation -> otherwise the echo feeds the oscillation detector and trips FALSE rollbacks.
+    src = _read("services/pool_engine.py")
+    conv = src[src.index("def converge_pool"):src.index("def simulate_convergence")]
+    assert "models.WriteIntent(" in conv, "converge must record an echo marker for its own writes"
+    marker_pos = conv.index("models.WriteIntent(")
+    # gated to LANDED CHANGES only ('set'/'set_after_retry') — an 'already' store produced no write,
+    # hence no echo, so no marker (avoids suppressing a genuine same-value change).
+    guard = 'if cas_result in ("set", "set_after_retry"):'
+    assert guard in conv and conv.index(guard) < marker_pos, "echo marker must be gated to landed changes"
+    marker = conv[marker_pos:marker_pos + 400]
+    assert "quantity=target" in marker                  # value-anchored: matches the echo by value
+    assert "inventory_item_id=" in marker               # per-listing precise (no cross-suppression)
+    assert "ECHO_TTL_SECONDS" in marker                 # bounded TTL window
+    # CRUCIAL: no lineage op -> a REAL change riding in (observed != target) is NOT suppressed; it
+    # flows to the canary fold. (sync_operation_uuid would make _find_self_echo consume it instead.)
+    assert "sync_operation_uuid" not in marker
+
+
+def test_converge_clears_diverged_since_on_full_success():
+    # P3: a fully-successful convergence (failed==0) drives every store to Q -> they agree -> the SLA
+    # clock is cleared immediately rather than waiting for the next validation sweep.
+    src = _read("services/pool_engine.py")
+    conv = src[src.index("def converge_pool"):src.index("def simulate_convergence")]
+    assert "failed == 0" in conv and "diverged_since = None" in conv
+
+
+# --- P0b: TRANSIENT-SPIKE CORROBORATION (magnitude-agnostic; corrects phantom UP jumps to live truth) ---
+
+def test_corroboration_verdict_corrects_phantom_up_jump():
+    # claimed 990->2050 but live truth still ~990 => phantom => correct to live (discard the spike).
+    assert pool_engine.corroboration_verdict(990, 2050, 991, 10) == "correct"
+    assert pool_engine.corroboration_verdict(990, 2050, 990, 10) == "correct"
+
+
+def test_corroboration_verdict_allows_real_restock_any_magnitude():
+    # MAGNITUDE-AGNOSTIC: live reflects the new high (even partly sold down) => fold, whatever the size.
+    assert pool_engine.corroboration_verdict(990, 6990, 6990, 10) == "fold"     # +6000 restock confirmed
+    assert pool_engine.corroboration_verdict(990, 12990, 12970, 10) == "fold"   # +12000, 20 sold since
+    assert pool_engine.corroboration_verdict(990, 6990, 4000, 10) == "fold"     # flash-sold but live >> prev
+
+
+def test_corroboration_verdict_ignores_non_up_moves_and_fails_open():
+    assert pool_engine.corroboration_verdict(990, 989, 0, 10) == "fold"         # a sale (down move) — never gate
+    assert pool_engine.corroboration_verdict(990, 996, 0, 10) == "fold"         # within tolerance — not gated
+    assert pool_engine.corroboration_verdict(990, 2050, None, 10) == "fold"     # live unreadable => FAIL-OPEN
+    assert pool_engine.corroboration_verdict(None, 2050, 5, 10) == "fold"       # no prior obs => bootstrap, fold
+
+
+def test_canary_corroborates_before_ingest():
+    # the corroboration must run BEFORE ingest so a phantom never enters the ledger (and so can never
+    # become the per-source baseline that folds a later revert to 0).
+    src = _read("services/pool_canary.py")
+    inner = src[src.index("def _canary_handle_inner"):]
+    assert "corroborate_up_jump(" in inner
+    assert inner.index("spike_corroboration_enabled()") < inner.index("ingest_event("), \
+        "spike corroboration must run before ingest_event"
+
+
+# --- P1a: shadow must NOT fold rolled-back pools (else pool_q drifts with no convergence) ----------
+
+def test_shadow_skipped_for_rolled_back_barcodes():
+    src = _read("services/inventory_sync_service.py")
+    win = src[src.index("PHASE 1 SHADOW MODE"):src.index("VERSION CHECK")]
+    assert "is_rolled_back(db, barcode)" in win
+    assert "not rolled_back" in win
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0

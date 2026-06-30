@@ -193,10 +193,35 @@ def canary_handle(*, barcode: str, source_store_id: Optional[int], source_varian
 def _canary_handle_inner(db: Session, *, barcode, source_store_id, source_variant_id, inventory_item_id,
                          observed_quantity, source_timestamp, webhook_id, raw_payload=None) -> Dict[str, Any]:
     t0 = time.monotonic()
-    # 4A golden capture: raw inbound webhook (immutable).
+    # 4A golden capture: raw inbound webhook (immutable). Captured BEFORE corroboration so the
+    # original (possibly phantom) payload is always preserved for forensics.
     golden_capture(db, barcode, "webhook", webhook_id=webhook_id, payload=(raw_payload or {
         "inventory_item_id": inventory_item_id, "available": observed_quantity,
         "source_store_id": source_store_id, "source_timestamp": str(source_timestamp)}))
+
+    # P0 TRANSIENT-SPIKE CORROBORATION (magnitude-agnostic): an UP jump is checked against the SOURCE
+    # store's LIVE Shopify truth BEFORE it enters the ledger. A phantom (claimed increase Shopify never
+    # had — the 2026-06-26 990->2050 spike) is corrected to the live value, so it can neither propagate
+    # nor become the per-source baseline (which is what folded a later revert to 0). A real restock
+    # passes untouched (live reflects the new high). Fail-open + flag-gated (SYNC_POOL_SPIKE_CORROBORATION).
+    if pool_engine.spike_corroboration_enabled():
+        observed_corrected, correction = pool_engine.corroborate_up_jump(
+            db, barcode=barcode, source_store_id=source_store_id,
+            inventory_item_id=inventory_item_id, observed=observed_quantity)
+        if correction is not None:
+            golden_capture(db, barcode, "spike_corrected", webhook_id=webhook_id, payload=correction)
+            audit_logger.log(category="STOCK", action="pool_canary_spike_corrected",
+                             message=f"[{barcode}] phantom UP jump corrected to live truth: claimed "
+                                     f"{correction['claimed']} but live={correction['live']} "
+                                     f"(prev {correction['prev']}) from store {source_store_id}",
+                             target=barcode, severity="WARN",
+                             details={**correction, "webhook_id": webhook_id,
+                                      "source_store_id": source_store_id})
+            alerting.warning("pool_canary.spike_corrected",
+                             f"[{barcode}] phantom UP jump from store {source_store_id} corrected "
+                             f"{correction['claimed']}->{correction['live']} (live truth)",
+                             {"barcode": barcode, **correction})
+            observed_quantity = observed_corrected
 
     ev_id = pool_engine.ingest_event(db, barcode=barcode, source_store_id=source_store_id,
                                      source_variant_id=source_variant_id, inventory_item_id=inventory_item_id,
