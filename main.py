@@ -27,6 +27,7 @@ from services import monitoring
 from services import reconciliation_engine
 from services import live_truth
 from services import pool_validation
+from services import pool_membership
 
 load_dotenv()
 
@@ -53,6 +54,10 @@ scheduler.add_job(live_truth.run_live_truth_sweep, 'interval', minutes=20)
 # Phase 2: validate the canonical PoolState against LIVE Shopify (engine-vs-truth + permanent-
 # divergence detector + SLA). Read-only, alert-only; meaningful once shadow mode has populated pools.
 scheduler.add_job(pool_validation.run_pool_validation_sweep, 'interval', minutes=30)
+# P2: pool MEMBERSHIP monitor — watches the SHAPE of each pool (orphaned <2-store pools, a store
+# dropping out, canonical-variant flips) which quantity sweeps are blind to. Heals stale SLA flags on
+# orphaned pools; otherwise audit + alert only.
+scheduler.add_job(pool_membership.run_membership_sweep, 'interval', minutes=30)
 scheduler.start()
 # --- END SCHEDULER SETUP ---
 
