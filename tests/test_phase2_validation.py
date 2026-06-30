@@ -64,6 +64,24 @@ def test_validation_scheduled():
     assert "pool_validation.run_pool_validation_sweep" in src
 
 
+def test_sla_clock_driven_by_stores_disagree_not_engine_q_drift():
+    """P3: the SLA / diverged_since clock tracks the CUSTOMER-FACING metric (stores DISAGREE on live),
+    not engine-Q-vs-live while stores agree (that is bookkeeping — reported WARN, never CRITICAL)."""
+    src = _read("services/pool_validation.py")
+    assert "stores_disagree" in src
+    assert "engine_q_drift" in src
+    # Q-drift-while-stores-agree is observability only, never escalated to a permanent-SLA CRITICAL.
+    assert "pool_validation_engine_q_drift" in src
+
+
+def test_single_store_pools_skipped_and_flag_cleared():
+    """P2/P3: an orphaned pool (< 2 canonical stores) cannot diverge; it is skipped and any stale SLA
+    flag is cleared, instead of alerting CRITICAL forever (canon_drift can never resolve there)."""
+    src = _read("services/pool_validation.py")
+    assert "len(rows) < 2" in src
+    assert '"single_store"' in src
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0

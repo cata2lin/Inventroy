@@ -49,12 +49,27 @@ def _candidate_barcodes(db) -> List[str]:
 
 
 def _validate_pool(db, barcode: str) -> Dict[str, Any]:
-    """Read live Shopify per canonical store, compare to the engine's Q and the mirror. No writes."""
+    """Read live Shopify per canonical store, compare to the engine's Q and the mirror. No writes.
+
+    The SLA clock (`diverged_since`) tracks the CUSTOMER-FACING metric only: stores DISAGREE on live
+    (live_spread > 0). engine-Q-vs-live while stores AGREE (canonical_drift only — e.g. a rolled-back
+    pool whose Q went stale) is engine bookkeeping; it is REPORTED for observability but never starts
+    the SLA clock and never escalates to CRITICAL. A pool with < 2 canonical stores is not a sync pool
+    at all (a single store cannot diverge from itself) — it is skipped and any stale flag is cleared."""
     state = db.query(models.PoolState).filter(models.PoolState.barcode == barcode).first()
     if state is None:
         return {"barcode": barcode, "skipped": "no pool state", "reads": 0}
     q = int(state.quantity)
     rows = live_truth._canonical_rows(db, barcode)
+    if len(rows) < 2:
+        # Orphaned / single-store pool: cannot diverge, pool_q is inert bookkeeping. Clear any stale
+        # SLA flag (this is the class that otherwise alerts CRITICAL forever) and skip.
+        cleared = state.diverged_since is not None
+        if cleared:
+            state.diverged_since = None
+            db.commit()
+        return {"barcode": barcode, "skipped": "single_store", "reads": 0,
+                "single_store": True, "cleared_stale_flag": cleared}
     per_store, lives, reads = [], [], 0
     canonical_drift, mirror_drift = [], []
     for r in rows:
@@ -67,21 +82,26 @@ def _validate_pool(db, barcode: str) -> Dict[str, Any]:
                 canonical_drift.append({"store": r["store"], "live": live, "pool_q": q})
             if live != r["mirror"]:
                 mirror_drift.append({"store": r["store"], "live": live, "mirror": r["mirror"]})
-    live_spread = (max(lives) - min(lives)) if len(lives) >= 2 else 0
-    diverged = (live_spread > 0) or (len(canonical_drift) > 0)
+    readable = len(lives) >= 2
+    live_spread = (max(lives) - min(lives)) if readable else 0
+    stores_disagree = readable and (live_spread > 0)          # the customer-facing divergence
+    engine_q_drift = len(canonical_drift) > 0                 # bookkeeping: engine Q vs live (stores may agree)
 
     now = datetime.now(timezone.utc)
-    if diverged:
-        if state.diverged_since is None:
-            state.diverged_since = now
-    else:
-        state.diverged_since = None
-    db.commit()
+    # Only mutate the SLA clock when we can actually assess agreement (>= 2 readable stores). On a
+    # partial/failed read we leave diverged_since untouched (never assert health on unreadable data).
+    if readable:
+        if stores_disagree:
+            if state.diverged_since is None:
+                state.diverged_since = now
+        else:
+            state.diverged_since = None
+        db.commit()
 
     unresolved_s = int((now - state.diverged_since).total_seconds()) if state.diverged_since else 0
     return {"barcode": barcode, "reads": reads, "pool_quantity": q, "per_store_live": per_store,
             "live_spread": live_spread, "canonical_drift": canonical_drift, "mirror_drift": mirror_drift,
-            "diverged": diverged, "unresolved_duration_s": unresolved_s,
+            "diverged": stores_disagree, "engine_q_drift": engine_q_drift, "unresolved_duration_s": unresolved_s,
             "last_event": state.source_timestamp.isoformat() if state.source_timestamp else None,
             "pool_version": state.version}
 
@@ -126,6 +146,18 @@ def run_pool_validation_sweep() -> Dict[str, Any]:
                                       f"(> {POOL_SLA_HOURS}h SLA); spread {res['live_spread']}, pool_q {res['pool_quantity']}",
                                       {"barcode": bc, "spread": res["live_spread"],
                                        "unresolved_duration": res["unresolved_duration_s"]})
+            elif res.get("engine_q_drift"):
+                # Stores AGREE on live but the engine's Q disagrees — bookkeeping staleness (typically a
+                # rolled-back pool whose Q drifted). Worth visibility, but NOT customer-facing and NOT an
+                # SLA breach, so WARN-only and it never starts the convergence clock.
+                audit_logger.log(
+                    category="RECONCILIATION", action="pool_validation_engine_q_drift",
+                    message=f"[{bc}] engine Q={res['pool_quantity']} disagrees with live "
+                            f"(stores agree); canon_drift={len(res['canonical_drift'])}",
+                    target=bc, severity="WARN",
+                    details={"barcode": bc, "pool_quantity": res["pool_quantity"],
+                             "canonical_drift": res["canonical_drift"],
+                             "per_store_live": res["per_store_live"], "pool_version": res["pool_version"]})
 
         if diverged:
             sev_worst = worst["barcode"] if worst else None
