@@ -28,6 +28,7 @@ from services import reconciliation_engine
 from services import live_truth
 from services import pool_validation
 from services import pool_membership
+from services import pool_onboarding
 
 load_dotenv()
 
@@ -58,6 +59,10 @@ scheduler.add_job(pool_validation.run_pool_validation_sweep, 'interval', minutes
 # dropping out, canonical-variant flips) which quantity sweeps are blind to. Heals stale SLA flags on
 # orphaned pools; otherwise audit + alert only.
 scheduler.add_job(pool_membership.run_membership_sweep, 'interval', minutes=30)
+# ONBOARDING sweep — moves off-engine multi-store pools (backfilled_at NULL) onto the absolute engine
+# once their stores agree on live truth, so no pool is left permanently on the amplification-prone
+# legacy path. Reports diverged/negative pools for operator resolution. Writes only PoolState.
+scheduler.add_job(pool_onboarding.run_onboarding_sweep, 'interval', minutes=30)
 scheduler.start()
 # --- END SCHEDULER SETUP ---
 

@@ -398,7 +398,12 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
             )
 
             if delta is not None:
-                # --- DELTA MODE: adjust the one canonical target per store by delta ---
+                # --- DELTA MODE: adjust the one canonical target per store by delta. Relative adjust is
+                #     conservation-preserving and self-healing (its echo carries the true post-write
+                #     value back in) — the correct behaviour for a CONSISTENT pool under concurrent
+                #     cross-store changes. Divergence is drained onto the absolute engine by the
+                #     onboarding sweep; a genuinely diverged legacy pool preserves spread here (so it
+                #     stays flagged for resolution) rather than being collapsed to a wrong value. ---
                 try:
                     _execute_delta_propagation(db, barcode, delta, new_available, target_stores, store_map,
                                                sync_op, variant.store_id, inventory_item_id)
@@ -504,6 +509,17 @@ def _get_group_authoritative_qty(db: Session, barcode: str, exclude_variant_id: 
     the BarcodeVersion cache (which can be stale — that stale cache was the source of the
     'reset to 0' clobbering bug). Falls back to the cache only when no live value exists.
     """
+    # A new listing joining a barcode group must align to the group's SHARED stock, FLOORED to >= 0.
+    # The unfloored version of this returned a stale/negative InventoryLevel (-8), which seeded a
+    # negative baseline and directly caused the HA-1193-1 relative-delta amplification. Every branch
+    # below is clamped to the floor so a new store can never be born negative or diverged-low.
+    # Prefer the engine's canonical Q ONLY when the pool is live-truth BACKFILLED (engine-authoritative,
+    # so Q == confirmed live) — the new listing then joins exactly AT Q. A merely shadow-observed pool
+    # (backfilled_at NULL) has a Q that can have drifted, so we fall through to the live mirror instead.
+    pool = db.query(models.PoolState).filter(models.PoolState.barcode == barcode).first()
+    if pool is not None and pool.backfilled_at is not None and pool.quantity is not None:
+        return max(int(pool.quantity), sync_guards.INVENTORY_FLOOR)
+
     latest = (
         db.query(models.InventoryLevel)
         .join(models.ProductVariant, models.ProductVariant.id == models.InventoryLevel.variant_id)
@@ -522,13 +538,13 @@ def _get_group_authoritative_qty(db: Session, barcode: str, exclude_variant_id: 
         .first()
     )
     if latest is not None and latest.available is not None:
-        return latest.available
+        return max(int(latest.available), sync_guards.INVENTORY_FLOOR)
 
     version_obj = db.query(models.BarcodeVersion).filter(
         models.BarcodeVersion.barcode == barcode
     ).first()
     if version_obj and version_obj.quantity is not None:
-        return version_obj.quantity
+        return max(int(version_obj.quantity), sync_guards.INVENTORY_FLOOR)
     return None
 
 
@@ -640,6 +656,23 @@ def _sync_variant_to_barcode_group(db: Session, store_id: int, variant_id: int, 
             location_id=store.sync_location_id,
             new_quantity=target_quantity,
         )
+
+        # If this barcode is an ENGINE-authoritative pool, seed a per-store ledger BASELINE at the
+        # aligned qty for the just-joined store. Without it the conservation fold sees no prior
+        # observation for this store and treats its FIRST real sale as a "replica joining" (no pool
+        # move) — convergence then reverts that sale (an oversell of 1). Mirrors pool_backfill's seed.
+        try:
+            pstate = db.query(models.PoolState).filter(models.PoolState.barcode == barcode).first()
+            if pstate is not None and pstate.backfilled_at is not None:
+                db.execute(text("""INSERT INTO pool_events
+                    (barcode, source_store_id, source_variant_id, inventory_item_id,
+                     observed_quantity, source_timestamp, kind, applied)
+                    VALUES (:b,:s,:v,:i,:q, now(), 'backfill_baseline', true)"""),
+                    {"b": barcode, "s": store.id, "v": new_variant.id,
+                     "i": new_variant.inventory_item_id, "q": target_quantity})
+                db.commit()
+        except Exception:
+            db.rollback()   # best-effort — the align itself already succeeded
 
         print(f"[SYNC-AUTO] Aligned barcode {barcode} on store '{store.name}' to qty {target_quantity} (force={force})")
         audit_logger.log_propagation(
