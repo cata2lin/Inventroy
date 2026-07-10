@@ -103,6 +103,12 @@ def canary_active_for(db: Session, barcode: str) -> bool:
         return False
     if is_rolled_back(db, barcode):
         return False
+    # FALSE GROUP: a barcode shared by >1 distinct product (SKU class) is unsyncable — the engine
+    # must never be authoritative for it (one pool number, two physical stocks). Classification-
+    # driven, so fixing the barcodes re-opens the gate automatically (after re-backfill).
+    from services import diagnostics
+    if diagnostics.is_false_barcode_group(db, barcode):
+        return False
     return True
 
 

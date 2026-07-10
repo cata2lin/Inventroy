@@ -310,6 +310,17 @@ def converge_pool(db: Session, barcode: str, exclude_store_id: Optional[int] = N
         ORDER BY pv.barcode, pv.store_id, {diagnostics.CANON_ORDER}
     """), {"b": barcode}).mappings().all()
 
+    # FALSE-GROUP refuse (defense in depth behind the webhook + canary gates): never CAS-write a
+    # barcode shared by >1 distinct product class — that would SET unrelated products to one value.
+    # Checked on the FULL group (not just canonical rows) since the poisoning variant may be the
+    # non-canonical one within a store.
+    if diagnostics.is_false_barcode_group(db, barcode):
+        audit_logger.log(category="STOCK", action="pool_converge_refused_false_group",
+                         message=f"[{barcode}] converge refused: barcode shared by multiple distinct "
+                                 f"products (SKU classes) — fix barcodes",
+                         target=barcode, severity="WARN", details={"barcode": barcode})
+        return {"barcode": barcode, "skipped": "false_group"}
+
     converged, skipped, failed, retries = 0, 0, 0, 0
     per_store, live_quantities = [], {}
     for r in rows:

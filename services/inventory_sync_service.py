@@ -30,6 +30,7 @@ from services import alerting
 from services import dist_lock
 from services import pool_engine
 from services import pool_canary
+from services import diagnostics
 
 # --- Configuration ---
 INTENT_TTL_SECONDS = 60
@@ -231,6 +232,28 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
                     except Exception:
                         db.rollback()
                 return
+
+        # --- FALSE-GROUP QUARANTINE (same barcode, DIFFERENT products — 2026-07-10 pijama incident) ---
+        # A barcode shared by >1 distinct product (SKU class; store-prefixed SKUs like zn-127/127 are
+        # the SAME product) is UNSYNCABLE: one pool number cannot represent two physical stocks. The
+        # engine folds both variants' webhooks into one per-store baseline and manufactures phantom
+        # deltas (a 5XL sale 3->2 against a 4XL baseline of 202 folded as -200, clobbering a fresh
+        # +200 restock on every store). Legacy relative propagation corrupts them the same way. So:
+        # keep the local mirror exact, audit, and STOP — no fold, no converge, no propagation. The
+        # gate is classification-driven, so fixing the barcodes reopens sync automatically.
+        try:
+            if diagnostics.is_false_barcode_group(db, barcode):
+                _resync_local_baseline(db, variant.id, payload.get("location_id"), new_available)
+                audit_logger.log(category="STOCK", action="false_group_quarantined",
+                                 message=f"[{barcode}] sync quarantined: barcode shared by multiple "
+                                         f"distinct products (SKU classes) — fix barcodes to re-enable",
+                                 store_id=store_id, target=barcode, severity="WARN",
+                                 details={"quantity": new_available, "variant_id": variant.id,
+                                          "sku": variant.sku})
+                return
+        except Exception as _fg:
+            db.rollback()
+            print(f"[SYNC-WARN] false-group check failed for {barcode} (continuing): {_fg}")
 
         # --- PHASE 3 CANARY WRITE PATH (engine authoritative for backfilled canary barcodes) ---
         # MUST run BEFORE shadow: for a canary barcode the engine OWNS the event (ingest + fold +
@@ -604,6 +627,24 @@ def _sync_variant_to_barcode_group(db: Session, store_id: int, variant_id: int, 
     ).first()
     if not force and current_level is not None and current_level.available is not None:
         return  # Already has stock — never overwrite on a routine update.
+
+    # FALSE-GROUP guard: if this variant's SKU is a DIFFERENT product class than the group it is
+    # joining (same barcode, different product — e.g. negru-5XL joining negru-4XL's barcode), do NOT
+    # align its stock to the group: that seeds one product with another product's quantity. Audit it —
+    # the barcode needs fixing before this listing can sync.
+    try:
+        joined_skus = diagnostics.group_skus(db, barcode)
+        if new_variant.sku and new_variant.sku.strip():
+            joined_skus = joined_skus + [new_variant.sku]
+        if diagnostics.count_sku_classes(joined_skus) > 1:
+            audit_logger.log(category="STOCK", action="auto_sync_refused_false_group",
+                             message=f"[{barcode}] auto-align refused: variant sku={new_variant.sku} "
+                                     f"joins a barcode shared by a DIFFERENT product — fix barcodes",
+                             store_id=store_id, target=barcode, severity="WARN",
+                             details={"variant_id": variant_id, "sku": new_variant.sku})
+            return
+    except Exception:
+        db.rollback()   # best-effort: never block the align path on a classifier error
 
     # Serialize against the inventory_levels/update handler for this barcode.
     lock = get_barcode_lock(barcode)

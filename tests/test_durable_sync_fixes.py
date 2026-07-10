@@ -92,7 +92,7 @@ def test_new_listing_seeds_ledger_baseline_on_engine_pool():
 def test_onboarding_excludes_placeholder_and_false_groups():
     src = _read("services/pool_onboarding.py")
     assert "diagnostics._placeholder_sql" in src        # exclude all-zeros placeholder barcodes
-    assert "_distinct_skus" in src and "false_group_multi_sku" in src   # never onboard multi-SKU groups
+    assert "_is_false_group" in src and "false_group_multi_sku" in src  # never onboard false groups
 
 
 def test_onboarding_prescreens_to_avoid_alert_storm():

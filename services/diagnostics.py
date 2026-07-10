@@ -33,6 +33,63 @@ def _placeholder_sql(col: str) -> str:
     return f"({col} IS NOT NULL AND btrim({col}) <> '' AND {col} NOT IN ({items}))"
 
 
+# --------------------------------------------------------------------------------------------------
+# FALSE-GROUP CLASSIFIER — same barcode, genuinely DIFFERENT products (2026-07-10 pijama incident)
+# --------------------------------------------------------------------------------------------------
+# A barcode pool is only syncable if every member is the SAME physical product. SKU evidence decides:
+#   • identical SKUs                       -> same product
+#   • store-prefixed SKUs (`zn-127`/`127`) -> same product (one is '-'-suffix of the other); this
+#     fleet has ~120 legit pools named that way, so naive "different SKU = different product" is WRONG
+#   • anything else (`negru-4XL`/`negru-5XL`, `HA-0061-1`/`HA-0061M`, `oglinda`/`oglinda-acrilica`)
+#     -> DIFFERENT products = a FALSE group. One pool number cannot represent two physical stocks:
+#     the engine folds both variants' webhooks into one per-store baseline and manufactures phantom
+#     deltas (a 5XL sale 3->2 against a 4XL baseline of 202 folded as -200 and clobbered the restock).
+# Empty SKUs carry no evidence and are ignored.
+
+def sku_equivalent(a: str, b: str) -> bool:
+    """True if two non-empty SKUs plausibly denote the SAME product: identical, or one is the other
+    with a store prefix (equal after stripping a leading '<prefix>-'), i.e. '-'-suffix match.
+    Case-insensitive: 'ZN-127' and 'zn-127' are the same SKU, never a reason to quarantine."""
+    a, b = a.strip().casefold(), b.strip().casefold()
+    if a == b:
+        return True
+    return a.endswith("-" + b) or b.endswith("-" + a)
+
+
+def count_sku_classes(skus) -> int:
+    """Number of distinct PRODUCT classes among the given SKUs under sku_equivalent (transitive via
+    shared members: {'127','zn-127','gt-127'} is ONE class). Empty/None SKUs are ignored."""
+    vals = [s.strip() for s in (skus or []) if s and s.strip()]
+    classes: List[List[str]] = []
+    for s in vals:
+        merged = None
+        for cl in classes:
+            if any(sku_equivalent(s, m) for m in cl):
+                cl.append(s)
+                merged = cl
+                break
+        if merged is None:
+            classes.append([s])
+    return len(classes)
+
+
+def group_skus(db: Session, barcode: str) -> List[str]:
+    """Distinct non-empty SKUs on this barcode across enabled, non-deleted, synced-store variants."""
+    return [r[0] for r in db.execute(text("""
+        SELECT DISTINCT btrim(pv.sku) FROM product_variants pv
+        JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
+        JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
+        WHERE pv.barcode = :b AND pv.inventory_item_id IS NOT NULL
+          AND pv.sku IS NOT NULL AND btrim(pv.sku) <> ''
+    """), {"b": barcode}).fetchall()]
+
+
+def is_false_barcode_group(db: Session, barcode: str) -> bool:
+    """True if this barcode is shared by more than one distinct PRODUCT (SKU class) — an unsyncable
+    FALSE group. Such a pool must never be folded, converged, or propagated: quarantine + report."""
+    return count_sku_classes(group_skus(db, barcode)) > 1
+
+
 def scan_duplicate_barcode_groups(db: Session, limit: int = 500) -> List[Dict[str, Any]]:
     """Intra-store duplicate barcodes (same barcode on >1 live variant in one store), with a
     PROPOSED classification + evidence. Different SKUs sharing a barcode is the cascade-prone

@@ -51,17 +51,13 @@ def _off_engine_multistore_barcodes(db, limit: int) -> List[str]:
     """), {"lim": limit}).fetchall()]
 
 
-def _distinct_skus(db, barcode: str) -> int:
-    """How many DISTINCT non-empty SKUs share this barcode across enabled stores. A genuine shared-stock
-    pool is ONE product (1 SKU); >1 SKU is a FALSE-group signature (different products, same barcode) —
-    we must never auto-onboard/converge those or we contaminate unrelated stock."""
-    return db.execute(text("""
-        SELECT count(DISTINCT btrim(pv.sku)) FROM product_variants pv
-        JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
-        JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
-        WHERE pv.barcode = :b AND pv.inventory_item_id IS NOT NULL
-          AND pv.sku IS NOT NULL AND btrim(pv.sku) <> ''
-    """), {"b": barcode}).scalar() or 0
+def _is_false_group(db, barcode: str) -> bool:
+    """FALSE group = barcode shared by >1 distinct PRODUCT class (diagnostics.count_sku_classes).
+    Store-prefixed SKUs of the same product (zn-127 / 127) are ONE class — this fleet has ~120 legit
+    pools named that way, so a naive distinct-SKU count would wrongly block them. A true false group
+    (negru-4XL / negru-5XL) must never be auto-onboarded — the engine would drive two different
+    physical products to one stock value."""
+    return diagnostics.count_sku_classes(diagnostics.group_skus(db, barcode)) > 1
 
 
 def run_onboarding_sweep() -> Dict[str, Any]:
@@ -84,9 +80,9 @@ def run_onboarding_sweep() -> Dict[str, Any]:
             continue
         db = SessionLocal()
         try:
-            # FALSE-GROUP guard: never auto-onboard a barcode shared by >1 distinct product (SKU) —
+            # FALSE-GROUP guard: never auto-onboard a barcode shared by >1 distinct product class —
             # that would let the engine drive unrelated products to one stock value.
-            if _distinct_skus(db, bc) > 1:
+            if _is_false_group(db, bc):
                 needs_attention.setdefault("false_group_multi_sku", []).append(bc)
                 continue
             # PRE-SCREEN with the read-only planner (does NOT alert). Only pools the backfill contract
