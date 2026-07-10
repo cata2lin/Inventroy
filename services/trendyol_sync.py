@@ -110,7 +110,15 @@ def _poll_submitted_batches(db) -> Dict[str, int]:
                 if any(w in blob for w in ("blacklist", "archiv", "lock", "not found", "bulunamad")):
                     row.status = "rejected"
                 else:
-                    row.status = "failed"
+                    # A repeat failure at the SAME quantity (typically the 15-min identical-request
+                    # rejection of a retry) must not loop every 16 minutes forever — park it. It
+                    # un-parks automatically the moment the pool quantity changes (desired != last_q),
+                    # and the hourly reconcile re-pushes if Trendyol truly differs.
+                    prior = db.execute(text("""
+                        SELECT 1 FROM trendyol_pushes WHERE trendyol_barcode=:tb AND quantity=:q
+                          AND status IN ('failed','rejected') AND id < :id LIMIT 1"""),
+                        {"tb": row.trendyol_barcode, "q": row.quantity, "id": row.id}).first()
+                    row.status = "rejected" if prior else "failed"
                 failed += 1
         db.commit()
         if failed:
