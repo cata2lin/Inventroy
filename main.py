@@ -18,6 +18,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
 from database import engine, Base, get_db
+from routes import trendyol as trendyol_routes
 from routes import sync_control, config, products, mutations, stock, webhooks, snapshots, data_quality, system_monitor, diagnostics, classification
 from services import snapshot_runner
 from services.inventory_sync_service import cleanup_expired_records
@@ -156,6 +157,10 @@ async def get_config_page(request: Request):
 async def get_products_page(request: Request):
     return templates.TemplateResponse("products.html", {"request": request, "title": "Products"})
 
+@app.get("/trendyol", response_class=HTMLResponse, include_in_schema=False)
+async def trendyol_page(request: Request):
+    return templates.TemplateResponse("trendyol.html", {"request": request, "title": "Trendyol Sync"})
+
 @app.get("/snapshots", response_class=HTMLResponse, include_in_schema=False)
 async def get_snapshots_page(request: Request):
     return templates.TemplateResponse("snapshots.html", {"request": request, "title": "Snapshots"})
@@ -188,6 +193,7 @@ app.include_router(data_quality.router)
 app.include_router(system_monitor.router)
 app.include_router(diagnostics.router)
 app.include_router(classification.router)
+app.include_router(trendyol_routes.router)
 
 @app.on_event("shutdown")
 def shutdown_event():

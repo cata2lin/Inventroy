@@ -108,6 +108,14 @@ query GetAllProducts($cursor: String, $query: String) {{
 """
 
 MUTATIONS = {
+    "updateVariantBarcode": """
+      mutation UpdateVariantBarcode($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+        productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+          productVariants { id barcode }
+          userErrors { field message }
+        }
+      }
+    """,
     "setProductCategory": """
       mutation SetProductCategory($product: ProductUpdateInput!) {
         productUpdate(product: $product) {
