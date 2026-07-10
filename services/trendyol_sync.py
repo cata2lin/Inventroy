@@ -95,12 +95,23 @@ def _poll_submitted_batches(db) -> Dict[str, int]:
         for row in rows:
             it = outcomes.get(row.trendyol_barcode)
             if it is None:
-                row.status = "success" if not res.get("failed_count") else "failed"
+                # a COMPLETED batch reports item-level outcomes for FAILURES; an item absent from the
+                # report was applied (verified live: an 'absent' item's quantity had landed).
+                row.status = "success"; done += 1
                 continue
             if (it.get("status") or "").upper() in ("SUCCESS", "COMPLETED", "OK"):
                 row.status = "success"; done += 1
             else:
-                row.status = "failed"; row.failure_reasons = it.get("failureReasons"); failed += 1
+                reasons = it.get("failureReasons") or []
+                row.failure_reasons = reasons
+                # PERMANENT rejections (blacklisted/archived/locked/unknown barcode) must not retry
+                # every 16 minutes forever — park them as 'rejected' and surface via reconcile.
+                blob = " ".join(str(x) for x in reasons).lower()
+                if any(w in blob for w in ("blacklist", "archiv", "lock", "not found", "bulunamad")):
+                    row.status = "rejected"
+                else:
+                    row.status = "failed"
+                failed += 1
         db.commit()
         if failed:
             alerting.warning("trendyol.push_failed",
