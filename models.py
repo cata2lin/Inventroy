@@ -366,6 +366,16 @@ class TrendyolMapping(Base):
     ean_barcode = Column(String(255), nullable=True, index=True)   # our pool key
     active = Column(BOOLEAN, nullable=False, server_default="true")
     note = Column(String(200), nullable=True)
+    # Trendyol-side snapshot (refreshed by the hourly reconcile) so the UI shows rich marketplace
+    # data — title, image, price, quantity, listing state — without a per-row API call.
+    trendyol_title = Column(String(400), nullable=True)
+    trendyol_image = Column(String(2048), nullable=True)
+    trendyol_price = Column(NUMERIC(12, 2), nullable=True)          # salePrice
+    trendyol_list_price = Column(NUMERIC(12, 2), nullable=True)
+    trendyol_quantity = Column(Integer, nullable=True)
+    trendyol_approved = Column(BOOLEAN, nullable=True)
+    trendyol_archived = Column(BOOLEAN, nullable=True)
+    ty_synced_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 

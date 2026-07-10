@@ -362,10 +362,25 @@ def reconcile() -> Dict[str, Any]:
             for it in res.get("content", []):
                 bc = str(it.get("barcode") or "")
                 if bc:
+                    imgs = it.get("images") or []
                     ty_stock[bc] = {"q": int(it.get("quantity") or 0),
                                     "approved": bool(it.get("approved", False)),
-                                    "archived": bool(it.get("archived", False))}
+                                    "archived": bool(it.get("archived", False)),
+                                    "title": (it.get("title") or "")[:400],
+                                    "image": (imgs[0].get("url") if imgs and isinstance(imgs[0], dict) else None),
+                                    "price": it.get("salePrice"), "list_price": it.get("listPrice")}
             page += 1
+
+        # refresh the UI snapshot on every mapping we saw (rich Trendyol data without per-row calls)
+        for bc, t in ty_stock.items():
+            db.execute(text("""UPDATE trendyol_mappings SET trendyol_title=:ti, trendyol_image=:im,
+                    trendyol_price=:pr, trendyol_list_price=:lp, trendyol_quantity=:q,
+                    trendyol_approved=:ap, trendyol_archived=:ar, ty_synced_at=now()
+                WHERE trendyol_barcode=:bc"""),
+                {"ti": t.get("title"), "im": t.get("image"), "pr": t.get("price"),
+                 "lp": t.get("list_price"), "q": t["q"], "ap": t["approved"],
+                 "ar": t["archived"], "bc": bc})
+        db.commit()
 
         maps = db.query(models.TrendyolMapping).filter_by(active=True).all()
         drift, not_on_ty, unapproved, pushed = [], [], [], 0

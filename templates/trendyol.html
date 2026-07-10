@@ -7,240 +7,280 @@
     <h2>Manage the Trendyol &harr; Shopify stock sync — mappings, barcodes, pushes, problems</h2>
   </hgroup>
 
-  <!-- flags / status -->
-  <article>
-    <header><strong>Status</strong>
-      <span id="ty-flags" style="float:right;font-size:.8rem"></span>
-    </header>
-    <div class="grid" id="ty-cards"></div>
-    <div style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap">
-      <button class="secondary" onclick="tyRun('push')">Run push now</button>
-      <button class="secondary" onclick="tyRun('orders')">Poll orders now</button>
-      <button class="secondary" onclick="tyRun('reconcile')">Reconcile now</button>
-      <button class="secondary outline" onclick="tyLoadAll()">Refresh</button>
-      <span id="ty-run-out" style="align-self:center;font-size:.8rem;color:var(--muted-color)"></span>
+  <!-- status strip -->
+  <article class="filters ty-status">
+    <div class="flex-between" style="flex-wrap:wrap;gap:.75rem">
+      <div class="flex gap-sm" id="ty-flags" style="flex-wrap:wrap;align-items:center"></div>
+      <div class="flex gap-sm" style="flex-wrap:wrap">
+        <button class="secondary outline" onclick="tyRun('push')">Push now</button>
+        <button class="secondary outline" onclick="tyRun('orders')">Poll orders</button>
+        <button class="secondary outline" onclick="tyRun('reconcile')">Reconcile</button>
+        <button class="secondary" onclick="tyLoadAll()">Refresh</button>
+      </div>
     </div>
+    <small id="ty-run-out" class="text-muted"></small>
   </article>
 
+  <!-- KPI cards -->
+  <div class="metric-cards" id="ty-kpis"></div>
+
   <!-- tabs -->
-  <nav>
-    <ul style="display:flex;gap:.5rem;list-style:none;padding:0">
-      <li><a href="#" class="ty-tab active" data-tab="mappings">Mappings</a></li>
-      <li><a href="#" class="ty-tab" data-tab="problems">Problems</a></li>
-      <li><a href="#" class="ty-tab" data-tab="activity">Activity</a></li>
-    </ul>
-  </nav>
+  <div class="monitor-tabs">
+    <button class="tab-btn active" data-tab="mappings">Mappings</button>
+    <button class="tab-btn" data-tab="problems">Problems <span id="ty-prob-count" class="badge badge-danger" style="display:none"></span></button>
+    <button class="tab-btn" data-tab="activity">Activity</button>
+  </div>
 
   <!-- MAPPINGS -->
-  <section id="tab-mappings">
-    <div class="grid">
-      <input type="search" id="ty-search" placeholder="Search barcode / SKU / EAN…">
-      <select id="ty-filter">
-        <option value="all">All</option>
-        <option value="active">Active (synced)</option>
-        <option value="inactive">Inactive (unresolved)</option>
-        <option value="problem">Problems</option>
-      </select>
-    </div>
-    <div style="overflow-x:auto">
-      <table id="ty-map-table">
+  <div id="tab-mappings" class="tab-content active">
+    <article class="filters">
+      <div class="grid" style="grid-template-columns:2fr 1fr;gap:1rem;align-items:end">
+        <label>Search<input type="search" id="ty-search" placeholder="Product, SKU, EAN, or Trendyol barcode…"></label>
+        <label>Filter
+          <select id="ty-filter">
+            <option value="all">All</option>
+            <option value="active">Active (synced)</option>
+            <option value="inactive">Needs mapping</option>
+            <option value="problem">Problems only</option>
+          </select>
+        </label>
+      </div>
+    </article>
+    <div class="table-container">
+      <table>
         <thead><tr>
-          <th>Trendyol barcode</th><th>TY SKU</th><th>EAN (pool key)</th><th>Pool Q</th>
-          <th>Last push</th><th>Status</th><th>Actions</th>
+          <th style="width:52px"></th>
+          <th class="text-left">Product</th>
+          <th class="text-left">Trendyol listing</th>
+          <th class="text-right">Shopify&nbsp;/&nbsp;Trendyol stock</th>
+          <th class="text-center">Sync</th>
+          <th class="text-right">Actions</th>
         </tr></thead>
-        <tbody></tbody>
+        <tbody id="ty-map-body"><tr><td colspan="6" class="empty-state">Loading…</td></tr></tbody>
       </table>
     </div>
-    <small id="ty-map-count" style="color:var(--muted-color)"></small>
-  </section>
+    <small id="ty-map-count" class="text-muted"></small>
+  </div>
 
   <!-- PROBLEMS -->
-  <section id="tab-problems" hidden>
-    <div class="grid">
-      <article><header><strong>Unresolved mappings</strong> <span id="pc-inactive" class="badge"></span></header>
-        <div id="pl-inactive" style="max-height:320px;overflow:auto"></div></article>
-      <article><header><strong>Failed / rejected pushes</strong> <span id="pc-pushes" class="badge"></span></header>
-        <div id="pl-pushes" style="max-height:320px;overflow:auto"></div></article>
+  <div id="tab-problems" class="tab-content" style="display:none">
+    <div class="metric-cards" id="ty-prob-kpis"></div>
+    <div class="grid" style="grid-template-columns:1fr 1fr;gap:1rem">
+      <article><header><strong>Unresolved mappings</strong></header><div id="pl-inactive" class="ty-list"></div></article>
+      <article><header><strong>Failed / rejected pushes</strong></header><div id="pl-pushes" class="ty-list"></div></article>
     </div>
-    <div class="grid">
-      <article><header><strong>Skipped order lines</strong></header><div id="pl-skipped"></div></article>
-      <article><header><strong>On Trendyol, not mapped</strong> <span id="pc-unmapped" class="badge"></span></header>
-        <div id="pl-unmapped" style="max-height:240px;overflow:auto"></div></article>
-      <article><header><strong>Mapped, missing on Trendyol</strong></header>
-        <div id="pl-missing" style="max-height:240px;overflow:auto"></div></article>
+    <div class="grid" style="grid-template-columns:1fr 1fr 1fr;gap:1rem">
+      <article><header><strong>Skipped order lines</strong></header><div id="pl-skipped" class="ty-list"></div></article>
+      <article><header><strong>On Trendyol, not mapped</strong></header><div id="pl-unmapped" class="ty-list"></div></article>
+      <article><header><strong>Mapped, missing on Trendyol</strong></header><div id="pl-missing" class="ty-list"></div></article>
     </div>
-    <article><header><strong>Live stock drift (last reconcile)</strong></header>
-      <div id="pl-drift" style="max-height:320px;overflow:auto"></div></article>
-  </section>
+    <article><header><strong>Live stock drift</strong> <small class="text-muted">(last reconcile)</small></header>
+      <div id="pl-drift" class="ty-list"></div></article>
+  </div>
 
   <!-- ACTIVITY -->
-  <section id="tab-activity" hidden>
-    <div class="grid">
-      <article><header><strong>Recent pushes</strong></header>
-        <div id="act-pushes" style="max-height:420px;overflow:auto"></div></article>
-      <article><header><strong>Recent Trendyol order lines</strong></header>
-        <div id="act-orders" style="max-height:420px;overflow:auto"></div></article>
+  <div id="tab-activity" class="tab-content" style="display:none">
+    <div class="grid" style="grid-template-columns:1fr 1fr;gap:1rem">
+      <article><header><strong>Recent pushes</strong></header><div id="act-pushes" class="ty-list"></div></article>
+      <article><header><strong>Recent Trendyol order lines</strong></header><div id="act-orders" class="ty-list"></div></article>
     </div>
-  </section>
+  </div>
 </div>
 
-<!-- assign-barcode modal -->
+<!-- assign modal -->
 <dialog id="ty-assign">
-  <article>
-    <header><strong id="ty-assign-title">Assign EAN / barcode</strong>
-      <a href="#close" aria-label="Close" class="close" onclick="document.getElementById('ty-assign').close();return false"></a></header>
-    <p style="font-size:.85rem;color:var(--muted-color)">Search a Shopify variant to link, or write a
-      new barcode onto a variant that has none (this updates Shopify + joins it to the pool + Trendyol).</p>
-    <input type="search" id="ty-cand-search" placeholder="Search SKU / barcode / title…">
-    <div id="ty-cand-list" style="max-height:300px;overflow:auto"></div>
+  <article style="min-width:min(680px,92vw)">
+    <header class="flex-between">
+      <strong id="ty-assign-title">Assign product</strong>
+      <button class="secondary outline" style="padding:.2rem .6rem" onclick="document.getElementById('ty-assign').close()">Close</button>
+    </header>
+    <p class="text-muted" style="font-size:.85rem">Link an existing Shopify variant by its EAN, or write a new barcode
+      onto a variant that has none — that updates Shopify and joins it to the pool + Trendyol in one step.</p>
+    <input type="search" id="ty-cand-search" placeholder="Search Shopify SKU / barcode / title…">
+    <div id="ty-cand-list" class="ty-list" style="max-height:46vh;overflow:auto;margin-top:.5rem"></div>
   </article>
 </dialog>
 {% endblock %}
 
 {% block scripts %}
 <script>
-let TY_CURRENT = null;   // trendyol_barcode being edited
 const $ = s => document.querySelector(s);
-const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-async function jget(u){const r=await fetch(u);return r.json();}
+const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money = v => v==null?'':Number(v).toLocaleString('ro-RO',{minimumFractionDigits:2,maximumFractionDigits:2});
+const num = v => v==null?'—':Number(v).toLocaleString('ro-RO');
+const PLACEHOLDER = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='44' height='44'%3E%3Crect width='44' height='44' rx='10' fill='%2327272a'/%3E%3Cpath d='M14 30l6-7 4 5 3-4 5 6z' fill='none' stroke='%2352525b' stroke-width='2'/%3E%3Ccircle cx='17' cy='16' r='3' fill='%2352525b'/%3E%3C/svg%3E";
+const onImgErr = "if(this.dataset.f)return;this.dataset.f=1;this.src=window.__TYPH";
+window.__TYPH = PLACEHOLDER;
+let TY_CURRENT = null;
+async function jget(u){const r=await fetch(u);if(!r.ok)throw new Error(r.status);return r.json();}
 async function jpost(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):null});
-  if(!r.ok){throw new Error((await r.json()).detail||r.status)}return r.json();}
-
-function card(label,val,cls){return `<article style="padding:.6rem"><small>${label}</small><br>
-  <strong style="font-size:1.3rem" class="${cls||''}">${val}</strong></article>`;}
+  if(!r.ok){let m;try{m=(await r.json()).detail}catch(e){m=r.status} throw new Error(m)}return r.json();}
+function kpi(label,val,sub,tone){return `<div class="metric-card"><h3>${label}</h3>
+  <p class="value" ${tone?`style="color:var(--color-${tone})"`:''}>${val}</p><small>${sub||''}</small></div>`;}
+function pill(text,variant){return `<span class="badge ${variant||''}">${esc(text)}</span>`;}
 
 async function tyOverview(){
-  const o = await jget('/api/trendyol-sync/overview');
-  const f = o.flags;
-  $('#ty-flags').innerHTML =
-    `sync <b class="${f.sync_enabled?'ok':'bad'}">${f.sync_enabled?'ON':'OFF'}</b> ·
-     push <b class="${f.push_enabled?'ok':'bad'}">${f.push_enabled?'ON':'OFF'}</b> ·
-     inbound <b class="${f.inbound_apply?'ok':'bad'}">${f.inbound_apply?'ON':'OFF'}</b>
-     ${f.allowlist.length?('· canary '+f.allowlist.length):''}`;
-  const p = o.pushes||{}, r = o.last_reconcile||{};
-  $('#ty-cards').innerHTML =
-    card('Mappings active', o.mappings.active) +
-    card('Mappings inactive', o.mappings.inactive, o.mappings.inactive?'bad':'') +
-    card('Pushed OK', p.success||0, 'ok') +
-    card('Push failed/rejected', (p.failed||0)+(p.rejected||0), ((p.failed||0)+(p.rejected||0))?'bad':'') +
-    card('Live drift', r.drift!=null?r.drift:'—', r.drift?'bad':'ok') +
-    card('Orders folded', o.orders.applied+' / '+o.orders.seen);
+  const o = await jget('/api/trendyol-sync/overview'), f=o.flags, p=o.pushes||{}, c=o.coverage||{}, r=o.last_reconcile||{};
+  const fl = (n,on)=>`<span class="badge ${on?'badge-success':'badge-danger'}">${n} ${on?'on':'off'}</span>`;
+  $('#ty-flags').innerHTML = fl('sync',f.sync_enabled)+fl('push',f.push_enabled)+fl('inbound',f.inbound_apply)+
+     (f.configured?'':pill('NOT CONFIGURED','badge-danger'))+(f.allowlist&&f.allowlist.length?pill('canary '+f.allowlist.length,'badge-info'):'');
+  const badPush=(p.failed||0)+(p.rejected||0);
+  const needs=o.mappings.inactive + badPush;
+  $('#ty-kpis').innerHTML =
+    kpi('In sync', c.in_sync+' / '+c.eligible, 'pool = Trendyol qty', 'success') +
+    kpi('Active mappings', o.mappings.active, o.mappings.total+' total') +
+    kpi('Needs attention', needs, o.mappings.inactive+' unmapped · '+badPush+' push errors', needs?'warning':'success') +
+    kpi('Live drift', r.drift!=null?r.drift:'—', 'items differ on Trendyol', r.drift?'warning':'success') +
+    kpi('Trendyol units', num(c.ty_units), 'stock listed on marketplace') +
+    kpi('Orders folded', o.orders.applied, o.orders.seen+' lines seen');
+  const pc = needs; $('#ty-prob-count').textContent=pc; $('#ty-prob-count').style.display=pc?'inline-flex':'none';
+}
+
+function stockCell(m){
+  const pool = m.pool_q, ty = m.trendyol_quantity;
+  const cls = (pool!=null && ty!=null) ? (pool===ty?'stock-healthy':'stock-warning') : '';
+  return `<span class="${cls}" style="font-variant-numeric:tabular-nums">${num(pool)} <span class="text-muted">/</span> ${num(ty)}</span>`;
+}
+function syncCell(m){
+  if(!m.active) return pill('Needs mapping','badge-archived');
+  if(m.last_push_status==='rejected') return pill('Rejected','badge-danger');
+  if(m.last_push_status==='failed') return pill('Push failed','badge-danger');
+  if(m.trendyol_approved===false) return pill('Unapproved','badge-warning');
+  if(m.authoritative===false) return pill('Pending','badge-info');
+  if(m.pool_q!=null && m.trendyol_quantity!=null && m.pool_q!==m.trendyol_quantity) return pill('Drift','badge-warning');
+  if(m.last_push_status==='success' || (m.pool_q===m.trendyol_quantity)) return pill('In sync','badge-success');
+  return pill('—');
 }
 
 async function tyMappings(){
-  const q = encodeURIComponent($('#ty-search').value||'');
-  const st = $('#ty-filter').value;
-  const d = await jget(`/api/trendyol-sync/mappings?q=${q}&status=${st}&limit=300`);
-  const tb = $('#ty-map-table tbody'); tb.innerHTML='';
-  for(const m of d.rows){
+  const q=encodeURIComponent($('#ty-search').value||''), st=$('#ty-filter').value;
+  $('#ty-map-body').innerHTML='<tr><td colspan="6" class="empty-state">Loading…</td></tr>';
+  const d=await jget(`/api/trendyol-sync/mappings?q=${q}&status=${st}&limit=300`);
+  if(!d.rows.length){$('#ty-map-body').innerHTML='<tr><td colspan="6" class="empty-state">No mappings match.</td></tr>';$('#ty-map-count').textContent='0 rows';return;}
+  $('#ty-map-body').innerHTML = d.rows.map(m=>{
+    const img = m.image || PLACEHOLDER;
     const fr = m.failure_reasons ? (Array.isArray(m.failure_reasons)?m.failure_reasons.join('; '):m.failure_reasons) : '';
-    const badge = m.active ? '<span class="badge ok">active</span>' : '<span class="badge bad">inactive</span>';
-    const push = m.last_push_status ? `<span class="badge ${m.last_push_status==='success'?'ok':(m.last_push_status==='submitted'?'':'bad')}">${m.last_push_status} ${m.last_push_q??''}</span>` : '—';
-    tb.insertAdjacentHTML('beforeend', `<tr>
-      <td><code>${esc(m.trendyol_barcode)}</code></td>
-      <td>${esc(m.trendyol_sku)}</td>
-      <td>${m.ean_barcode?('<code>'+esc(m.ean_barcode)+'</code>'):'<em>'+esc(m.note||'unresolved')+'</em>'}</td>
-      <td>${m.pool_q==null?'—':m.pool_q}${m.authoritative===false?' <span class="badge">not-auth</span>':''}</td>
-      <td title="${esc(fr)}">${push} <small>${esc(m.last_push_at||'')}</small></td>
-      <td>${badge}</td>
-      <td style="white-space:nowrap">
-        <button class="secondary outline" style="padding:.1rem .4rem" onclick="tyOpenAssign('${esc(m.trendyol_barcode)}','${esc(m.trendyol_sku||'')}')">Assign</button>
-        <button class="secondary outline" style="padding:.1rem .4rem" onclick="tyResolve('${esc(m.trendyol_barcode)}')">Re-resolve</button>
-        ${m.active?`<button class="secondary outline" style="padding:.1rem .4rem" onclick="tyPush('${esc(m.trendyol_barcode)}')">Push</button>`:''}
-      </td></tr>`);
-  }
-  $('#ty-map-count').textContent = `${d.count} rows`;
+    const price = m.trendyol_price!=null ? `<span class="text-muted">lei ${money(m.trendyol_price)}</span>` : '';
+    return `<tr>
+      <td><img src="${esc(img)}" class="product-img" loading="lazy" alt="" onerror="${onImgErr}"></td>
+      <td class="text-left"><div style="max-width:340px">
+          <div style="font-weight:600;line-height:1.25">${esc((m.title||'—')).slice(0,80)}</div>
+          <small class="text-muted">${esc(m.shopify_store||'')}${m.shopify_sku?' · SKU '+esc(m.shopify_sku):''}
+            ${m.ean_barcode?' · <code>'+esc(m.ean_barcode)+'</code>':' · <em>'+esc(m.note||'unresolved')+'</em>'}</small>
+        </div></td>
+      <td class="text-left"><div style="max-width:220px">
+          <div><code>${esc(m.trendyol_barcode)}</code></div>
+          <small class="text-muted">${esc(m.trendyol_sku||'')} ${price}
+            ${m.trendyol_archived?pill('archived','badge-archived'):''}${m.trendyol_approved===false?pill('unapproved','badge-warning'):''}</small>
+        </div></td>
+      <td class="text-right">${stockCell(m)}</td>
+      <td class="text-center" title="${esc(fr)}">${syncCell(m)}</td>
+      <td class="text-right" style="white-space:nowrap">
+        <button class="secondary outline" style="padding:.25rem .55rem;font-size:.75rem" onclick="tyOpenAssign('${esc(m.trendyol_barcode)}','${esc(m.shopify_sku||m.trendyol_sku||'')}','${esc((m.title||'').replace(/'/g,''))}')">Assign</button>
+        ${!m.active?`<button class="secondary outline" style="padding:.25rem .55rem;font-size:.75rem" onclick="tyResolve('${esc(m.trendyol_barcode)}')">Resolve</button>`:''}
+        ${m.active?`<button class="secondary" style="padding:.25rem .55rem;font-size:.75rem" onclick="tyPush('${esc(m.trendyol_barcode)}',this)">Push</button>`:''}
+      </td></tr>`;}).join('');
+  $('#ty-map-count').textContent = `${d.count} mappings`;
 }
 
 async function tyResolve(tb){
   try{const r=await jpost(`/api/trendyol-sync/mappings/${encodeURIComponent(tb)}/resolve`);
-    alert(r.ok?`Resolved → ${r.ean_barcode}`:`Not resolved: ${r.note}${r.candidates&&r.candidates.length?' ['+r.candidates.join(', ')+']':''}`);
-    tyMappings();tyOverview();}catch(e){alert('Error: '+e.message)}
+    toast(r.ok?`Resolved → ${r.ean_barcode}`:`Not resolved: ${r.note}${r.candidates&&r.candidates.length?' ['+r.candidates.join(', ')+']':''}`, r.ok);
+    tyMappings();tyOverview();}catch(e){toast('Error: '+e.message,false)}
 }
-async function tyPush(tb){
-  try{const r=await jpost(`/api/trendyol-sync/push/${encodeURIComponent(tb)}`);
-    alert(`Pushed qty ${r.quantity} (batch ${r.batch})`);tyMappings();}catch(e){alert('Push error: '+e.message)}
+async function tyPush(tb,btn){
+  if(btn){btn.setAttribute('aria-busy','true');btn.disabled=true;}
+  try{const r=await jpost(`/api/trendyol-sync/push/${encodeURIComponent(tb)}`);toast(`Pushed qty ${r.quantity}`,true);setTimeout(tyMappings,800);}
+  catch(e){toast('Push error: '+e.message,false)} finally{if(btn){btn.removeAttribute('aria-busy');btn.disabled=false;}}
 }
 
-function tyOpenAssign(tb, sku){
-  TY_CURRENT = tb;
-  $('#ty-assign-title').textContent = `Assign EAN for ${tb} (${sku})`;
-  $('#ty-cand-search').value = sku||'';
-  $('#ty-assign').showModal();
-  tyCandidates();
-}
+function tyOpenAssign(tb,seed,title){TY_CURRENT=tb;$('#ty-assign-title').textContent=`Assign · ${title||tb}`;$('#ty-cand-search').value=seed||'';$('#ty-assign').showModal();tyCandidates();}
 async function tyCandidates(){
-  const q = $('#ty-cand-search').value.trim();
-  if(q.length<2){$('#ty-cand-list').innerHTML='<small>type at least 2 chars…</small>';return;}
-  const d = await jget(`/api/trendyol-sync/candidates?q=${encodeURIComponent(q)}`);
+  const q=$('#ty-cand-search').value.trim();
+  if(q.length<2){$('#ty-cand-list').innerHTML='<div class="empty-state">Type at least 2 characters…</div>';return;}
+  const d=await jget(`/api/trendyol-sync/candidates?q=${encodeURIComponent(q)}`);
   $('#ty-cand-list').innerHTML = d.rows.length ? d.rows.map(r=>`
-    <div style="display:flex;justify-content:space-between;gap:.5rem;padding:.35rem;border-bottom:1px solid var(--muted-border-color)">
-      <div><b>${esc(r.store)}</b> · ${esc(r.sku)} · ${r.barcode?('EAN '+esc(r.barcode)):'<span class=bad>no barcode</span>'}
-        <br><small>${esc((r.title||'').slice(0,60))} · qty ${r.available??'—'}</small></div>
+    <div class="ty-row">
+      <img src="${esc(r.image_url||PLACEHOLDER)}" class="product-img" alt="" onerror="${onImgErr}">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600">${esc(r.store)} · ${esc(r.sku||'(no sku)')}</div>
+        <small class="text-muted">${esc((r.title||'').slice(0,60))} · qty ${num(r.available)}${r.price!=null?' · lei '+money(r.price):''}</small>
+      </div>
       <div style="white-space:nowrap">
-        ${r.barcode?`<button style="padding:.1rem .4rem" onclick="tyLinkEan('${esc(r.barcode)}')">Link EAN</button>`
-                   :`<button class="secondary" style="padding:.1rem .4rem" onclick="tyWriteBarcode(${r.variant_id})">Write barcode…</button>`}
-      </div></div>`).join('') : '<small>no matches</small>';
+        ${r.barcode?`<code style="font-size:.72rem">${esc(r.barcode)}</code>
+            <button style="padding:.2rem .5rem;font-size:.72rem" onclick="tyLinkEan('${esc(r.barcode)}')">Link</button>`
+          :`<div class="flex gap-sm"><input id="wbc-${r.variant_id}" placeholder="new EAN" style="width:130px;padding:.2rem .4rem;font-size:.72rem;margin:0">
+             <button class="secondary" style="padding:.2rem .5rem;font-size:.72rem" onclick="tyWriteBarcode(${r.variant_id})">Write &amp; link</button></div>`}
+      </div></div>`).join('') : '<div class="empty-state">No matches.</div>';
 }
-async function tyLinkEan(ean){
-  try{await jpost(`/api/trendyol-sync/mappings/${encodeURIComponent(TY_CURRENT)}`,{ean_barcode:ean});
-    $('#ty-assign').close();tyMappings();tyOverview();}catch(e){alert('Error: '+e.message)}
-}
+async function tyLinkEan(ean){try{await jpost(`/api/trendyol-sync/mappings/${encodeURIComponent(TY_CURRENT)}`,{ean_barcode:ean});$('#ty-assign').close();toast('Linked to EAN '+ean,true);tyMappings();tyOverview();}catch(e){toast('Error: '+e.message,false)}}
 async function tyWriteBarcode(vid){
-  const bc = prompt('New barcode/EAN to write onto this Shopify variant:');
-  if(!bc)return;
-  try{await jpost('/api/trendyol-sync/assign-barcode',{variant_id:vid,barcode:bc.trim()});
-    await jpost(`/api/trendyol-sync/mappings/${encodeURIComponent(TY_CURRENT)}`,{ean_barcode:bc.trim()});
-    $('#ty-assign').close();tyMappings();tyOverview();alert('Barcode written + linked.');}
-  catch(e){alert('Error: '+e.message)}
+  const bc=($('#wbc-'+vid)?$('#wbc-'+vid).value:'').trim();
+  if(!bc||bc.length<6){toast('Enter a valid barcode (≥6 chars)',false);return;}
+  try{await jpost('/api/trendyol-sync/assign-barcode',{variant_id:vid,barcode:bc});
+    await jpost(`/api/trendyol-sync/mappings/${encodeURIComponent(TY_CURRENT)}`,{ean_barcode:bc});
+    $('#ty-assign').close();toast('Barcode written + linked',true);tyMappings();tyOverview();}catch(e){toast('Error: '+e.message,false)}
 }
 
 async function tyProblems(){
-  const p = await jget('/api/trendyol-sync/problems');
-  $('#pc-inactive').textContent=p.inactive_mappings.length;
-  $('#pl-inactive').innerHTML=p.inactive_mappings.map(m=>`<div style="padding:.2rem 0"><code>${esc(m.trendyol_barcode)}</code> ${esc(m.trendyol_sku||'')} — <small>${esc(m.note||'')}</small></div>`).join('')||'<small>none</small>';
-  $('#pc-pushes').textContent=p.bad_pushes.length;
-  $('#pl-pushes').innerHTML=p.bad_pushes.map(b=>`<div style="padding:.2rem 0"><span class="badge bad">${esc(b.status)}</span> <code>${esc(b.trendyol_barcode)}</code> q${b.quantity} <small>${esc(Array.isArray(b.failure_reasons)?b.failure_reasons.join('; '):(b.failure_reasons||''))}</small></div>`).join('')||'<small>none</small>';
-  $('#pl-skipped').innerHTML=p.skipped_order_lines.map(s=>`<div>${esc(s.skip_reason)}: <b>${s.n}</b></div>`).join('')||'<small>none</small>';
-  $('#pc-unmapped').textContent=p.unmapped_count;
-  $('#pl-unmapped').innerHTML=(p.unmapped_on_trendyol||[]).map(b=>`<code>${esc(b)}</code>`).join('<br>')||'<small>none</small>';
-  $('#pl-missing').innerHTML=(p.not_on_trendyol||[]).map(b=>`<code>${esc(b)}</code>`).join('<br>')||'<small>none</small>';
-  $('#pl-drift').innerHTML=(p.drift||[]).map(d=>`<div><code>${esc(d.tb)}</code> pool <b>${d.pool}</b> vs trendyol <b>${d.trendyol}</b></div>`).join('')||'<small>no drift</small>';
+  const p=await jget('/api/trendyol-sync/problems');
+  $('#ty-prob-kpis').innerHTML =
+    kpi('Unresolved', p.inactive_mappings.length, 'mappings without an EAN', p.inactive_mappings.length?'warning':'success') +
+    kpi('Push errors', p.bad_pushes.length, 'failed / rejected', p.bad_pushes.length?'danger':'success') +
+    kpi('Unmapped on TY', p.unmapped_count, 'Trendyol listings not in mapping') +
+    kpi('Missing on TY', p.not_on_trendyol.length, 'mapped but not listed');
+  const row=(a,b)=>`<div class="ty-row"><div style="flex:1;min-width:0">${a}</div><div class="text-muted" style="font-size:.78rem">${b||''}</div></div>`;
+  $('#pl-inactive').innerHTML=p.inactive_mappings.map(m=>row(`<code>${esc(m.trendyol_barcode)}</code> ${esc(m.trendyol_sku||'')}`,esc(m.note||''))).join('')||emptyRow();
+  $('#pl-pushes').innerHTML=p.bad_pushes.map(b=>row(`${pill(b.status,'badge-danger')} <code>${esc(b.trendyol_barcode)}</code> q${b.quantity}`,esc(Array.isArray(b.failure_reasons)?b.failure_reasons.join('; '):(b.failure_reasons||'')))).join('')||emptyRow();
+  $('#pl-skipped').innerHTML=p.skipped_order_lines.map(s=>row(esc(s.skip_reason),`<b>${s.n}</b>`)).join('')||emptyRow('none');
+  $('#pl-unmapped').innerHTML=(p.unmapped_on_trendyol||[]).map(b=>row(`<code>${esc(b)}</code>`)).join('')||emptyRow('none');
+  $('#pl-missing').innerHTML=(p.not_on_trendyol||[]).map(b=>row(`<code>${esc(b)}</code>`)).join('')||emptyRow('none');
+  $('#pl-drift').innerHTML=(p.drift||[]).map(d=>row(`<code>${esc(d.tb)}</code>`,`pool <b>${d.pool}</b> vs Trendyol <b>${d.trendyol}</b>`)).join('')||emptyRow('no drift');
 }
 async function tyActivity(){
-  const a = await jget('/api/trendyol-sync/activity');
-  $('#act-pushes').innerHTML=a.pushes.map(p=>`<div style="padding:.15rem 0"><span class="badge ${p.status==='success'?'ok':(p.status==='submitted'?'':'bad')}">${esc(p.status)}</span> <code>${esc(p.trendyol_barcode)}</code> q${p.quantity} <small>${esc(p.at)}</small></div>`).join('')||'<small>none</small>';
-  $('#act-orders').innerHTML=a.orders.map(o=>`<div style="padding:.15rem 0">${o.applied?'<span class="badge ok">folded</span>':`<span class="badge">${esc(o.skip_reason||'—')}</span>`} ${esc(o.order_number||'')} <code>${esc(o.trendyol_barcode||'')}</code> -${o.quantity} <small>${esc(o.at)}</small></div>`).join('')||'<small>none seen</small>';
+  const a=await jget('/api/trendyol-sync/activity');
+  const row=(a1,b)=>`<div class="ty-row"><div style="flex:1;min-width:0">${a1}</div><div class="text-muted" style="font-size:.75rem;white-space:nowrap">${b||''}</div></div>`;
+  $('#act-pushes').innerHTML=a.pushes.map(p=>row(`${pill(p.status,p.status==='success'?'badge-success':(p.status==='submitted'?'badge-info':'badge-danger'))} <code>${esc(p.trendyol_barcode)}</code> q${p.quantity}`,esc(p.at))).join('')||emptyRow('none');
+  $('#act-orders').innerHTML=a.orders.map(o=>row(`${o.applied?pill('folded','badge-success'):pill(o.skip_reason||'—','badge-archived')} ${esc(o.order_number||'')} <code>${esc(o.trendyol_barcode||'')}</code> -${o.quantity}`,esc(o.at))).join('')||emptyRow('none seen');
 }
+function emptyRow(t){return `<div class="empty-state" style="padding:1rem">${t||'none'}</div>`;}
 
-async function tyRun(job){
-  $('#ty-run-out').textContent='running '+job+'…';
-  try{const r=await jpost('/api/trendyol-sync/run/'+job);
-    $('#ty-run-out').textContent=job+': '+JSON.stringify(r);tyLoadAll();}
-  catch(e){$('#ty-run-out').textContent='error: '+e.message}
-}
-function tyLoadAll(){tyOverview();tyMappings();
-  if(!$('#tab-problems').hidden)tyProblems();
-  if(!$('#tab-activity').hidden)tyActivity();}
+let toastTimer;
+function toast(msg,ok){let t=$('#ty-toast');if(!t){t=document.createElement('div');t.id='ty-toast';document.body.appendChild(t);}
+  t.className='ty-toast '+(ok?'ok':'err');t.textContent=msg;t.style.opacity='1';clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.style.opacity='0',3500);}
 
-document.querySelectorAll('.ty-tab').forEach(t=>t.addEventListener('click',e=>{
-  e.preventDefault();
-  document.querySelectorAll('.ty-tab').forEach(x=>x.classList.remove('active'));
-  t.classList.add('active');
-  const tab=t.dataset.tab;
-  ['mappings','problems','activity'].forEach(n=>$('#tab-'+n).hidden=(n!==tab));
-  if(tab==='problems')tyProblems(); if(tab==='activity')tyActivity();
+async function tyRun(job){$('#ty-run-out').textContent='Running '+job+'…';
+  try{const r=await jpost('/api/trendyol-sync/run/'+job);$('#ty-run-out').textContent=job+' → '+JSON.stringify(r);tyLoadAll();}
+  catch(e){$('#ty-run-out').textContent='error: '+e.message}}
+function tyLoadAll(){tyOverview();const cur=document.querySelector('.tab-btn.active').dataset.tab;
+  if(cur==='mappings')tyMappings();if(cur==='problems')tyProblems();if(cur==='activity')tyActivity();}
+
+document.querySelectorAll('.tab-btn').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));t.classList.add('active');
+  const tab=t.dataset.tab;['mappings','problems','activity'].forEach(n=>{const el=$('#tab-'+n);el.style.display=(n===tab)?'':'none';el.classList.toggle('active',n===tab);});
+  if(tab==='problems')tyProblems();if(tab==='activity')tyActivity();
 }));
-let tmr; $('#ty-search').addEventListener('input',()=>{clearTimeout(tmr);tmr=setTimeout(tyMappings,300)});
+let tmr;$('#ty-search').addEventListener('input',()=>{clearTimeout(tmr);tmr=setTimeout(tyMappings,300)});
 $('#ty-filter').addEventListener('change',tyMappings);
-let ctmr; $('#ty-cand-search').addEventListener('input',()=>{clearTimeout(ctmr);ctmr=setTimeout(tyCandidates,300)});
-tyLoadAll();
+let ctmr;$('#ty-cand-search').addEventListener('input',()=>{clearTimeout(ctmr);ctmr=setTimeout(tyCandidates,300)});
+tyOverview();tyMappings();
 </script>
 <style>
-.ok{color:var(--ins-color,#2e7d32)} .bad{color:var(--del-color,#c62828)}
-.badge{font-size:.72rem;padding:.05rem .4rem;border-radius:.3rem;background:var(--muted-border-color)}
-.badge.ok{background:#2e7d3233} .badge.bad{background:#c6282833}
-.ty-tab.active{font-weight:700;text-decoration:underline}
-#ty-map-table td,#ty-map-table th{padding:.35rem .5rem;font-size:.85rem}
+.ty-status{padding:.9rem 1.25rem}
+.monitor-tabs{display:flex;gap:.25rem;border-bottom:1px solid var(--color-border);margin:1.25rem 0}
+.tab-btn{background:none;border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--color-text-secondary);padding:.6rem 1rem;font-weight:600}
+.tab-btn:hover{color:var(--color-text);background:none}
+.tab-btn.active{color:var(--color-primary);border-bottom-color:var(--color-primary)}
+#ty-map-body td{padding:.5rem .75rem;vertical-align:middle;border-top:1px solid var(--color-border)}
+#ty-map-body tr:hover{background:var(--color-surface-hover)}
+#ty-map-body code,.ty-list code{font-size:.74rem;color:var(--color-text-secondary)}
+.ty-row{display:flex;align-items:center;gap:.6rem;padding:.4rem .1rem;border-bottom:1px solid var(--color-border)}
+.ty-row:last-child{border-bottom:none}
+.ty-list{max-height:340px;overflow:auto}
+.ty-toast{position:fixed;bottom:1.5rem;right:1.5rem;z-index:2000;padding:.7rem 1.1rem;border-radius:var(--radius-md);
+  font-size:.85rem;font-weight:500;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:0;transition:opacity var(--transition-base)}
+.ty-toast.ok{background:var(--color-success)} .ty-toast.err{background:var(--color-danger)}
+dialog#ty-assign{border:1px solid var(--color-border);border-radius:var(--radius-lg);background:var(--color-surface);color:var(--color-text);padding:0}
+dialog#ty-assign article{margin:0;padding:1.25rem} dialog#ty-assign::backdrop{background:rgba(0,0,0,.55)}
 </style>
 {% endblock %}

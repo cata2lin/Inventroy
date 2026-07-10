@@ -34,6 +34,14 @@ def overview(db: Session = Depends(get_db)):
     orders = db.execute(text("SELECT count(*) FROM trendyol_order_lines")).scalar()
     orders_applied = db.execute(text(
         "SELECT count(*) FROM trendyol_order_lines WHERE applied")).scalar()
+    # in-sync coverage: active, engine-authoritative mappings whose Trendyol snapshot qty matches pool Q
+    cov = db.execute(text("""
+        SELECT count(*) FILTER (WHERE ps.backfilled_at IS NOT NULL) AS eligible,
+               count(*) FILTER (WHERE ps.backfilled_at IS NOT NULL
+                    AND m.trendyol_quantity IS NOT NULL AND m.trendyol_quantity = ps.quantity) AS in_sync,
+               coalesce(sum(m.trendyol_quantity) FILTER (WHERE m.trendyol_quantity IS NOT NULL), 0) AS ty_units
+        FROM trendyol_mappings m JOIN pool_states ps ON ps.barcode = m.ean_barcode
+        WHERE m.active""")).mappings().first()
     last_rec = db.execute(text("""SELECT to_char(timestamp,'YYYY-MM-DD HH24:MI') ts, details
         FROM audit_logs WHERE action='trendyol_reconcile' ORDER BY timestamp DESC LIMIT 1""")).first()
     rec = {}
@@ -49,6 +57,8 @@ def overview(db: Session = Depends(get_db)):
                   "allowlist": sorted(ts.push_allowlist())},
         "mappings": {"active": maps.get(True, 0), "inactive": maps.get(False, 0),
                      "total": sum(maps.values())},
+        "coverage": {"eligible": cov["eligible"] or 0, "in_sync": cov["in_sync"] or 0,
+                     "ty_units": int(cov["ty_units"] or 0)},
         "pushes": pushes, "pushes_24h": pushes_24h,
         "orders": {"seen": orders, "applied": orders_applied},
         "last_reconcile": rec,
@@ -72,18 +82,36 @@ def mappings(q: Optional[str] = None, status: str = Query("all"), limit: int = 2
     sql = f"""
         SELECT m.trendyol_barcode, m.trendyol_sku, m.shopify_store, m.shopify_sku,
                m.ean_barcode, m.active, m.note,
+               m.trendyol_title, m.trendyol_image, m.trendyol_price, m.trendyol_list_price,
+               m.trendyol_quantity, m.trendyol_approved, m.trendyol_archived,
                ps.quantity AS pool_q, (ps.backfilled_at IS NOT NULL) AS authoritative,
+               sp.title AS shopify_title, sp.image_url AS shopify_image, sp.price AS shopify_price,
                lp.quantity AS last_push_q, lp.status AS last_push_status,
                to_char(lp.created_at,'MM-DD HH24:MI') AS last_push_at,
                lp.failure_reasons
         FROM trendyol_mappings m
         LEFT JOIN pool_states ps ON ps.barcode = m.ean_barcode
         LEFT JOIN LATERAL (
+            SELECT p.title, p.image_url, pv.price
+            FROM product_variants pv
+            JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
+            JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
+            WHERE pv.barcode = m.ean_barcode AND pv.inventory_item_id IS NOT NULL
+            ORDER BY (p.image_url IS NULL), pv.id LIMIT 1) sp ON true
+        LEFT JOIN LATERAL (
             SELECT quantity, status, created_at, failure_reasons FROM trendyol_pushes p
             WHERE p.trendyol_barcode = m.trendyol_barcode ORDER BY p.id DESC LIMIT 1) lp ON true
         {("WHERE " + " AND ".join(where)) if where else ""}
         ORDER BY m.active DESC, m.trendyol_sku NULLS LAST LIMIT :limit"""
-    rows = [dict(r) for r in db.execute(text(sql), params).mappings().all()]
+    rows = []
+    for r in db.execute(text(sql), params).mappings().all():
+        d = dict(r)
+        d["shopify_price"] = float(d["shopify_price"]) if d.get("shopify_price") is not None else None
+        d["trendyol_price"] = float(d["trendyol_price"]) if d.get("trendyol_price") is not None else None
+        d["trendyol_list_price"] = float(d["trendyol_list_price"]) if d.get("trendyol_list_price") is not None else None
+        d["image"] = d.get("shopify_image") or d.get("trendyol_image")
+        d["title"] = d.get("shopify_title") or d.get("trendyol_title")
+        rows.append(d)
     return {"rows": rows, "count": len(rows)}
 
 
@@ -158,9 +186,9 @@ def resolve_mapping(trendyol_barcode: str, db: Session = Depends(get_db)):
 def candidates(q: str, limit: int = 25, db: Session = Depends(get_db)):
     """Search Shopify variants (SKU / barcode / title) to assign to a Trendyol mapping."""
     rows = db.execute(text("""
-        SELECT pv.id AS variant_id, s.name AS store, pv.sku,
+        SELECT pv.id AS variant_id, s.name AS store, pv.sku, pv.price,
                coalesce(nullif(btrim(pv.barcode),''), NULL) AS barcode,
-               p.title, p.shopify_gid AS product_gid, il.available
+               p.title, p.image_url, p.shopify_gid AS product_gid, il.available
         FROM product_variants pv
         JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
         JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
@@ -169,7 +197,12 @@ def candidates(q: str, limit: int = 25, db: Session = Depends(get_db)):
               (pv.sku ILIKE :q OR pv.barcode ILIKE :q OR p.title ILIKE :q)
         ORDER BY s.name, pv.sku LIMIT :limit"""),
         {"q": f"%{q.strip()}%", "limit": min(limit, 100)}).mappings().all()
-    return {"rows": [dict(r) for r in rows]}
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["price"] = float(d["price"]) if d.get("price") is not None else None
+        out.append(d)
+    return {"rows": out}
 
 
 class AssignBarcode(BaseModel):
