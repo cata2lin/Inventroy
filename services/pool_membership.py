@@ -95,28 +95,6 @@ def _false_group_barcodes(db) -> List[str]:
     return [r["barcode"] for r in rows if diagnostics.count_sku_classes(r["skus"]) > 1]
 
 
-def _deauthorize_false_groups(db, barcodes: List[str]) -> int:
-    """De-authorize the ENGINE for false-group pools: clear backfilled_at (and the meaningless SLA
-    flag) so the engine can never converge them. The webhook/canary gates block writes immediately;
-    this removes the stale write-eligibility so that once barcodes are FIXED the pool re-onboards
-    through the live-truth backfill (fresh Q) instead of resuming with a poisoned one.
-    diverged_since is cleared EVERY sweep (not only while backfilled) — sales on the different
-    products keep re-arming it via the validation sweep, and an un-clearable flag would page a
-    permanent-SLA CRITICAL forever on a pool that is intentionally quarantined."""
-    if not barcodes:
-        return 0
-    res = db.execute(text("""
-        UPDATE pool_states SET backfilled_at = NULL
-        WHERE barcode = ANY(:bcs) AND backfilled_at IS NOT NULL
-    """), {"bcs": barcodes})
-    db.execute(text("""
-        UPDATE pool_states SET diverged_since = NULL
-        WHERE barcode = ANY(:bcs) AND diverged_since IS NOT NULL
-    """), {"bcs": barcodes})
-    db.commit()
-    return res.rowcount or 0
-
-
 def _recently_logged(db, action: str, barcode: str, hours: int = 6) -> bool:
     """Dedup helper: True if this (action, barcode) was already audited within the window — keeps a
     standing condition from spamming one WARN per sweep (the canonical-flip 48-rows/day problem)."""
@@ -159,17 +137,18 @@ def run_membership_sweep() -> Dict[str, Any]:
 
         healed = _clear_orphan_flags(db, [o["barcode"] for o in orphaned])
 
-        # FALSE GROUPS: barcodes shared by >1 distinct product class — unsyncable. De-authorize the
-        # engine for them (backfilled_at=NULL) so a stale/poisoned Q can never converge; re-onboarding
-        # after the barcode fix goes through a fresh live-truth backfill via the onboarding sweep.
+        # MULTI-PRODUCT-SKU pools — REPORT ONLY (2026-07-10 policy: the barcode is the intentional
+        # sync key; these pools SYNC like any other via the per-listing engine). The classifier stays
+        # as observability: distinct SKU classes on one barcode is usually deliberate pooling, but is
+        # occasionally a barcode typo — worth a WARN so an operator can eyeball it. Never gates sync.
         false_groups = _false_group_barcodes(db)
-        deauthorized = _deauthorize_false_groups(db, false_groups)
+        deauthorized = 0
         for bc in false_groups:
-            if not _recently_logged(db, "pool_membership_false_group", bc, hours=24):
-                audit_logger.log(category="RECONCILIATION", action="pool_membership_false_group",
-                                 message=f"[{bc}] FALSE GROUP: barcode shared by multiple distinct "
-                                         f"products — sync quarantined until barcodes are fixed",
-                                 target=bc, severity="WARN", details={"barcode": bc})
+            if not _recently_logged(db, "pool_membership_multi_sku_pool", bc, hours=24):
+                audit_logger.log(category="RECONCILIATION", action="pool_membership_multi_sku_pool",
+                                 message=f"[{bc}] barcode pools multiple distinct SKU classes "
+                                         f"(intentional pooling or a barcode typo?) — syncing normally",
+                                 target=bc, severity="INFO", details={"barcode": bc})
 
         for s in shrunk:
             if _recently_logged(db, "pool_membership_shrink", s["barcode"], hours=6):
@@ -186,27 +165,27 @@ def run_membership_sweep() -> Dict[str, Any]:
                                      f"variant — convergence may target a different listing than sales",
                              target=f["barcode"], severity="WARN", details=f)
 
-        if shrunk or flipped or deauthorized:
+        if shrunk or flipped:
             alerting.warning("pool_membership.churn",
-                             f"Pool membership churn: {len(shrunk)} shrink, {len(flipped)} canonical-flip, "
-                             f"{len(false_groups)} false-groups ({deauthorized} newly de-authorized; "
-                             f"orphaned={len(orphaned)}, healed {healed} stale flags).",
+                             f"Pool membership churn: {len(shrunk)} shrink, {len(flipped)} canonical-flip "
+                             f"(multi-SKU pools={len(false_groups)}, orphaned={len(orphaned)}, "
+                             f"healed {healed} stale flags).",
                              {"shrink": len(shrunk), "flip": len(flipped), "orphaned": len(orphaned),
-                              "false_groups": false_groups[:15],
+                              "multi_sku_pools": false_groups[:15],
                               "examples": [s["barcode"] for s in (shrunk + flipped)][:10]})
 
         audit_logger.log(category="SYSTEM", action="pool_membership_sweep",
                          message=f"Membership sweep: {len(pool_barcodes)} pools; orphaned={len(orphaned)} "
                                  f"(healed {healed} stale flags), shrink={len(shrunk)}, flip={len(flipped)}, "
-                                 f"false_groups={len(false_groups)} (deauthorized {deauthorized})",
+                                 f"multi-SKU pools={len(false_groups)} (report-only)",
                          severity="INFO",
                          details={"pools": len(pool_barcodes), "orphaned": len(orphaned),
                                   "healed_flags": healed, "shrink": len(shrunk), "flip": len(flipped),
-                                  "false_groups": false_groups[:30], "deauthorized": deauthorized,
+                                  "multi_sku_pools": false_groups[:30],
                                   "orphaned_examples": [o["barcode"] for o in orphaned[:20]]})
         return {"pools": len(pool_barcodes), "orphaned": len(orphaned), "healed_flags": healed,
                 "shrink": len(shrunk), "flip": len(flipped),
-                "false_groups": false_groups, "deauthorized": deauthorized,
+                "multi_sku_pools": false_groups,
                 "orphaned_barcodes": [o["barcode"] for o in orphaned]}
     except Exception as e:
         try:

@@ -89,10 +89,12 @@ def test_new_listing_seeds_ledger_baseline_on_engine_pool():
 
 # --- CHANGE 4 onboarding sweep: placeholder + false-group excluded, pre-screened, read-mostly ------
 
-def test_onboarding_excludes_placeholder_and_false_groups():
+def test_onboarding_excludes_placeholders_only():
     src = _read("services/pool_onboarding.py")
     assert "diagnostics._placeholder_sql" in src        # exclude all-zeros placeholder barcodes
-    assert "_is_false_group" in src and "false_group_multi_sku" in src  # never onboard false groups
+    # 2026-07-10 policy: the barcode is the intentional sync key — multi-SKU pools onboard like any
+    # other pool (SKU-based gating is forbidden); the backfill contract is the only safety gate.
+    assert "false_group_multi_sku" not in src
 
 
 def test_onboarding_prescreens_to_avoid_alert_storm():

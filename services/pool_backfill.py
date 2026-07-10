@@ -34,20 +34,23 @@ BACKFILL_MAX_SPREAD = int(os.getenv("POOL_BACKFILL_MAX_SPREAD", "0"))   # 0 = st
 
 
 def plan_backfill(db, barcode: str) -> Dict[str, Any]:
-    """Read live Shopify per canonical store and return the backfill verdict WITHOUT mutating.
+    """Read live Shopify for EVERY listing of the barcode (incl. several within one store) and return
+    the backfill verdict WITHOUT mutating. A pool is only SAFE once ALL its listings agree — they are
+    all replicas of the same shared stock under the per-listing engine.
     {barcode, live_quantities, computed_Q, spread, action, reason, safe, source_store}"""
-    rows = live_truth._canonical_rows(db, barcode)
+    rows = live_truth._group_rows(db, barcode)
     live_quantities, lives, missing = {}, [], []
     source_store = None
     for r in rows:
         live = live_truth._read_live(r["shopify_url"], r["api_token"], r["inventory_item_id"], r["sync_location_id"])
-        live_quantities[r["store"]] = live
+        lq_key = r["store"] if r["store"] not in live_quantities else f"{r['store']}#{r['variant_id']}"
+        live_quantities[lq_key] = live
         if isinstance(live, int):
             lives.append(live)
             if source_store is None:
                 source_store = r["store_id"]
         else:
-            missing.append(r["store"])
+            missing.append(f"{r['store']}#{r['variant_id']}")
 
     if len(rows) < 2:
         return {"barcode": barcode, "live_quantities": live_quantities, "computed_Q": None,
@@ -156,16 +159,18 @@ def backfill_pool_state_from_live_truth(barcodes: Optional[List[str]] = None, *,
                 state.backfilled_at = now
                 state.backfill_source_store = plan["source_store"]
                 state.diverged_since = None
-            # CRITICAL: seed a per-store ledger BASELINE at Q. Without this, the conservation fold
-            # sees no prior observation for a store and treats its FIRST real sale as a "replica
-            # joining" (no pool move) — then convergence reverts the sale (oversell). Seeding each
-            # store's last-observed=Q makes the first sale compute delta = observed - Q correctly.
-            for cr in live_truth._canonical_rows(db, bc):
+            # CRITICAL: seed a PER-LISTING ledger BASELINE at Q for EVERY variant of the barcode.
+            # Without this, the conservation fold sees no prior observation for a listing and treats
+            # its FIRST real sale as a "replica joining" (no pool move) — then convergence reverts the
+            # sale (oversell). The fold is keyed per-variant (a store can carry several listings of
+            # one barcode), so the baseline must be per-variant too.
+            for cr in live_truth._group_rows(db, bc):
                 db.execute(text("""INSERT INTO pool_events
                     (barcode, source_store_id, source_variant_id, inventory_item_id,
                      observed_quantity, source_timestamp, kind, applied)
-                    VALUES (:b,:s,NULL,:i,:q, now(), 'backfill_baseline', true)"""),
-                    {"b": bc, "s": cr["store_id"], "i": cr["inventory_item_id"], "q": new_q})
+                    VALUES (:b,:s,:v,:i,:q, now(), 'backfill_baseline', true)"""),
+                    {"b": bc, "s": cr["store_id"], "v": cr["variant_id"],
+                     "i": cr["inventory_item_id"], "q": new_q})
             _log_backfill(db, barcode=bc, action="backfilled", reason="seeded Q from confirmed live truth",
                           plan=plan, prev_q=prev_q, prev_v=prev_v, new_q=new_q, new_v=new_v,
                           operator_confirmed=True, dry_run=False)

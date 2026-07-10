@@ -51,13 +51,9 @@ def _off_engine_multistore_barcodes(db, limit: int) -> List[str]:
     """), {"lim": limit}).fetchall()]
 
 
-def _is_false_group(db, barcode: str) -> bool:
-    """FALSE group = barcode shared by >1 distinct PRODUCT class (diagnostics.count_sku_classes).
-    Store-prefixed SKUs of the same product (zn-127 / 127) are ONE class — this fleet has ~120 legit
-    pools named that way, so a naive distinct-SKU count would wrongly block them. A true false group
-    (negru-4XL / negru-5XL) must never be auto-onboarded — the engine would drive two different
-    physical products to one stock value."""
-    return diagnostics.count_sku_classes(diagnostics.group_skus(db, barcode)) > 1
+# (2026-07-10 policy) The barcode is the intentional sync key: multi-SKU barcodes POOL their stock
+# by design and onboard like any other pool. The only onboarding gate is the backfill's own safety
+# contract (>=2 readable listings that AGREE, Q >= 0).
 
 
 def run_onboarding_sweep() -> Dict[str, Any]:
@@ -80,11 +76,6 @@ def run_onboarding_sweep() -> Dict[str, Any]:
             continue
         db = SessionLocal()
         try:
-            # FALSE-GROUP guard: never auto-onboard a barcode shared by >1 distinct product class —
-            # that would let the engine drive unrelated products to one stock value.
-            if _is_false_group(db, bc):
-                needs_attention.setdefault("false_group_multi_sku", []).append(bc)
-                continue
             # PRE-SCREEN with the read-only planner (does NOT alert). Only pools the backfill contract
             # deems SAFE (>=2 readable stores, spread==0, Q>=0) get the real write. This keeps the
             # recurring diverged/negative backlog from firing a CRITICAL alert every 30-min run.

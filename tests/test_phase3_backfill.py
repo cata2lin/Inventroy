@@ -67,11 +67,13 @@ def test_backfill_grants_write_eligibility():
     assert "state.backfilled_at = now" in SRC or "backfilled_at=now" in SRC
 
 
-def test_backfill_seeds_per_store_ledger_baseline():
-    # CRITICAL (caught live): backfill must seed a per-store ledger baseline at Q, else the fold
-    # treats each store's FIRST sale as a 'join' (no pool move) and convergence reverts the sale.
+def test_backfill_seeds_per_listing_ledger_baseline():
+    # CRITICAL (caught live): backfill must seed a PER-LISTING ledger baseline at Q, else the fold
+    # treats each listing's FIRST sale as a 'join' (no pool move) and convergence reverts the sale.
+    # (2026-07-10: per-VARIANT, matching the variant-keyed fold — a store can carry several listings.)
     assert "backfill_baseline" in SRC
-    assert "_canonical_rows" in SRC
+    assert "_group_rows" in SRC
+    assert '"v": cr["variant_id"]' in SRC
     assert "observed_quantity" in SRC and "INSERT INTO pool_events" in SRC
 
 

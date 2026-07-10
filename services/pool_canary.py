@@ -103,12 +103,6 @@ def canary_active_for(db: Session, barcode: str) -> bool:
         return False
     if is_rolled_back(db, barcode):
         return False
-    # FALSE GROUP: a barcode shared by >1 distinct product (SKU class) is unsyncable — the engine
-    # must never be authoritative for it (one pool number, two physical stocks). Classification-
-    # driven, so fixing the barcodes re-opens the gate automatically (after re-backfill).
-    from services import diagnostics
-    if diagnostics.is_false_barcode_group(db, barcode):
-        return False
     return True
 
 
@@ -213,6 +207,7 @@ def _canary_handle_inner(db: Session, *, barcode, source_store_id, source_varian
     if pool_engine.spike_corroboration_enabled():
         observed_corrected, correction = pool_engine.corroborate_up_jump(
             db, barcode=barcode, source_store_id=source_store_id,
+            source_variant_id=source_variant_id,
             inventory_item_id=inventory_item_id, observed=observed_quantity)
         if correction is not None:
             golden_capture(db, barcode, "spike_corrected", webhook_id=webhook_id, payload=correction)

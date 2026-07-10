@@ -49,6 +49,24 @@ def _canonical_rows(db, barcode: str) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def _group_rows(db, barcode: str) -> List[Dict[str, Any]]:
+    """EVERY listing (variant) of a barcode across enabled synced stores — including several within
+    ONE store. Under the per-listing engine each listing is a replica of the pool, so live-truth
+    comparisons, backfills, and validations must cover them ALL (the canonical-only view is what let
+    non-canonical listings sit stale forever)."""
+    rows = db.execute(text("""
+        SELECT pv.id AS variant_id, pv.store_id, s.name AS store, s.shopify_url, s.api_token,
+               s.sync_location_id, pv.inventory_item_id, il.available AS mirror
+        FROM product_variants pv
+        JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
+        JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
+        LEFT JOIN inventory_levels il ON il.variant_id = pv.id AND il.location_id = s.sync_location_id
+        WHERE pv.barcode = :b AND pv.inventory_item_id IS NOT NULL
+        ORDER BY pv.store_id, pv.id
+    """), {"b": barcode}).mappings().all()
+    return [dict(r) for r in rows]
+
+
 def _read_live(store_url: str, token: str, inventory_item_id: int, sync_location_id: int) -> Optional[int]:
     try:
         svc = ShopifyService(store_url=store_url, token=token)
@@ -61,16 +79,17 @@ def _read_live(store_url: str, token: str, inventory_item_id: int, sync_location
 
 
 def _check_pool(db, barcode: str) -> Optional[Dict[str, Any]]:
-    """Read every canonical variant of a pool LIVE from Shopify and return the live divergence picture.
-    Returns None if fewer than 2 readable stores. Does NOT write anything."""
-    rows = _canonical_rows(db, barcode)
+    """Read EVERY listing of a pool LIVE from Shopify (incl. several within one store) and return the
+    live divergence picture. Returns None if fewer than 2 readable listings. Does NOT write anything."""
+    rows = _group_rows(db, barcode)
     if len(rows) < 2:
         return None
     per_store, lives, reads = [], [], 0
     for r in rows:
         live = _read_live(r["shopify_url"], r["api_token"], r["inventory_item_id"], r["sync_location_id"])
         reads += 1
-        per_store.append({"store": r["store"], "live": live, "mirror": r["mirror"],
+        per_store.append({"store": r["store"], "variant_id": r["variant_id"], "live": live,
+                          "mirror": r["mirror"],
                           "mirror_drift": (live != r["mirror"]) if live is not None else None})
         if isinstance(live, int):
             lives.append(live)
@@ -107,17 +126,9 @@ def run_live_truth_sweep() -> Dict[str, Any]:
                 targets.append(b)
 
         checked, reads, live_diverged, mirror_blind_hits, worst = 0, 0, [], [], None
-        from services import diagnostics as _diag
         for bc in targets:
             if reads >= LIVE_SWEEP_MAX_READS:
                 break
-            # FALSE GROUP: different products sharing a barcode legitimately hold different stocks —
-            # "divergence" between them is meaningless and would page mirror-blind CRITICALs forever.
-            try:
-                if _diag.is_false_barcode_group(db, bc):
-                    continue
-            except Exception:
-                db.rollback()
             res = _check_pool(db, bc)
             if res is None:
                 continue

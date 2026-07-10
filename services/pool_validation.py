@@ -65,18 +65,9 @@ def _validate_pool(db, barcode: str) -> Dict[str, Any]:
     state = db.query(models.PoolState).filter(models.PoolState.barcode == barcode).first()
     if state is None:
         return {"barcode": barcode, "skipped": "no pool state", "reads": 0}
-    # FALSE GROUP: different products sharing one barcode are quarantined from sync — comparing their
-    # (genuinely different) stocks as one pool is meaningless. Clear any stale SLA flag and skip:
-    # otherwise real sales on the two products re-arm diverged_since and page a permanent-SLA CRITICAL
-    # forever on a pool that is intentionally not synced.
-    from services import diagnostics as _diag
-    if _diag.is_false_barcode_group(db, barcode):
-        if state.diverged_since is not None:
-            state.diverged_since = None
-            db.commit()
-        return {"barcode": barcode, "skipped": "false_group", "reads": 0}
     q = int(state.quantity)
-    rows = live_truth._canonical_rows(db, barcode)
+    # EVERY listing is a replica (incl. several within one store) — validate them ALL against Q.
+    rows = live_truth._group_rows(db, barcode)
     if len(rows) < 2:
         # Orphaned / single-store pool: cannot diverge, pool_q is inert bookkeeping. Clear any stale
         # SLA flag (this is the class that otherwise alerts CRITICAL forever) and skip.

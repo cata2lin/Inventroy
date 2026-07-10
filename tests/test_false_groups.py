@@ -1,18 +1,21 @@
 # tests/test_false_groups.py
 """
-FALSE-GROUP quarantine (2026-07-10 pijama incident) regression tests — hermetic. Run:
+PER-LISTING POOL ENGINE (2026-07-10 policy) regression tests — hermetic. Run:
     python tests/test_false_groups.py
 
-Incident: negru-4XL and negru-5XL (two SIZES = two physical stocks) share barcode 0692041036409
-across 3 Nocturna stores. The engine keys its per-source baseline by (barcode, store) — variant-blind —
-so a 5XL sale (3->2) folded against the 4XL baseline (202) as delta -200 and clobbered a fresh +200
-restock on every store ("Inventar" -200 in the Shopify adjustment history).
+POLICY: the BARCODE is the intentional sync key. Every listing (variant) sharing a barcode pools its
+stock — regardless of SKU, including SEVERAL listings within ONE store. SKU-based sync gating is
+FORBIDDEN (an earlier quarantine experiment was reverted); the SKU classifier survives only as
+report-only observability in pool_membership.
 
-The fix: a suffix-equivalence SKU classifier decides whether a barcode's members are the SAME product
-(identical SKUs, or store-prefixed like zn-127/127 — ~120 legit pools) or DIFFERENT products (a FALSE
-group). False groups are quarantined from ALL sync (webhook gate, canary gate, converge refuse,
-creation-align guard), de-authorized by the membership sweep, and excluded from onboarding — until the
-barcodes are fixed, at which point the gates reopen automatically (classification-driven, no markers).
+THE INCIDENT the engine change fixes: negru-4XL and negru-5XL share barcode 0692041036409 on 3 stores
+(two listings per store). The fold baseline was keyed per (barcode, STORE), so the two listings'
+observations interleaved into one stream: a 5XL listing reporting 2 folded against the 4XL listing's
+202 as a phantom -200, clobbering a fresh +200 restock fleet-wide. And convergence only ever wrote ONE
+"canonical" listing per store, so sibling listings sat stale forever (the divergence the operator saw).
+
+THE FIX: each listing is its own replica — fold baselines keyed per VARIANT, and converge/simulate/
+backfill/validate operate over ALL listings of the barcode.
 """
 import os
 import sys
@@ -20,7 +23,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from services.diagnostics import sku_equivalent, count_sku_classes
+from services.pool_engine import fold_observation
 
 
 def _read(rel):
@@ -28,174 +31,111 @@ def _read(rel):
         return f.read()
 
 
-# --- the PURE classifier ---------------------------------------------------------------------------
+# --- the -200 incident replay: per-LISTING baselines fold correctly --------------------------------
 
-def test_identical_skus_are_same_product():
-    assert sku_equivalent("HA-1193-1", "HA-1193-1")
-    assert count_sku_classes(["HA-1193-1", "HA-1193-1"]) == 1
-
-
-def test_store_prefixed_skus_are_same_product():
-    # the fleet's dominant legit pattern: one store bare, the other store-prefixed
-    assert sku_equivalent("zn-127", "127")
-    assert sku_equivalent("127", "zn-127")
-    assert sku_equivalent("gt-100", "100")
-    assert count_sku_classes(["127", "zn-127"]) == 1
-    assert count_sku_classes(["150", "zn-150"]) == 1          # placeholder barcode, same product
+def _observe(Q, last, listing, val):
+    """Per-listing fold + converge: fold against THIS listing's own baseline, then convergence
+    reseeds EVERY listing's baseline to the new Q (per-variant anchors)."""
+    Q = fold_observation(Q, last.get(listing), val)
+    for k in last:
+        last[k] = Q
+    last[listing] = Q
+    return Q
 
 
-def test_prefix_equivalence_is_transitive_via_shared_member():
-    # {'127','zn-127','gt-127'} — zn-127 and gt-127 unify through the bare '127'
-    assert count_sku_classes(["127", "zn-127", "gt-127"]) == 1
+def test_incident_replay_5xl_sale_folds_minus_1_not_minus_200():
+    # 6 listings (4XL + 5XL on 3 stores), pool backfilled at 3, all baselines 3.
+    listings = ["A-4XL", "B-4XL", "C-4XL", "A-5XL", "B-5XL", "C-5XL"]
+    Q, last = 3, {l: 3 for l in listings}
+    Q = _observe(Q, last, "B-4XL", 203)        # colleague +200 on one listing
+    assert Q == 203                            # pool restocked
+    Q = _observe(Q, last, "A-4XL", 202)        # real 4XL sale
+    assert Q == 202
+    # THE INCIDENT MOMENT: a 5XL sale on store A. Its own baseline is 202 (reseeded by convergence),
+    # so selling one reports 201 -> folds as -1. Under the old store-keyed baseline the 5XL listing
+    # (never written, still at its stale value) reported 2 -> folded as -200 and wiped the restock.
+    Q = _observe(Q, last, "A-5XL", 201)
+    assert Q == 201, "a 1-unit sale on the second listing must fold as -1, never -200"
 
 
-def test_sizes_are_different_products_the_pijama_incident():
-    # THE incident: 4XL and 5XL are different physical stocks
-    assert not sku_equivalent("negru-4XL", "negru-5XL")
-    assert count_sku_classes(["negru-4XL", "negru-5XL"]) == 2
-    for color in ("roz", "rosu", "champagne", "gri", "albastru"):
-        assert count_sku_classes([f"{color}-4XL", f"{color}-5XL"]) == 2
+def test_stale_second_listing_first_report_is_replica_join_not_wipe():
+    # A listing with NO baseline yet (never observed, no anchor) reporting a stale value must NOT
+    # move the pool (replica-join semantics) — convergence then pulls it to Q.
+    Q, last = 202, {"A-4XL": 202}
+    Q = fold_observation(Q, last.get("A-5XL"), 2)   # stale listing reports 2, no baseline -> no move
+    assert Q == 202
 
 
-def test_known_false_groups_classified_correctly():
-    assert count_sku_classes(["HA-0061-1", "HA-0061M", "HA-0062"]) == 3     # 3 different products
-    assert count_sku_classes(["oglinda", "oglinda-acrilica"]) == 2          # NOT a prefix pair
-    assert count_sku_classes(["112", "zn-112"]) == 1                        # legit (was a false positive)
+# --- structural: the engine is per-listing ----------------------------------------------------------
+
+def test_fold_baseline_keyed_per_variant():
+    src = _read("services/pool_engine.py")
+    sp = src[src.index("def _source_prev"):src.index("def apply_event")]
+    assert "source_variant_id IS NOT DISTINCT FROM :v" in sp
+    assert "source_store_id IS NOT DISTINCT FROM" not in sp     # store-keyed baseline is GONE
+    ae = src[src.index("def apply_event"):src.index("def latest_source_observed")]
+    assert "_source_prev(db, ev.barcode, ev.source_variant_id, ev.event_id)" in ae
 
 
-def test_empty_skus_carry_no_evidence():
-    assert count_sku_classes(["", None, "  ", "HA-1"]) == 1
-    assert count_sku_classes(["", None]) == 0
-    assert count_sku_classes([]) == 0
-    assert count_sku_classes(None) == 0
+def test_corroboration_baseline_per_variant():
+    src = _read("services/pool_engine.py")
+    fn = src[src.index("def latest_source_observed"):src.index("def _read_source_live")]
+    assert "source_variant_id IS NOT DISTINCT FROM :v" in fn
+    cj = src[src.index("def corroborate_up_jump"):src.index("def converge_pool")]
+    assert "latest_source_observed(db, barcode, source_variant_id)" in cj
 
 
-def test_compound_sku_prefix_still_matches():
-    # a store prefix on an already-hyphenated SKU: x-a-b endswith '-a-b'
-    assert sku_equivalent("zn-HA-1193-1", "HA-1193-1")
-    assert count_sku_classes(["zn-HA-1193-1", "HA-1193-1"]) == 1
-
-
-def test_case_differences_never_quarantine():
-    # 'ZN-127' vs 'zn-127' is a data-entry case difference, not a different product
-    assert sku_equivalent("ZN-127", "zn-127")
-    assert count_sku_classes(["ZN-127", "zn-127", "127"]) == 1
-    assert count_sku_classes(["NEGRU-4XL", "negru-5XL"]) == 2   # sizes still differ, case aside
-
-
-def test_classification_is_order_invariant():
-    # BLOCKER regression (adversarial review): the greedy no-merge version classified
-    # ['zn-127','gt-127','127'] as 2 classes but ['127','zn-127','gt-127'] as 1 — and SQL feeds the
-    # classifier in planner-dependent order, so the same pool flapped quarantined/active. A later SKU
-    # that bridges two classes must MERGE them (true connected components) in EVERY permutation.
-    from itertools import permutations
-    cases = [
-        (["127", "zn-127", "gt-127"], 1),                    # legit: bare bridges two prefixed forms
-        (["100", "zn-100", "gt-100", "mg-100"], 1),          # 4-store legit pool
-        (["negru-4XL", "negru-5XL"], 2),                     # the incident
-        (["HA-0061-1", "HA-0061M", "HA-0062"], 3),           # known false trio
-        (["oglinda", "oglinda-acrilica"], 2),                # placeholder false pair
-        (["zn-150", "HA-150", "150"], 1),                    # bare bridges BOTH (documented FN limit:
-                                                             # a bare SKU is a universal connector)
-    ]
-    for skus, expected in cases:
-        for perm in permutations(skus):
-            got = count_sku_classes(list(perm))
-            assert got == expected, f"{perm} -> {got}, expected {expected}"
-
-
-# --- the gates -------------------------------------------------------------------------------------
-
-def test_webhook_gate_quarantines_false_groups_before_canary():
-    src = _read("services/inventory_sync_service.py")
-    gate = src.index("is_false_barcode_group(db, barcode)")
-    canary = src.index("pool_canary.canary_active_for(db, barcode)")
-    shadow = src.index("pool_engine.shadow_observe(")
-    assert gate < canary < shadow, "false-group gate must run BEFORE canary and shadow"
-    win = src[gate:gate + 900]
-    assert "_resync_local_baseline" in win     # mirror stays exact while quarantined
-    assert "return" in win                     # no fold / converge / propagation
-
-
-def test_canary_gate_blocks_false_groups():
-    src = _read("services/pool_canary.py")
-    fn = src[src.index("def canary_active_for"):src.index("def trigger_rollback")]
-    assert "is_false_barcode_group" in fn
-
-
-def test_converge_refuses_false_groups():
+def test_converge_writes_all_listings_not_canonical_only():
     src = _read("services/pool_engine.py")
     conv = src[src.index("def converge_pool"):src.index("def simulate_convergence")]
-    assert "is_false_barcode_group" in conv
-    assert "pool_converge_refused_false_group" in conv
+    assert "DISTINCT ON" not in conv, "converge must target EVERY listing, not one canonical per store"
+    assert "false_group" not in conv                     # no SKU-based refuse
+    sim = src[src.index("def simulate_convergence"):src.index("def shadow_observe")]
+    assert "DISTINCT ON" not in sim
 
 
-def test_creation_align_guard():
-    src = _read("services/inventory_sync_service.py")
-    fn = src[src.index("def _sync_variant_to_barcode_group"):]
-    assert "count_sku_classes" in fn
-    assert "auto_sync_refused_false_group" in fn
+def test_backfill_covers_and_seeds_every_listing():
+    src = _read("services/pool_backfill.py")
+    assert "_group_rows" in src                          # plan reads ALL listings
+    seed = src[src.index("backfill_baseline"):]
+    assert '"v": cr["variant_id"]' in src                # per-VARIANT baseline seed (fold is variant-keyed)
 
 
-def test_membership_sweep_deauthorizes_false_groups():
-    src = _read("services/pool_membership.py")
-    assert "_false_group_barcodes" in src
-    assert "backfilled_at = NULL" in src       # de-authorize: stale/poisoned Q never converges again
-    assert "pool_membership_false_group" in src
-
-
-def test_membership_flip_logs_are_deduped():
-    # the canonical-flip WARN fired every 30 minutes for 20h on one barcode — must be deduped
-    src = _read("services/pool_membership.py")
-    assert "_recently_logged" in src
-    fl = src.index("pool_membership_canonical_flip")
-    assert "_recently_logged" in src[fl - 400:fl]
-
-
-def test_onboarding_uses_classifier_not_naive_sku_count():
-    src = _read("services/pool_onboarding.py")
-    assert "count_sku_classes" in src
-    assert "count(DISTINCT btrim(pv.sku))" not in src   # the naive counter is gone
-
-
-def test_webhook_gate_fails_closed():
-    # a transient classifier/DB error must NOT drop the webhook onto the legacy relative path (a false
-    # group's cross-product delta would bleed fleet-wide). On exception: mirror-only + audit + return.
-    src = _read("services/inventory_sync_service.py")
-    gate = src.index("is_false_barcode_group(db, barcode)")
-    exc = src.index("false_group_check_failed", gate)
-    win = src[exc - 1200:exc + 700]
-    assert "FAIL CLOSED" in win
-    assert "return" in src[exc:exc + 700]
-
-
-def test_group_skus_deterministic_order():
-    src = _read("services/diagnostics.py")
-    fn = src[src.index("def group_skus"):src.index("def is_false_barcode_group")]
-    assert "ORDER BY" in fn
-
-
-def test_validation_and_livetruth_skip_false_groups():
-    # quarantined pools must not arm diverged_since / page permanent-SLA or mirror-blind CRITICALs
-    pv = _read("services/pool_validation.py")
-    assert "is_false_barcode_group" in pv and '"false_group"' in pv
+def test_validation_and_livetruth_cover_every_listing():
+    assert "_group_rows" in _read("services/pool_validation.py")
     lt = _read("services/live_truth.py")
-    assert "is_false_barcode_group" in lt
+    assert "def _group_rows" in lt
+    assert "_group_rows(db, barcode)" in lt              # _check_pool uses it
 
 
-def test_reconciliation_refuses_false_groups():
-    src = _read("services/reconciliation_engine.py")
-    assert "is_false_barcode_group" in src
-    assert "false group" in src                      # a blocker reason in plan_barcode
-    assert "reconcile_refused_false_group" in src    # hard refuse in apply_plan
+# --- structural: NO SKU-based sync gating anywhere --------------------------------------------------
+
+def test_no_sku_gating_in_sync_paths():
+    iss = _read("services/inventory_sync_service.py")
+    assert "false_group_quarantined" not in iss
+    assert "auto_sync_refused_false_group" not in iss
+    assert "is_false_barcode_group" not in iss
+    pc = _read("services/pool_canary.py")
+    assert "is_false_barcode_group" not in pc
+    pe = _read("services/pool_engine.py")
+    assert "is_false_barcode_group" not in pe
+    ob = _read("services/pool_onboarding.py")
+    assert "false_group_multi_sku" not in ob
+    rc = _read("services/reconciliation_engine.py")
+    assert "is_false_barcode_group" not in rc
+    pv = _read("services/pool_validation.py")
+    assert "is_false_barcode_group" not in pv
+    lt = _read("services/live_truth.py")
+    assert "is_false_barcode_group" not in lt
 
 
-def test_deauthorize_clears_sla_flag_every_sweep():
-    # sales on the two products keep re-arming diverged_since via sweeps that run before the skip
-    # lands; the de-auth must clear it EVERY sweep, not only while backfilled_at was set
-    src = _read("services/pool_membership.py")
-    fn = src[src.index("def _deauthorize_false_groups"):src.index("def _recently_logged")]
-    assert fn.count("UPDATE pool_states") == 2       # backfilled_at and diverged_since cleared separately
+def test_multi_sku_classifier_is_report_only():
+    # the classifier survives ONLY as observability in the membership sweep (INFO, deduped)
+    pm = _read("services/pool_membership.py")
+    assert "pool_membership_multi_sku_pool" in pm
+    assert "backfilled_at = NULL" not in pm              # de-authorization is GONE
+    win = pm[pm.index("pool_membership_multi_sku_pool") - 600:]
+    assert 'severity="INFO"' in win[:1200]
 
 
 if __name__ == "__main__":
@@ -208,5 +148,5 @@ if __name__ == "__main__":
             print(f"FAIL {fn.__name__}: {e}")
         except Exception as e:
             print(f"ERROR {fn.__name__}: {type(e).__name__}: {e}")
-    print(f"\n{passed}/{len(fns)} false-group tests passed")
+    print(f"\n{passed}/{len(fns)} per-listing engine tests passed")
     sys.exit(0 if passed == len(fns) else 1)

@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 
 import models
 from database import SessionLocal
-from services import sync_guards, audit_logger, alerting, dist_lock, diagnostics
+from services import sync_guards, audit_logger, alerting, dist_lock
 
 
 def pool_engine_enabled() -> bool:
@@ -159,15 +159,21 @@ def ingest_event(db: Session, *, barcode: str, source_store_id: Optional[int],
     return row[0] if row else None
 
 
-def _source_prev(db: Session, barcode: str, source_store_id: Optional[int], before_event_id: int):
-    """The most recent prior observation from the SAME (barcode, source_store), used for the
-    per-source signed delta and the per-source staleness check."""
+def _source_prev(db: Session, barcode: str, source_variant_id: Optional[int], before_event_id: int):
+    """The most recent prior observation from the SAME (barcode, source LISTING/variant), used for the
+    per-source signed delta and the per-source staleness check.
+
+    PER-LISTING, not per-store (2026-07-10 fix): a barcode may be listed on SEVERAL variants within
+    ONE store (the barcode is the intentional sync key; SKUs/sizes may differ). A per-store baseline
+    interleaves those listings' observations into one stream — a 5XL listing reporting 2 folded
+    against the 4XL listing's baseline of 202 as a phantom -200, clobbering a fresh restock on every
+    store. Each listing is its own replica: its observations fold only against ITS OWN history."""
     return db.execute(text("""
         SELECT observed_quantity, source_timestamp
         FROM pool_events
-        WHERE barcode = :b AND source_store_id IS NOT DISTINCT FROM :s AND event_id < :e
+        WHERE barcode = :b AND source_variant_id IS NOT DISTINCT FROM :v AND event_id < :e
         ORDER BY event_id DESC LIMIT 1
-    """), {"b": barcode, "s": source_store_id, "e": before_event_id}).mappings().first()
+    """), {"b": barcode, "v": source_variant_id, "e": before_event_id}).mappings().first()
 
 
 def apply_event(db: Session, event_id: int, skip_lock: bool = False) -> Optional[Dict[str, Any]]:
@@ -188,13 +194,14 @@ def apply_event(db: Session, event_id: int, skip_lock: bool = False) -> Optional
         if handle is None:
             return None
     try:
-        prev = _source_prev(db, ev.barcode, ev.source_store_id, ev.event_id)
+        prev = _source_prev(db, ev.barcode, ev.source_variant_id, ev.event_id)
         prev_obs = prev["observed_quantity"] if prev else None
         prev_ts = prev["source_timestamp"] if prev else None
 
         if is_stale_for_source(prev_ts, ev.source_timestamp):
             audit_logger.log(category="RECONCILIATION", action="pool_event_stale",
-                             message=f"[{ev.barcode}] dropped out-of-order event from store {ev.source_store_id}",
+                             message=f"[{ev.barcode}] dropped out-of-order event from variant "
+                                     f"{ev.source_variant_id} (store {ev.source_store_id})",
                              target=ev.barcode, severity="INFO",
                              details={"event_id": event_id, "observed": ev.observed_quantity})
             return None
@@ -233,15 +240,15 @@ def apply_event(db: Session, event_id: int, skip_lock: bool = False) -> Optional
 # BEFORE it folds, so it can neither propagate nor poison the per-source baseline.
 # --------------------------------------------------------------------------------------------------
 
-def latest_source_observed(db: Session, barcode: str, source_store_id: Optional[int]) -> Optional[int]:
-    """The most recent recorded quantity for this (barcode, source_store) across the ledger — the same
-    baseline apply_event will fold the next observation against (observations AND convergence/baseline
-    anchors, newest wins). None if this source has never been recorded."""
+def latest_source_observed(db: Session, barcode: str, source_variant_id: Optional[int]) -> Optional[int]:
+    """The most recent recorded quantity for this (barcode, source LISTING) across the ledger — the
+    same per-listing baseline apply_event will fold the next observation against (observations AND
+    convergence/baseline anchors, newest wins). None if this listing has never been recorded."""
     row = db.execute(text("""
         SELECT observed_quantity FROM pool_events
-        WHERE barcode = :b AND source_store_id IS NOT DISTINCT FROM :s
+        WHERE barcode = :b AND source_variant_id IS NOT DISTINCT FROM :v
         ORDER BY event_id DESC LIMIT 1
-    """), {"b": barcode, "s": source_store_id}).first()
+    """), {"b": barcode, "v": source_variant_id}).first()
     return row[0] if row else None
 
 
@@ -261,15 +268,17 @@ def _read_source_live(db: Session, source_store_id: Optional[int], inventory_ite
 
 
 def corroborate_up_jump(db: Session, *, barcode: str, source_store_id: Optional[int],
-                        inventory_item_id: Optional[int], observed: int,
-                        tol: Optional[int] = None) -> tuple:
+                        source_variant_id: Optional[int], inventory_item_id: Optional[int],
+                        observed: int, tol: Optional[int] = None) -> tuple:
     """Returns (observed_to_use, correction_info). For a claimed UP jump, re-reads the source's LIVE
     Shopify value and applies `corroboration_verdict`. On 'correct' it substitutes the live value (so
     the pool folds truth, never the phantom) and returns the forensic detail; otherwise it returns the
-    original observation and None. Fail-open: a failed/missing live read folds `observed` unchanged."""
+    original observation and None. Fail-open: a failed/missing live read folds `observed` unchanged.
+    The pre-jump baseline is PER-LISTING (matching the fold), so a second listing's different value in
+    the same store can never make a normal report look like a jump."""
     if tol is None:
         tol = SPIKE_CORROBORATION_TOLERANCE
-    prev = latest_source_observed(db, barcode, source_store_id)
+    prev = latest_source_observed(db, barcode, source_variant_id)
     # Cheap pre-check: only an UP jump beyond tolerance is worth a live read.
     if prev is None or observed <= prev + tol:
         return observed, None
@@ -299,27 +308,20 @@ def converge_pool(db: Session, barcode: str, exclude_store_id: Optional[int] = N
 
     version = state.version
     ref_uri = f"inventory-sync://pool/{op}?v={version}"   # ref carries the pool version (attribution)
-    rows = db.execute(text(f"""
-        SELECT DISTINCT ON (pv.barcode, pv.store_id)
-               pv.id AS variant_id, pv.store_id, s.name store, s.shopify_url, s.api_token,
+    # EVERY listing of the barcode is a replica of the pool — including MULTIPLE listings within one
+    # store (the barcode is the intentional sync key; SKUs may differ). The previous canonical-per-
+    # store SELECT wrote only one listing per store, leaving sibling listings stale forever — their
+    # divergent values then poisoned the (then store-keyed) fold baseline (the 2026-07-10 -200
+    # incident). Converge ALL of them to Q.
+    rows = db.execute(text("""
+        SELECT pv.id AS variant_id, pv.store_id, s.name store, s.shopify_url, s.api_token,
                s.sync_location_id, pv.inventory_item_id
         FROM product_variants pv
         JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
         JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
         WHERE pv.barcode = :b AND pv.inventory_item_id IS NOT NULL
-        ORDER BY pv.barcode, pv.store_id, {diagnostics.CANON_ORDER}
+        ORDER BY pv.store_id, pv.id
     """), {"b": barcode}).mappings().all()
-
-    # FALSE-GROUP refuse (defense in depth behind the webhook + canary gates): never CAS-write a
-    # barcode shared by >1 distinct product class — that would SET unrelated products to one value.
-    # Checked on the FULL group (not just canonical rows) since the poisoning variant may be the
-    # non-canonical one within a store.
-    if diagnostics.is_false_barcode_group(db, barcode):
-        audit_logger.log(category="STOCK", action="pool_converge_refused_false_group",
-                         message=f"[{barcode}] converge refused: barcode shared by multiple distinct "
-                                 f"products (SKU classes) — fix barcodes",
-                         target=barcode, severity="WARN", details={"barcode": barcode})
-        return {"barcode": barcode, "skipped": "false_group"}
 
     converged, skipped, failed, retries = 0, 0, 0, 0
     per_store, live_quantities = [], {}
@@ -328,11 +330,13 @@ def converge_pool(db: Session, barcode: str, exclude_store_id: Optional[int] = N
             continue
         item_gid = f"gid://shopify/InventoryItem/{r['inventory_item_id']}"
         loc_gid = f"gid://shopify/Location/{r['sync_location_id']}"
-        cas_result, n_try = "skip", 0
+        cas_result, n_try, live = "skip", 0, None
         try:
             svc = ShopifyService(store_url=r["shopify_url"], token=r["api_token"])
             live = svc.get_available_single(item_gid, loc_gid)
-            live_quantities[r["store"]] = live
+            # key by store, disambiguating extra listings within the same store
+            lq_key = r["store"] if r["store"] not in live_quantities else f"{r['store']}#{r['variant_id']}"
+            live_quantities[lq_key] = live
             if live == target:
                 skipped += 1
                 cas_result = "already"
@@ -393,8 +397,8 @@ def converge_pool(db: Session, barcode: str, exclude_store_id: Optional[int] = N
                     expires_at=datetime.now(timezone.utc) + timedelta(seconds=sync_guards.ECHO_TTL_SECONDS)))
         except Exception:
             failed += 1; cas_result = "error"
-        per_store.append({"store": r["store"], "cas_result": cas_result, "retries": n_try,
-                          "live_before": live_quantities.get(r["store"]), "target": target})
+        per_store.append({"store": r["store"], "variant_id": r["variant_id"], "cas_result": cas_result,
+                          "retries": n_try, "live_before": live, "target": target})
     try:
         db.commit()
     except Exception:
@@ -435,14 +439,16 @@ def simulate_convergence(db: Session, barcode: str) -> Dict[str, Any]:
     if state is None:
         return {"target": None, "version": None, "intended_writes": [], "already": 0}
     target = max(int(state.quantity), sync_guards.INVENTORY_FLOOR)
-    rows = db.execute(text(f"""
-        SELECT DISTINCT ON (pv.barcode, pv.store_id) s.name store, il.available AS mirror
+    # ALL listings of the barcode are replicas (incl. several within one store) — mirror the
+    # per-listing convergence writer.
+    rows = db.execute(text("""
+        SELECT pv.id AS variant_id, s.name store, il.available AS mirror
         FROM product_variants pv
         JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
         JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
         LEFT JOIN inventory_levels il ON il.variant_id = pv.id AND il.location_id = s.sync_location_id
         WHERE pv.barcode = :b AND pv.inventory_item_id IS NOT NULL
-        ORDER BY pv.barcode, pv.store_id, {diagnostics.CANON_ORDER}
+        ORDER BY pv.store_id, pv.id
     """), {"b": barcode}).mappings().all()
     intended, already = [], 0
     for r in rows:
@@ -450,7 +456,8 @@ def simulate_convergence(db: Session, barcode: str) -> Dict[str, Any]:
         if cur == target:
             already += 1
         else:
-            intended.append({"store": r["store"], "current": cur, "target": target})
+            intended.append({"store": r["store"], "variant_id": r["variant_id"],
+                             "current": cur, "target": target})
     return {"target": target, "version": state.version, "intended_writes": intended, "already": already}
 
 
