@@ -37,7 +37,13 @@ def configured() -> bool:
     return bool(SELLER_ID and API_KEY and API_SECRET)
 
 
-def _session() -> requests.Session:
+STORE_FRONT_CODE = os.getenv("TRENDYOL_STORE_FRONT_CODE", "RO")
+
+
+def _session(storefront: bool) -> requests.Session:
+    """PRODUCT/INVENTORY endpoints REQUIRE the `storeFrontCode` HTTP HEADER for international
+    sellers (without it they return 200 with zero elements — verified live). ORDER endpoints must
+    OMIT it (so all countries are returned) — mirrors the proven Scripturi client."""
     s = requests.Session()
     token = base64.b64encode(f"{API_KEY}:{API_SECRET}".encode()).decode()
     s.headers.update({
@@ -45,12 +51,14 @@ def _session() -> requests.Session:
         "User-Agent": f"{SELLER_ID} - SelfIntegration",
         "Content-Type": "application/json",
     })
+    if storefront:
+        s.headers["storeFrontCode"] = STORE_FRONT_CODE
     return s
 
 
-def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _get(path: str, params: Optional[Dict[str, Any]] = None, storefront: bool = True) -> Dict[str, Any]:
     try:
-        r = _session().get(f"{BASE_URL}{path}", params=params or {}, timeout=TIMEOUT)
+        r = _session(storefront).get(f"{BASE_URL}{path}", params=params or {}, timeout=TIMEOUT)
         if r.status_code != 200:
             return {"ok": False, "status": r.status_code, "error": r.text[:400]}
         return {"ok": True, "data": r.json()}
@@ -58,9 +66,9 @@ def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
-def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _post(path: str, payload: Dict[str, Any], storefront: bool = True) -> Dict[str, Any]:
     try:
-        r = _session().post(f"{BASE_URL}{path}", json=payload, timeout=TIMEOUT)
+        r = _session(storefront).post(f"{BASE_URL}{path}", json=payload, timeout=TIMEOUT)
         if r.status_code not in (200, 202):
             return {"ok": False, "status": r.status_code, "error": r.text[:400]}
         return {"ok": True, "data": r.json() if r.text else {}}
@@ -106,7 +114,7 @@ def get_orders(start_ms: int, end_ms: int, page: int = 0, size: int = 200,
               "orderByField": "PackageLastModifiedDate", "orderByDirection": "DESC"}
     if status:
         params["status"] = status
-    res = _get(f"/order/sellers/{SELLER_ID}/orders", params)
+    res = _get(f"/order/sellers/{SELLER_ID}/orders", params, storefront=False)
     if not res["ok"]:
         return res
     d = res["data"] or {}
@@ -115,9 +123,11 @@ def get_orders(start_ms: int, end_ms: int, page: int = 0, size: int = 200,
 
 
 def get_approved_products(page: int = 0, size: int = PRODUCTS_PAGE_SIZE) -> Dict[str, Any]:
-    """Approved products page (size hard max 100). Items carry barcode + quantity + onSale/archived."""
+    """Products page (needs the storefront header; the server-side `approved` filter returns empty
+    for this account — verified live — so callers see ALL items with their `approved` flag and
+    filter client-side). Items carry barcode + quantity + approved/onSale/archived."""
     res = _get(f"/product/sellers/{SELLER_ID}/products",
-               {"approved": "true", "page": page, "size": min(size, PRODUCTS_PAGE_SIZE)})
+               {"page": page, "size": min(size, PRODUCTS_PAGE_SIZE)})
     if not res["ok"]:
         return res
     d = res["data"] or {}

@@ -344,12 +344,12 @@ def reconcile() -> Dict[str, Any]:
                 bc = str(it.get("barcode") or "")
                 if bc:
                     ty_stock[bc] = {"q": int(it.get("quantity") or 0),
-                                    "on_sale": bool(it.get("onSale", True)),
+                                    "approved": bool(it.get("approved", False)),
                                     "archived": bool(it.get("archived", False))}
             page += 1
 
         maps = db.query(models.TrendyolMapping).filter_by(active=True).all()
-        drift, not_on_ty, pushed = [], [], 0
+        drift, not_on_ty, unapproved, pushed = [], [], [], 0
         for m in maps:
             if not m.ean_barcode:
                 continue
@@ -360,6 +360,11 @@ def reconcile() -> Dict[str, Any]:
             t = ty_stock.get(m.trendyol_barcode)
             if t is None:
                 not_on_ty.append(m.trendyol_barcode)
+                continue
+            if not t["approved"] or t["archived"]:
+                # stock pushes only apply to APPROVED, non-archived listings — report, don't push
+                if t["q"] != desired:
+                    unapproved.append(m.trendyol_barcode)
                 continue
             if t["q"] != desired:
                 drift.append({"tb": m.trendyol_barcode, "ean": m.ean_barcode,
@@ -372,11 +377,12 @@ def reconcile() -> Dict[str, Any]:
         unmapped = [bc for bc in ty_stock if not db.query(models.TrendyolMapping)
                     .filter_by(trendyol_barcode=bc).first()]
         audit_logger.log(category="RECONCILIATION", action="trendyol_reconcile",
-                         message=f"Trendyol reconcile: {len(ty_stock)} approved items; drift={len(drift)} "
-                                 f"(re-pushed {pushed}), mapped-but-missing={len(not_on_ty)}, "
-                                 f"unmapped-on-trendyol={len(unmapped)}",
+                         message=f"Trendyol reconcile: {len(ty_stock)} items; drift={len(drift)} "
+                                 f"(re-pushed {pushed}), unapproved-drifting={len(unapproved)}, "
+                                 f"mapped-but-missing={len(not_on_ty)}, unmapped-on-trendyol={len(unmapped)}",
                          severity="WARN" if drift else "INFO",
-                         details={"drift": drift[:25], "not_on_trendyol": not_on_ty[:15],
+                         details={"drift": drift[:25], "unapproved": unapproved[:15],
+                                  "not_on_trendyol": not_on_ty[:15],
                                   "unmapped_count": len(unmapped), "unmapped_sample": unmapped[:15]})
         if drift and not push_enabled():
             alerting.warning("trendyol.drift",
