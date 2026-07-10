@@ -31,7 +31,9 @@ def test_membership_detects_three_churn_classes():
     src = _read("services/pool_membership.py")
     assert "pool_membership_shrink" in src              # a store dropped out of the pool
     assert "pool_membership_canonical_flip" in src      # canonical variant flipped vs observed
-    assert "len(stores) < 2" in src                     # orphaned / single-store detection
+    # orphan = fewer than 2 LISTINGS (a single store with two listings of one barcode IS a pool —
+    # they sync between themselves under the per-listing engine)
+    assert "listing_counts.get(bc, 0) < 2" in src
 
 
 def test_membership_heals_orphaned_sla_flag_only():

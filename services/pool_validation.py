@@ -114,6 +114,7 @@ def _validate_pool(db, barcode: str) -> Dict[str, Any]:
             "live_spread": live_spread, "canonical_drift": canonical_drift, "mirror_drift": mirror_drift,
             "diverged": stores_disagree, "engine_q_drift": engine_q_drift, "max_q_gap": max_q_gap,
             "readable_ge2": readable, "all_live_zero": all_live_zero, "readable_count": len(lives),
+            "authoritative": state.backfilled_at is not None,
             "unresolved_duration_s": unresolved_s,
             "last_event": state.source_timestamp.isoformat() if state.source_timestamp else None,
             "pool_version": state.version}
@@ -181,7 +182,11 @@ def run_pool_validation_sweep() -> Dict[str, Any]:
                 full_collapse = bool(res.get("all_live_zero"))
                 big_gap = (not rolled_back) and (gap >= UNIFORM_COLLAPSE_MIN_GAP
                                                  or (q > 0 and gap >= q * UNIFORM_COLLAPSE_FRACTION))
-                critical = bool(res.get("readable_ge2")) and (full_collapse or big_gap)
+                # Only an ENGINE-AUTHORITATIVE pool (backfilled) can uniform-collapse via the engine;
+                # a de-authorized pool's frozen Q vs moving live is expected staleness (WARN), not a
+                # collapse — else every pool awaiting repair pages CRITICAL per sweep.
+                critical = (bool(res.get("readable_ge2")) and bool(res.get("authoritative"))
+                            and (full_collapse or big_gap))
                 if critical:
                     canon_mismatch_critical += 1
                 audit_logger.log(

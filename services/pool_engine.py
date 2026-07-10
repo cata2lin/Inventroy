@@ -337,7 +337,13 @@ def converge_pool(db: Session, barcode: str, exclude_store_id: Optional[int] = N
             # key by store, disambiguating extra listings within the same store
             lq_key = r["store"] if r["store"] not in live_quantities else f"{r['store']}#{r['variant_id']}"
             live_quantities[lq_key] = live
-            if live == target:
+            if live is None:
+                # UNREADABLE: never blind-write (compare_quantity=None would SET unconditionally on
+                # exactly the listing where evidence is weakest). Count as failed; the anchor below
+                # still reseeds the baseline to Q so a stale spike can't poison the next fold.
+                failed += 1
+                cas_result = "unreadable"
+            elif live == target:
                 skipped += 1
                 cas_result = "already"
             else:
@@ -397,12 +403,15 @@ def converge_pool(db: Session, barcode: str, exclude_store_id: Optional[int] = N
                     expires_at=datetime.now(timezone.utc) + timedelta(seconds=sync_guards.ECHO_TTL_SECONDS)))
         except Exception:
             failed += 1; cas_result = "error"
+        # Commit PER LISTING: a mid-loop DB failure must never orphan an already-landed Shopify CAS
+        # write without its anchor + echo marker (the un-anchored echo would later fold as a
+        # corroborated genuine up-jump and double Q — the 2026-06-26 outage class).
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
         per_store.append({"store": r["store"], "variant_id": r["variant_id"], "cas_result": cas_result,
                           "retries": n_try, "live_before": live, "target": target})
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
 
     # P3: a fully-successful convergence drives every processed store to Q, so they now AGREE and any
     # customer-facing divergence is resolved. Clear the SLA clock immediately instead of waiting for

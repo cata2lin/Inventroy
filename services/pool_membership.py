@@ -112,6 +112,20 @@ def run_membership_sweep() -> Dict[str, Any]:
         canon = _canonical_membership(db)
         recent = _recent_observed_membership(db, MEMBERSHIP_ACTIVE_DAYS)
         pool_barcodes = _all_pool_barcodes(db)
+        # LISTING counts per barcode: a pool is a sync pool when it has >= 2 LISTINGS (variants),
+        # matching plan_backfill/pool_validation — a single STORE carrying two listings of one
+        # barcode is a real pool (they sync between themselves), NOT an orphan.
+        listing_counts = {r[0]: r[1] for r in db.execute(text("""
+            SELECT pv.barcode, count(*) FROM product_variants pv
+            JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
+            JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
+            WHERE pv.barcode IN (SELECT barcode FROM pool_states) AND pv.inventory_item_id IS NOT NULL
+            GROUP BY pv.barcode
+        """)).fetchall()}
+        # engine-authoritative pools: converge writes ALL listings, so a canonical-vs-observed variant
+        # "flip" is expected there (sales legitimately come from any listing) — not churn.
+        backfilled = {r[0] for r in db.execute(text(
+            "SELECT barcode FROM pool_states WHERE backfilled_at IS NOT NULL")).fetchall()}
 
         orphaned: List[Dict[str, Any]] = []
         shrunk: List[Dict[str, Any]] = []
@@ -120,7 +134,7 @@ def run_membership_sweep() -> Dict[str, Any]:
         for bc in pool_barcodes:
             members = canon.get(bc, {})            # {store_id: variant_id}; absent => 0 canonical stores
             stores: Set[int] = set(members.keys())
-            if len(stores) < 2:
+            if listing_counts.get(bc, 0) < 2:
                 orphaned.append({"barcode": bc, "stores": sorted(stores)})
                 continue
             recent_members = recent.get(bc, {})
@@ -129,7 +143,9 @@ def run_membership_sweep() -> Dict[str, Any]:
             dropped = sorted(recent_stores - stores)
             if dropped:
                 shrunk.append({"barcode": bc, "dropped_stores": dropped, "current_stores": sorted(stores)})
-            # FLIP: a store's canonical variant differs from the variant it was recently observed on.
+            # FLIP: only meaningful for LEGACY-served pools (engine pools converge every listing).
+            if bc in backfilled:
+                continue
             flips = [{"store_id": sid, "canonical_variant": members[sid], "observed_variant": recent_members[sid]}
                      for sid in (stores & recent_stores) if members[sid] != recent_members[sid]]
             if flips:
@@ -142,7 +158,6 @@ def run_membership_sweep() -> Dict[str, Any]:
         # as observability: distinct SKU classes on one barcode is usually deliberate pooling, but is
         # occasionally a barcode typo — worth a WARN so an operator can eyeball it. Never gates sync.
         false_groups = _false_group_barcodes(db)
-        deauthorized = 0
         for bc in false_groups:
             if not _recently_logged(db, "pool_membership_multi_sku_pool", bc, hours=24):
                 audit_logger.log(category="RECONCILIATION", action="pool_membership_multi_sku_pool",

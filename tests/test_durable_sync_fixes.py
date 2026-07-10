@@ -120,7 +120,10 @@ def test_detector_no_canary_active_overfire():
     src = _read("services/pool_validation.py")
     # the canary_active OR-term that paged every engine pool on a 1-unit transient drift is GONE
     assert "canary_active or (" not in src
-    assert "critical = bool(res.get(\"readable_ge2\")) and (full_collapse or big_gap)" in src
+    # >=2 readable + ENGINE-AUTHORITATIVE + (full collapse or big gap); de-authorized pools awaiting
+    # repair have frozen Q vs moving live = expected staleness, never a CRITICAL collapse
+    assert 'bool(res.get("readable_ge2")) and bool(res.get("authoritative"))' in src
+    assert "(full_collapse or big_gap)" in src
 
 
 def test_detector_catches_full_and_lowq_collapse():

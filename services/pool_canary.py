@@ -144,9 +144,16 @@ def _recent_convergences(db: Session, barcode: str, seconds: int = 60) -> int:
 
 
 def _oscillation_flips(db: Session, barcode: str, n: int = 10) -> int:
+    # Bounded to events newer than the pool's live-truth backfill: pre-onboarding history (e.g. the
+    # 2026-07-10 incident's interleaved 202/2 rows from two listings) must not trip a rollback on the
+    # first webhooks after a repair re-onboards the pool.
     obs = [r[0] for r in db.execute(text("""
-        SELECT observed_quantity FROM pool_events
-        WHERE barcode = :b AND kind = 'observation' ORDER BY event_id DESC LIMIT :n
+        SELECT observed_quantity FROM pool_events e
+        WHERE e.barcode = :b AND e.kind = 'observation'
+          AND e.created_at >= COALESCE(
+                (SELECT ps.backfilled_at FROM pool_states ps WHERE ps.barcode = e.barcode),
+                'epoch'::timestamptz)
+        ORDER BY e.event_id DESC LIMIT :n
     """), {"b": barcode, "n": n}).fetchall()]
     obs = list(reversed(obs))
     deltas = [obs[i] - obs[i - 1] for i in range(1, len(obs))]

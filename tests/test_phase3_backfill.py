@@ -21,7 +21,7 @@ def _read(rel):
 
 
 SRC = None
-def setup():
+def setup_module():
     global SRC
     SRC = _read("services/pool_backfill.py")
 
@@ -102,7 +102,7 @@ def test_data_model_and_migration_present():
 
 
 if __name__ == "__main__":
-    setup()
+    setup_module()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0
     for fn in fns:
