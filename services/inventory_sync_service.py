@@ -252,8 +252,22 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
                                           "sku": variant.sku})
                 return
         except Exception as _fg:
+            # FAIL CLOSED: if the classifier cannot run, treat the event as quarantined (mirror-only).
+            # Failing OPEN would drop this webhook onto the legacy relative path, where a false group's
+            # cross-product delta (e.g. a +200 restock on one product) bleeds into the OTHER product on
+            # every store — one transient DB error away from incident-magnitude corruption. A missed
+            # propagation is recoverable (next webhook / sweeps); corruption is not.
             db.rollback()
-            print(f"[SYNC-WARN] false-group check failed for {barcode} (continuing): {_fg}")
+            try:
+                _resync_local_baseline(db, variant.id, payload.get("location_id"), new_available)
+            except Exception:
+                db.rollback()
+            audit_logger.log(category="STOCK", action="false_group_check_failed",
+                             message=f"[{barcode}] false-group classifier failed — FAILING CLOSED "
+                                     f"(mirror-only, no propagation this event): {_fg}",
+                             store_id=store_id, target=barcode, severity="WARN",
+                             details={"error": str(_fg), "quantity": new_available})
+            return
 
         # --- PHASE 3 CANARY WRITE PATH (engine authoritative for backfilled canary barcodes) ---
         # MUST run BEFORE shadow: for a canary barcode the engine OWNS the event (ingest + fold +

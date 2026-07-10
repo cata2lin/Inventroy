@@ -107,9 +107,17 @@ def run_live_truth_sweep() -> Dict[str, Any]:
                 targets.append(b)
 
         checked, reads, live_diverged, mirror_blind_hits, worst = 0, 0, [], [], None
+        from services import diagnostics as _diag
         for bc in targets:
             if reads >= LIVE_SWEEP_MAX_READS:
                 break
+            # FALSE GROUP: different products sharing a barcode legitimately hold different stocks —
+            # "divergence" between them is meaningless and would page mirror-blind CRITICALs forever.
+            try:
+                if _diag.is_false_barcode_group(db, bc):
+                    continue
+            except Exception:
+                db.rollback()
             res = _check_pool(db, bc)
             if res is None:
                 continue

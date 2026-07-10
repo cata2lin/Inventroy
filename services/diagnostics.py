@@ -57,30 +57,38 @@ def sku_equivalent(a: str, b: str) -> bool:
 
 
 def count_sku_classes(skus) -> int:
-    """Number of distinct PRODUCT classes among the given SKUs under sku_equivalent (transitive via
-    shared members: {'127','zn-127','gt-127'} is ONE class). Empty/None SKUs are ignored."""
+    """Number of distinct PRODUCT classes among the given SKUs under sku_equivalent — TRUE connected
+    components: a SKU that matches several existing classes MERGES them (so {'zn-127','gt-127','127'}
+    is ONE class in EVERY input order; the bare '127' bridges the two prefixed forms whenever it is
+    processed). Order-invariance is load-bearing: the callers feed this from SQL whose row order is
+    planner-dependent, and a greedy no-merge version classified the same pool differently between the
+    webhook gate and the sweep. Empty/None SKUs are ignored (no evidence)."""
     vals = [s.strip() for s in (skus or []) if s and s.strip()]
     classes: List[List[str]] = []
     for s in vals:
-        merged = None
-        for cl in classes:
-            if any(sku_equivalent(s, m) for m in cl):
-                cl.append(s)
-                merged = cl
-                break
-        if merged is None:
+        matched = [cl for cl in classes if any(sku_equivalent(s, m) for m in cl)]
+        if not matched:
             classes.append([s])
+        else:
+            merged = matched[0]
+            merged.append(s)
+            for cl in matched[1:]:          # s bridges multiple classes -> unify them
+                merged.extend(cl)
+                classes.remove(cl)
     return len(classes)
 
 
 def group_skus(db: Session, barcode: str) -> List[str]:
-    """Distinct non-empty SKUs on this barcode across enabled, non-deleted, synced-store variants."""
+    """Distinct non-empty SKUs on this barcode across enabled, non-deleted, synced-store variants.
+    Deterministically ordered (classification is order-invariant, but determinism keeps every gate
+    and sweep byte-identical on the same data)."""
     return [r[0] for r in db.execute(text("""
         SELECT DISTINCT btrim(pv.sku) FROM product_variants pv
         JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
         JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
         WHERE pv.barcode = :b AND pv.inventory_item_id IS NOT NULL
           AND pv.sku IS NOT NULL AND btrim(pv.sku) <> ''
+        ORDER BY 1
     """), {"b": barcode}).fetchall()]
 
 

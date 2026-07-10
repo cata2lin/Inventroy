@@ -71,17 +71,24 @@ def plan_barcode(db: Session, barcode: str) -> Dict[str, Any]:
                           "current": r["current"], "target": target, "delta": target - (r["current"] or 0)})
 
     is_suspect = _is_suspect_duplicate(db, barcode)
+    # FALSE GROUP: different products sharing one barcode — converging them would compare-and-set two
+    # different physical stocks to one value. Never auto-healable (cross-store-only false groups are
+    # NOT caught by the intra-store duplicate check).
+    from services import diagnostics as _diag
+    is_false_group = _diag.is_false_barcode_group(db, barcode)
     safe = (
         target is not None
         and spread <= AUTOHEAL_MAX_SPREAD
         and not iss._is_barcode_broken(db, barcode)
         and not is_suspect
+        and not is_false_group
         and isinstance(source, str) and source.startswith("live")
     )
     reason = []
     if target is None: reason.append("no authoritative value")
     if spread > AUTOHEAL_MAX_SPREAD: reason.append(f"spread {spread} > {AUTOHEAL_MAX_SPREAD}")
     if is_suspect: reason.append("suspect intra-store duplicate")
+    if is_false_group: reason.append("false group (multiple distinct products share this barcode)")
     if isinstance(source, str) and not source.startswith("live"): reason.append(f"non-live source ({source})")
 
     return {"barcode": barcode, "authoritative_target": target, "source": source,
@@ -118,6 +125,14 @@ def apply_plan(db: Session, plan: Dict[str, Any]) -> Dict[str, Any]:
     target = plan["authoritative_target"]
     if target is None or not plan["moves"]:
         return {"barcode": barcode, "applied": 0, "skipped": "nothing to do"}
+    # Hard refuse for FALSE groups regardless of what the (possibly stale) plan says — never
+    # compare-and-set two different physical products to one value.
+    from services import diagnostics as _diag
+    if _diag.is_false_barcode_group(db, barcode):
+        audit_logger.log(category="RECONCILIATION", action="reconcile_refused_false_group",
+                         message=f"[{barcode}] apply_plan refused: false group (distinct products)",
+                         target=barcode, severity="WARN", details={"barcode": barcode})
+        return {"barcode": barcode, "applied": 0, "skipped": "false_group"}
 
     # P2: hold the SAME distributed lock as propagation so reconcile never races a webhook write.
     _h = dist_lock.acquire(f"barcode:{barcode}")

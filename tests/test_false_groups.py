@@ -83,6 +83,27 @@ def test_case_differences_never_quarantine():
     assert count_sku_classes(["NEGRU-4XL", "negru-5XL"]) == 2   # sizes still differ, case aside
 
 
+def test_classification_is_order_invariant():
+    # BLOCKER regression (adversarial review): the greedy no-merge version classified
+    # ['zn-127','gt-127','127'] as 2 classes but ['127','zn-127','gt-127'] as 1 — and SQL feeds the
+    # classifier in planner-dependent order, so the same pool flapped quarantined/active. A later SKU
+    # that bridges two classes must MERGE them (true connected components) in EVERY permutation.
+    from itertools import permutations
+    cases = [
+        (["127", "zn-127", "gt-127"], 1),                    # legit: bare bridges two prefixed forms
+        (["100", "zn-100", "gt-100", "mg-100"], 1),          # 4-store legit pool
+        (["negru-4XL", "negru-5XL"], 2),                     # the incident
+        (["HA-0061-1", "HA-0061M", "HA-0062"], 3),           # known false trio
+        (["oglinda", "oglinda-acrilica"], 2),                # placeholder false pair
+        (["zn-150", "HA-150", "150"], 1),                    # bare bridges BOTH (documented FN limit:
+                                                             # a bare SKU is a universal connector)
+    ]
+    for skus, expected in cases:
+        for perm in permutations(skus):
+            got = count_sku_classes(list(perm))
+            assert got == expected, f"{perm} -> {got}, expected {expected}"
+
+
 # --- the gates -------------------------------------------------------------------------------------
 
 def test_webhook_gate_quarantines_false_groups_before_canary():
@@ -135,6 +156,46 @@ def test_onboarding_uses_classifier_not_naive_sku_count():
     src = _read("services/pool_onboarding.py")
     assert "count_sku_classes" in src
     assert "count(DISTINCT btrim(pv.sku))" not in src   # the naive counter is gone
+
+
+def test_webhook_gate_fails_closed():
+    # a transient classifier/DB error must NOT drop the webhook onto the legacy relative path (a false
+    # group's cross-product delta would bleed fleet-wide). On exception: mirror-only + audit + return.
+    src = _read("services/inventory_sync_service.py")
+    gate = src.index("is_false_barcode_group(db, barcode)")
+    exc = src.index("false_group_check_failed", gate)
+    win = src[exc - 1200:exc + 700]
+    assert "FAIL CLOSED" in win
+    assert "return" in src[exc:exc + 700]
+
+
+def test_group_skus_deterministic_order():
+    src = _read("services/diagnostics.py")
+    fn = src[src.index("def group_skus"):src.index("def is_false_barcode_group")]
+    assert "ORDER BY" in fn
+
+
+def test_validation_and_livetruth_skip_false_groups():
+    # quarantined pools must not arm diverged_since / page permanent-SLA or mirror-blind CRITICALs
+    pv = _read("services/pool_validation.py")
+    assert "is_false_barcode_group" in pv and '"false_group"' in pv
+    lt = _read("services/live_truth.py")
+    assert "is_false_barcode_group" in lt
+
+
+def test_reconciliation_refuses_false_groups():
+    src = _read("services/reconciliation_engine.py")
+    assert "is_false_barcode_group" in src
+    assert "false group" in src                      # a blocker reason in plan_barcode
+    assert "reconcile_refused_false_group" in src    # hard refuse in apply_plan
+
+
+def test_deauthorize_clears_sla_flag_every_sweep():
+    # sales on the two products keep re-arming diverged_since via sweeps that run before the skip
+    # lands; the de-auth must clear it EVERY sweep, not only while backfilled_at was set
+    src = _read("services/pool_membership.py")
+    fn = src[src.index("def _deauthorize_false_groups"):src.index("def _recently_logged")]
+    assert fn.count("UPDATE pool_states") == 2       # backfilled_at and diverged_since cleared separately
 
 
 if __name__ == "__main__":

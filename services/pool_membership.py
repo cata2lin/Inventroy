@@ -84,7 +84,7 @@ def _false_group_barcodes(db) -> List[str]:
     """Pool barcodes shared by >1 distinct PRODUCT class (diagnostics.count_sku_classes) — unsyncable
     FALSE groups. One aggregate query, classified in memory."""
     rows = db.execute(text("""
-        SELECT pv.barcode, array_agg(DISTINCT btrim(pv.sku)) skus
+        SELECT pv.barcode, array_agg(DISTINCT btrim(pv.sku) ORDER BY btrim(pv.sku)) skus
         FROM product_variants pv
         JOIN products p ON p.id = pv.product_id AND p.deleted_at IS NULL
         JOIN stores s ON s.id = pv.store_id AND s.enabled AND s.sync_location_id IS NOT NULL
@@ -99,12 +99,19 @@ def _deauthorize_false_groups(db, barcodes: List[str]) -> int:
     """De-authorize the ENGINE for false-group pools: clear backfilled_at (and the meaningless SLA
     flag) so the engine can never converge them. The webhook/canary gates block writes immediately;
     this removes the stale write-eligibility so that once barcodes are FIXED the pool re-onboards
-    through the live-truth backfill (fresh Q) instead of resuming with a poisoned one."""
+    through the live-truth backfill (fresh Q) instead of resuming with a poisoned one.
+    diverged_since is cleared EVERY sweep (not only while backfilled) — sales on the different
+    products keep re-arming it via the validation sweep, and an un-clearable flag would page a
+    permanent-SLA CRITICAL forever on a pool that is intentionally quarantined."""
     if not barcodes:
         return 0
     res = db.execute(text("""
-        UPDATE pool_states SET backfilled_at = NULL, diverged_since = NULL
+        UPDATE pool_states SET backfilled_at = NULL
         WHERE barcode = ANY(:bcs) AND backfilled_at IS NOT NULL
+    """), {"bcs": barcodes})
+    db.execute(text("""
+        UPDATE pool_states SET diverged_since = NULL
+        WHERE barcode = ANY(:bcs) AND diverged_since IS NOT NULL
     """), {"bcs": barcodes})
     db.commit()
     return res.rowcount or 0
