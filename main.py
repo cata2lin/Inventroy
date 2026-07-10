@@ -29,6 +29,7 @@ from services import live_truth
 from services import pool_validation
 from services import pool_membership
 from services import pool_onboarding
+from services import trendyol_sync
 
 load_dotenv()
 
@@ -63,6 +64,11 @@ scheduler.add_job(pool_membership.run_membership_sweep, 'interval', minutes=30)
 # once their stores agree on live truth, so no pool is left permanently on the amplification-prone
 # legacy path. Reports diverged/negative pools for operator resolution. Writes only PoolState.
 scheduler.add_job(pool_onboarding.run_onboarding_sweep, 'interval', minutes=30)
+# TRENDYOL sync (webhook-less marketplace replica; all jobs no-op unless TRENDYOL_SYNC_ENABLED):
+# push pool Q to Trendyol on change (+ batch result polling), poll orders for sales, hourly reconcile.
+scheduler.add_job(trendyol_sync.push_sweep, 'interval', minutes=1)
+scheduler.add_job(trendyol_sync.orders_poll, 'interval', minutes=3)
+scheduler.add_job(trendyol_sync.reconcile, 'interval', minutes=60)
 scheduler.start()
 # --- END SCHEDULER SETUP ---
 

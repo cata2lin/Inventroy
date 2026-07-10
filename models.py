@@ -353,6 +353,60 @@ class PoolEvent(Base):
     )
 
 
+class TrendyolMapping(Base):
+    """Trendyol<->Shopify product identity. Trendyol's 'barcode' is THEIR generated code (write key
+    on their side), NOT our EAN; the join to our pool engine is the resolved EAN (ean_barcode =
+    product_variants.barcode of the mapped Shopify SKU). Imported from the Scripturi dashboard's
+    trendyol_mapping.json; rows without a resolvable EAN stay inactive."""
+    __tablename__ = "trendyol_mappings"
+    trendyol_barcode = Column(String(120), primary_key=True)
+    trendyol_sku = Column(String(120), nullable=True, index=True)
+    shopify_store = Column(String(40), nullable=True)
+    shopify_sku = Column(String(120), nullable=True, index=True)
+    ean_barcode = Column(String(255), nullable=True, index=True)   # our pool key
+    active = Column(BOOLEAN, nullable=False, server_default="true")
+    note = Column(String(200), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class TrendyolPush(Base):
+    """Outbound stock-push ledger + dedup store. One row per (batch, trendyol_barcode) item. Serves:
+    (1) Trendyol's 15-min identical-request window (skip resending the same qty), (2) async batch
+    audit (batchRequestId results expire server-side in ~4h — we persist item outcomes), (3) the
+    retry cursor (retry FAILED items only)."""
+    __tablename__ = "trendyol_pushes"
+    id = Column(BIGINT, primary_key=True, autoincrement=True)
+    trendyol_barcode = Column(String(120), nullable=False, index=True)
+    ean_barcode = Column(String(255), nullable=True, index=True)
+    quantity = Column(Integer, nullable=False)
+    batch_request_id = Column(String(80), nullable=True, index=True)
+    status = Column(String(30), nullable=False, server_default="submitted")  # submitted|success|failed|error
+    failure_reasons = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class TrendyolOrderLine(Base):
+    """Inbound idempotency: one row per processed Trendyol order line (the poll-world webhook_id).
+    UNIQUE (order_id, line_id) makes replays/overlapping poll windows structurally no-ops."""
+    __tablename__ = "trendyol_order_lines"
+    id = Column(BIGINT, primary_key=True, autoincrement=True)
+    order_id = Column(String(60), nullable=False)
+    line_id = Column(String(60), nullable=False)
+    order_number = Column(String(60), nullable=True)
+    trendyol_barcode = Column(String(120), nullable=True, index=True)
+    ean_barcode = Column(String(255), nullable=True, index=True)
+    quantity = Column(Integer, nullable=False, server_default="0")
+    order_status = Column(String(40), nullable=True)
+    order_date_ms = Column(BIGINT, nullable=True)
+    applied = Column(BOOLEAN, nullable=False, server_default="false")   # folded into the pool?
+    skip_reason = Column(String(120), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    __table_args__ = (
+        Index('ux_trendyol_order_line', 'order_id', 'line_id', unique=True),
+    )
+
+
 class AuditLog(Base):
     """
     Central audit trail for ALL system operations.
