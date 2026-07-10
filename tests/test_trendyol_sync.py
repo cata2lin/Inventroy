@@ -54,10 +54,10 @@ def test_pushes_and_folds_require_engine_authoritative_pool():
     src = _read("services/trendyol_sync.py")
     assert "backfilled_at IS NOT NULL" in src               # authority = live-truth backfilled
     assert "is_rolled_back" in src                          # rolled-back pools never exported
-    fold = src[src.index("def _fold_sale"):src.index("def orders_poll")]
+    fold = src[src.index("def _apply_sale"):src.index("def _inbound_fold")]
     assert "_authoritative_pool_q" in fold                  # inbound folds gated the same way
-    poll = src[src.index("def orders_poll"):src.index("def reconcile")]
-    assert "pool_not_authoritative" in poll
+    inb = src[src.index("def _inbound_fold"):src.index("def _mapping_anchor")]
+    assert "not_authoritative" in inb
 
 
 def test_push_value_is_floored_and_capped():
@@ -66,54 +66,72 @@ def test_push_value_is_floored_and_capped():
     assert ty.MAX_STOCK_PER_PRODUCT == 20000
 
 
-# --- inbound: idempotency + fold math ---------------------------------------------------------------
+# --- inbound: STOCK-DELTA idempotency + fold math (split/cancel-proof) -------------------------------
 
-def test_order_line_idempotency_is_structural():
+def test_inbound_is_stock_delta_not_order_line():
+    # Sales are detected from Trendyol's OWN quantity vs the accounted anchor — NOT by folding order
+    # lines (which the package-split cron would double-count). orders_poll must be RECORD-ONLY.
     src = _read("services/trendyol_sync.py")
-    assert "ON CONFLICT (order_id, line_id) DO NOTHING" in src     # unseen-line detection
-    assert 'webhook_id=order_ref' in src or "webhook_id=order_ref" in src
-    m = _read("models.py")
-    assert "ux_trendyol_order_line" in m and "unique=True" in m
-    # the ledger webhook_id ('trendyol:{order}:{line}') gives a SECOND, engine-level dedup layer
-    assert "trendyol:{nl['oid']}:{nl['lid']}" in src
+    poll = src[src.index("def orders_poll"):src.index("def reconcile")]
+    assert "_fold_sale" not in src                          # the fragile per-line fold is gone
+    assert '"recorded"' in poll                             # lines are recorded, never mutate stock
+    inb = src[src.index("def _inbound_fold"):src.index("def _mapping_anchor")]
+    assert "int(acc) - int(ty_now)" in inb                  # sold = anchor - current qty
+
+
+def test_inbound_fold_is_idempotent_transition():
+    # replaying the SAME anchor->qty transition must NOT subtract twice (split/re-observe safe)
+    src = _read("services/trendyol_sync.py")
+    assert 'f"trendyol-in:{tb}:{acc}:{ty_now}"' in src      # transition-keyed webhook_id
+    ap = src[src.index("def _apply_sale"):src.index("def _inbound_fold")]
+    assert "SELECT 1 FROM pool_events WHERE webhook_id" in ap    # dedup before any mutation
+
+
+def test_anchor_advances_on_push_and_fold_no_echo():
+    # our own push must never be re-read as a sale: the anchor advances on confirmed push AND on fold
+    src = _read("services/trendyol_sync.py")
+    acct = src[src.index("def _account_pushed"):src.index("def _poll_submitted_batches")]
+    assert "ty_accounted_qty=:q" in acct and "p2.id > :id" in acct   # newest-push guard
+    inb = src[src.index("def _inbound_fold"):src.index("def _mapping_anchor")]
+    assert "ty_accounted_qty=:a" in inb                     # fold advances the anchor to ty_now
+
+
+def test_fold_before_push_closes_reverse_race():
+    # a push must fold any Trendyol sale FIRST, so it never SETs Trendyol back up over an unfolded sale
+    src = _read("services/trendyol_sync.py")
+    sp = src[src.index("def _safe_push_list"):src.index("def push_sweep")]
+    assert "ty.get_product(tb)" in sp                       # fresh per-barcode read
+    assert "_inbound_fold(" in sp                            # fold BEFORE building the push list
+    assert sp.index("_inbound_fold(") < sp.index("desired =")
+    assert 'not pr.get("ok")' in sp                          # read failure => skip, never push blind
 
 
 def test_virtual_listing_fold_math_sale():
-    # Trendyol is the NULL-variant virtual listing: a sale folds against ITS OWN baseline only.
-    # Pool Q=202, virtual baseline 202 (seeded); Trendyol sells 2 -> observed 200 -> Q=200.
+    # the NULL stream is reseeded to Q, so the applied delta is exactly -sold and conservation holds
+    # under a concurrent Shopify sale. Q=202, baseline reseeded to 202; sell 2 -> observed 200 -> 200.
     assert fold_observation(202, 202, 200) == 200
-    # concurrent Shopify sale already folded (Q=199), then the Trendyol sale arrives:
-    # 199 + (200 - 202) = 197 — both sales counted, none lost, no over-correction.
-    assert fold_observation(199, 202, 200) == 197
+    assert fold_observation(199, 202, 200) == 197           # concurrent Shopify sale kept, none lost
 
 
-def test_virtual_listing_first_event_seeds_baseline_not_wipes():
+def test_apply_sale_reseeds_baseline_no_drift():
     src = _read("services/trendyol_sync.py")
-    fold = src[src.index("def _fold_sale"):src.index("def orders_poll")]
-    assert "'backfill_baseline'" in fold        # first Trendyol event = replica joining at Q
-    assert "latest_source_observed(db, ean, None)" in fold
-    assert "max(int(prev) - qty, 0)" in fold    # floored, delta vs own baseline
+    ap = src[src.index("def _apply_sale"):src.index("def _inbound_fold")]
+    assert "'backfill_baseline'" in ap                       # reseed NULL stream to current Q
+    assert "max(int(q_now) - sold, 0)" in ap                 # floored, delta = -sold regardless of history
 
 
-def test_cancelled_and_insane_lines_never_fold():
+def test_suspicious_drop_is_capped():
+    # a glitch read (e.g. qty 0) must not nuke the pool: drops beyond MAX_INBOUND_DROP never fold
     src = _read("services/trendyol_sync.py")
-    assert "CANCEL_STATUSES" in src and "cancelled" in src
-    assert "qty_out_of_range" in src
-    assert ts.MAX_LINE_QTY >= 1
+    assert "MAX_INBOUND_DROP" in src and 'reason": "suspicious_drop"' in src.replace("'", '"')
+    assert ts.MAX_INBOUND_DROP >= 1
 
 
-def test_lines_folded_oldest_first():
-    # per-source monotonic timestamps on the virtual stream require oldest-first processing
+def test_dry_run_never_mutates():
     src = _read("services/trendyol_sync.py")
-    assert 'new_lines.sort(key=lambda x: x["odate"] or 0)' in src
-
-
-def test_dry_run_records_but_never_mutates():
-    src = _read("services/trendyol_sync.py")
-    poll = src[src.index("def orders_poll"):src.index("def reconcile")]
-    assert '"dry_run"' in poll
-    # in dry-run the line is recorded (idempotency preserved) and _fold_sale is NOT called for it
-    assert poll.index('"dry_run"') < poll.index("_fold_sale(")
+    inb = src[src.index("def _inbound_fold"):src.index("def _mapping_anchor")]
+    assert "inbound_apply()" in inb and '"dry_run"' in inb   # apply-off => record/log only, no fold
+    assert inb.index("inbound_apply()") < inb.index("dist_lock.acquire")  # gate BEFORE any mutation
 
 
 # --- outbound: dedup + batch semantics ---------------------------------------------------------------

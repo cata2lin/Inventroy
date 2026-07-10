@@ -12,6 +12,7 @@ COLS = [
     "trendyol_approved BOOLEAN",
     "trendyol_archived BOOLEAN",
     "ty_synced_at TIMESTAMPTZ",
+    "ty_accounted_qty INTEGER",
 ]
 
 if __name__ == "__main__":

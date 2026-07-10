@@ -2,25 +2,33 @@
 """
 TRENDYOL <-> SHOPIFY STOCK SYNC — Trendyol as one more (webhook-less) replica of the barcode pool.
 
-Trendyol sends NO webhooks, so the sync is three poll/push loops built on the existing pool engine:
+Trendyol sends NO webhooks, so the sync is poll/push loops on the existing pool engine. Inbound is
+STOCK-DELTA, not order-line: Trendyol maintains its own quantity (down on a sale, back up on a
+cancel), so a quantity BELOW the value we last SET it to (the per-mapping `ty_accounted_qty` anchor)
+is exactly the units sold since we last accounted — folded ONCE. This is immune to the package-split
+double-count that per-line folding suffers (the split cron re-issues package ids, so a line would
+re-fold under a new key) and to cancellations (which per-line folding could never reverse).
 
-  OUTBOUND  push_sweep (1 min): for every ACTIVE mapping whose pool is engine-authoritative, push the
-            pool quantity to Trendyol when it differs from the last pushed value. Quantity-only,
+  OUTBOUND  push_sweep (1 min): FOLD-BEFORE-PUSH — for each candidate (pool != last pushed), read
+            Trendyol's current qty, fold any sale first, then push the post-fold pool Q. Quantity-only
             coalesced <=1000-item async batches; batchRequestId persisted + polled; item-level
-            SUCCESS/FAILED recorded (results expire server-side in ~4h); FAILED retried. The per-
-            barcode last-push store also satisfies Trendyol's 15-minute identical-request rejection.
-  INBOUND   orders_poll (3 min): page recent orders; each UNSEEN line (UNIQUE order_id+line_id) folds
-            a sale into the pool through the ENGINE (virtual "Trendyol listing" = the NULL-variant
-            per-source stream; webhook_id 'trendyol:{order}:{line}' -> structurally idempotent), then
-            converges every Shopify listing. Cancelled lines never fold.
-  RECONCILE reconcile (hourly): full approved-products read; Trendyol quantity vs pool Q drift ->
-            re-push (if allowed) + report; also flags unmapped/unapproved items.
+            SUCCESS/FAILED recorded (results expire ~4h); FAILED retried; a confirmed success advances
+            the anchor. The per-barcode last-push store also satisfies the 15-min identical-request rule.
+  INBOUND   reconcile (~5 min): full approved-products read; per approved listing, fold (accounted
+            anchor - current qty) into the pool via the ENGINE (virtual "Trendyol listing" = the
+            NULL-variant stream, reseeded to Q so the applied delta is exactly -sold), then converge
+            every Shopify listing. Idempotent (webhook_id encodes the anchor->qty transition).
+            orders_poll (3 min) is RECORD-ONLY now — the activity/audit feed, never a stock signal.
+  RECONCILE the same ~5-min pass then re-pushes remaining pool-vs-Trendyol drift and reports
+            unmapped/unapproved/missing items.
 
 OVER-CORRECTION SAFETY (the design contract):
   • Only ENGINE-AUTHORITATIVE pools (backfilled_at set, not rolled back) are pushed or folded — a
     stale pool Q can never be exported.
-  • Inbound folds are delta-per-line against the virtual listing's OWN baseline (never another
-    listing's), idempotent per order line, floored at 0, qty sanity-capped.
+  • Inbound is stock-delta vs the accounted anchor: a sale folds exactly once (idempotent transition
+    key), floored at 0, drop sanity-capped (MAX_INBOUND_DROP); splits/cancels can't inflate it.
+  • The anchor advances on every confirmed push AND every fold, so our OWN push is never re-read as a
+    sale (no echo), and fold-before-push means a push never SETs Trendyol back up over an unfolded sale.
   • Pushes are absolute quantity SETs (idempotent) and never read-modify-write.
   • Everything is flag-gated and dormant by default:
       TRENDYOL_SYNC_ENABLED   master (jobs no-op when off)
@@ -41,6 +49,7 @@ from services import audit_logger, alerting, dist_lock, pool_engine, pool_canary
 
 ORDERS_WINDOW_HOURS = int(os.getenv("TRENDYOL_ORDERS_WINDOW_HOURS", "24"))
 MAX_LINE_QTY = int(os.getenv("TRENDYOL_MAX_LINE_QTY", "50"))      # sanity cap per order line
+MAX_INBOUND_DROP = int(os.getenv("TRENDYOL_MAX_INBOUND_DROP", "500"))  # a bigger 1-cycle drop = glitch
 RETRY_MINUTES = 16                                                # > Trendyol's 15-min identical window
 CANCEL_STATUSES = {"cancelled", "unsupplied", "returned", "undelivered"}
 
@@ -78,6 +87,16 @@ def _authoritative_pool_q(db, ean: str) -> Optional[int]:
 # OUTBOUND — push pool Q to Trendyol
 # ---------------------------------------------------------------------------------------------------
 
+def _account_pushed(db, row) -> None:
+    """A confirmed-successful push means Trendyol now holds exactly `row.quantity` from us — advance
+    the accounted anchor to it (only if this is the newest push for the barcode, so out-of-order batch
+    resolution can't rewind it). This is what makes a later Trendyol qty BELOW it read as sales."""
+    db.execute(text("""UPDATE trendyol_mappings SET ty_accounted_qty=:q
+        WHERE trendyol_barcode=:tb AND NOT EXISTS (
+            SELECT 1 FROM trendyol_pushes p2 WHERE p2.trendyol_barcode=:tb AND p2.id > :id)"""),
+        {"q": int(row.quantity), "tb": row.trendyol_barcode, "id": row.id})
+
+
 def _poll_submitted_batches(db) -> Dict[str, int]:
     """Resolve pending batches to item-level outcomes (results expire in ~4h — never leave them)."""
     done = failed = 0
@@ -98,9 +117,10 @@ def _poll_submitted_batches(db) -> Dict[str, int]:
                 # a COMPLETED batch reports item-level outcomes for FAILURES; an item absent from the
                 # report was applied (verified live: an 'absent' item's quantity had landed).
                 row.status = "success"; done += 1
-                continue
+                _account_pushed(db, row); continue
             if (it.get("status") or "").upper() in ("SUCCESS", "COMPLETED", "OK"):
                 row.status = "success"; done += 1
+                _account_pushed(db, row)
             else:
                 reasons = it.get("failureReasons") or []
                 row.failure_reasons = reasons
@@ -184,8 +204,34 @@ def _submit_batch(db, cands: List[Dict[str, Any]]) -> Optional[str]:
     return bid
 
 
+def _safe_push_list(db, cands: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """FOLD-BEFORE-PUSH: for each push candidate, read Trendyol's CURRENT quantity and fold any sale
+    (qty below the accounted anchor) into the pool FIRST, then recompute the desired quantity from the
+    now-current pool Q. This guarantees a push can never SET Trendyol back up over a sale we hadn't yet
+    folded (the outbound-erases-inbound race). A candidate whose fresh read fails is skipped this pass
+    (retried next sweep / by reconcile) rather than pushed blind."""
+    out = []
+    for c in cands:
+        tb, ean = c["tb"], c["ean"]
+        pr = ty.get_product(tb)
+        if not pr.get("ok"):
+            continue                                   # read failed — never push blind, retry later
+        if pr.get("found") and pr.get("approved") and not pr.get("archived"):
+            acc, st = _mapping_anchor(db, tb)
+            _seed_anchor(db, tb, pr["quantity"]) if acc is None else None
+            if acc is not None and st not in ("submitted", "failed"):
+                _inbound_fold(db, tb, ean, pr["quantity"], acc)
+        q = _authoritative_pool_q(db, ean)             # re-read: the fold may have moved it
+        if q is None:
+            continue
+        desired = min(max(q, 0), ty.MAX_STOCK_PER_PRODUCT)
+        if not pr.get("found") or pr.get("quantity") != desired:
+            out.append({"tb": tb, "ean": ean, "q": desired})
+    return out
+
+
 def push_sweep() -> Dict[str, Any]:
-    """Scheduled ~1 min. Poll pending batches, then push every changed pool quantity."""
+    """Scheduled ~1 min. Poll pending batches, then fold-before-push every changed pool quantity."""
     if not (sync_enabled() and ty.configured()):
         return {"disabled": True}
     db = SessionLocal()
@@ -193,7 +239,7 @@ def push_sweep() -> Dict[str, Any]:
         polled = _poll_submitted_batches(db)
         if not push_enabled():
             return {"read_only": True, **polled}
-        cands = _push_candidates(db)
+        cands = _safe_push_list(db, _push_candidates(db))
         submitted = 0
         for i in range(0, len(cands), ty.MAX_BATCH_ITEMS):
             if _submit_batch(db, cands[i:i + ty.MAX_BATCH_ITEMS]):
@@ -210,45 +256,94 @@ def push_sweep() -> Dict[str, Any]:
 # INBOUND — poll orders, fold sales into the pool through the engine
 # ---------------------------------------------------------------------------------------------------
 
-def _fold_sale(db, ean: str, qty: int, order_ref: str, order_ts) -> bool:
-    """Fold a Trendyol sale of `qty` units into the pool as the virtual 'Trendyol listing'
-    (NULL-variant per-source stream), then converge every Shopify listing. Caller verified the pool
-    is engine-authoritative. Runs under the same per-barcode advisory lock as webhooks."""
+def _apply_sale(db, ean: str, sold: int, webhook_id: str, ts) -> Optional[int]:
+    """Fold a decrease of `sold` units into the pool via the virtual 'Trendyol listing' (NULL-variant
+    per-source stream), then converge every Shopify listing. Caller HOLDS the per-barcode lock and has
+    verified the pool is engine-authoritative. Idempotent on `webhook_id`. The NULL stream is reseeded
+    to the current pool Q immediately before the fold, so the applied delta is exactly -sold regardless
+    of history (no virtual-baseline drift-to-zero) and stays conservation-correct under the engine.
+    Returns the new Q (or the unchanged Q on a duplicate), or None if the pool isn't authoritative."""
+    q_now = _authoritative_pool_q(db, ean)
+    if q_now is None:
+        return None
+    if db.execute(text("SELECT 1 FROM pool_events WHERE webhook_id=:w LIMIT 1"),
+                  {"w": webhook_id}).first() is not None:
+        return q_now                                   # already folded — idempotent no-op
+    db.execute(text("""INSERT INTO pool_events
+        (barcode, source_store_id, source_variant_id, inventory_item_id,
+         observed_quantity, source_timestamp, kind, applied)
+        VALUES (:b, NULL, NULL, NULL, :q, now(), 'backfill_baseline', true)"""),
+        {"b": ean, "q": q_now})
+    db.commit()
+    observed = max(int(q_now) - sold, 0)
+    ev_id = pool_engine.ingest_event(
+        db, barcode=ean, source_store_id=None, source_variant_id=None, inventory_item_id=None,
+        observed_quantity=observed, source_timestamp=ts, webhook_id=webhook_id)
+    if ev_id is None:
+        return q_now
+    res = pool_engine.apply_event(db, ev_id, skip_lock=True)
+    if res is None:
+        return None
+    pool_engine.converge_pool(db, ean)
+    return int(res["quantity"])
+
+
+def _inbound_fold(db, tb: str, ean: str, ty_now: int, acc: Optional[int], ts=None) -> Dict[str, Any]:
+    """STOCK-DELTA inbound (split/cancel-proof, cannot double-count): Trendyol's current quantity
+    BELOW the value we last SET on it (`acc`, the accounted anchor) = real marketplace sales since we
+    last accounted -> fold that decrease exactly ONCE and advance the anchor to ty_now. A qty at/above
+    the anchor is never a sale (equal = our push landed; higher = our push not yet applied / a restock
+    we don't honour inbound). No order lines are involved, so package splits and cancellations can
+    never inflate the subtraction. Idempotent (webhook_id encodes the acc->ty_now transition)."""
+    if acc is None:
+        return {"folded": False, "reason": "no_anchor"}
+    sold = int(acc) - int(ty_now)
+    if sold <= 0:
+        return {"folded": False, "reason": "no_decrease"}
+    if sold > MAX_INBOUND_DROP:
+        alerting.warning("trendyol.inbound_drop",
+                         f"[{tb}] Trendyol qty {acc}->{ty_now} dropped {sold} (> {MAX_INBOUND_DROP}) "
+                         f"— NOT folded (looks like a glitch/archive, not sales)",
+                         {"tb": tb, "ean": ean, "acc": acc, "ty_now": ty_now})
+        return {"folded": False, "reason": "suspicious_drop", "sold": sold}
+    if not inbound_apply():
+        return {"folded": False, "reason": "dry_run", "sold": sold}
     handle = dist_lock.acquire(f"barcode:{ean}")
     if handle is None:
-        return False
+        return {"folded": False, "reason": "locked", "sold": sold}
     try:
-        q_now = _authoritative_pool_q(db, ean)
-        if q_now is None:
-            return False
-        prev = pool_engine.latest_source_observed(db, ean, None)   # virtual listing's own baseline
-        if prev is None:
-            # first Trendyol event for this pool: seed the virtual baseline at Q (replica joining),
-            # exactly like a live-truth backfill seeds real listings.
-            db.execute(text("""INSERT INTO pool_events
-                (barcode, source_store_id, source_variant_id, inventory_item_id,
-                 observed_quantity, source_timestamp, kind, applied)
-                VALUES (:b, NULL, NULL, NULL, :q, now(), 'backfill_baseline', true)"""),
-                {"b": ean, "q": q_now})
-            db.commit()
-            prev = q_now
-        observed = max(int(prev) - qty, 0)
-        ev_id = pool_engine.ingest_event(
-            db, barcode=ean, source_store_id=None, source_variant_id=None, inventory_item_id=None,
-            observed_quantity=observed, source_timestamp=order_ts, webhook_id=order_ref)
-        if ev_id is None:
-            return True    # duplicate (already folded) — idempotent no-op
-        res = pool_engine.apply_event(db, ev_id, skip_lock=True)
-        if res is None:
-            return False
-        pool_engine.converge_pool(db, ean)
+        new_q = _apply_sale(db, ean, sold, f"trendyol-in:{tb}:{acc}:{ty_now}",
+                            ts or datetime.now(timezone.utc))
+        if new_q is None:
+            return {"folded": False, "reason": "not_authoritative", "sold": sold}
+        db.execute(text("UPDATE trendyol_mappings SET ty_accounted_qty=:a WHERE trendyol_barcode=:tb"),
+                   {"a": int(ty_now), "tb": tb})
+        db.commit()
         audit_logger.log(category="STOCK", action="trendyol_sale_folded",
-                         message=f"[{ean}] Trendyol sale -{qty} folded -> Q={res['quantity']} ({order_ref})",
+                         message=f"[{ean}] Trendyol sale -{sold} folded ({acc}->{ty_now}) -> Q={new_q} ({tb})",
                          target=ean, severity="INFO",
-                         details={"qty": qty, "new_Q": res["quantity"], "order_ref": order_ref})
-        return True
+                         details={"sold": sold, "acc": acc, "ty_now": ty_now, "new_Q": new_q, "tb": tb})
+        return {"folded": True, "sold": sold, "new_q": new_q}
     finally:
         dist_lock.release(handle)
+
+
+def _mapping_anchor(db, tb: str):
+    """(ty_accounted_qty, latest_push_status) for a Trendyol barcode. A latest push still 'submitted'
+    or 'failed' means Trendyol's state is uncertain -> inbound must wait (don't mistake our own
+    in-flight push for a sale)."""
+    acc = db.execute(text("SELECT ty_accounted_qty FROM trendyol_mappings WHERE trendyol_barcode=:tb"),
+                     {"tb": tb}).scalar()
+    st = db.execute(text("SELECT status FROM trendyol_pushes WHERE trendyol_barcode=:tb "
+                         "ORDER BY id DESC LIMIT 1"), {"tb": tb}).scalar()
+    return acc, st
+
+
+def _seed_anchor(db, tb: str, ty_now: int) -> None:
+    db.execute(text("UPDATE trendyol_mappings SET ty_accounted_qty=:q "
+                    "WHERE trendyol_barcode=:tb AND ty_accounted_qty IS NULL"),
+               {"q": int(ty_now), "tb": tb})
+    db.commit()
 
 
 def orders_poll() -> Dict[str, Any]:
@@ -293,47 +388,26 @@ def orders_poll() -> Dict[str, Any]:
                                           "line_status": (line.get("orderLineItemStatusName") or "").strip()})
             page += 1
 
-        # oldest first so per-source timestamps stay monotonic on the virtual listing stream
-        new_lines.sort(key=lambda x: x["odate"] or 0)
-        applied = skipped = 0
+        # RECORD-ONLY: order lines are the activity/audit feed, NOT the stock signal. Stock is folded
+        # from Trendyol's own quantity (stock-delta, in reconcile/push_sweep) — immune to the package-
+        # split double-count that per-line folding suffers (the split cron re-issues package ids, so a
+        # line would fold again under a new key) and to cancellations (a cancelled line silently
+        # un-decrements Trendyol's qty, which stock-delta accounts for; per-line folding could not).
         for nl in new_lines:
             row = db.query(models.TrendyolOrderLine).filter_by(id=nl["row_id"]).first()
-            reason = None
-            m = db.query(models.TrendyolMapping).filter_by(trendyol_barcode=nl["tb"]).first()
-            ean = m.ean_barcode if (m and m.active) else None
-            status_l = (nl["line_status"] or nl["status"] or "").lower()
-            if ean is None:
-                reason = "unmapped"
-            elif any(s in status_l for s in CANCEL_STATUSES):
-                reason = f"status:{status_l[:30]}"
-            elif nl["qty"] <= 0 or nl["qty"] > MAX_LINE_QTY:
-                reason = f"qty_out_of_range:{nl['qty']}"
-            elif _authoritative_pool_q(db, ean) is None:
-                reason = "pool_not_authoritative"
-            elif not inbound_apply():
-                reason = "dry_run"
-            if row:
-                row.ean_barcode = ean
-            if reason:
-                if row:
-                    row.skip_reason = reason
-                    db.commit()
-                skipped += 1
+            if not row:
                 continue
-            ts = datetime.fromtimestamp((nl["odate"] or 0) / 1000, tz=timezone.utc) if nl["odate"] else datetime.now(timezone.utc)
-            ok = _fold_sale(db, ean, nl["qty"], f"trendyol:{nl['oid']}:{nl['lid']}", ts)
-            if row:
-                row.applied = bool(ok)
-                row.skip_reason = None if ok else "fold_failed"
-                db.commit()
-            applied += 1 if ok else 0
+            m = db.query(models.TrendyolMapping).filter_by(trendyol_barcode=nl["tb"]).first()
+            row.ean_barcode = m.ean_barcode if (m and m.active) else None
+            row.applied = False
+            row.skip_reason = "recorded"      # stock handled by stock-delta reconcile, not per-line
+            db.commit()
         if new_lines:
             audit_logger.log(category="STOCK", action="trendyol_orders_polled",
-                             message=f"Trendyol orders: {len(new_lines)} new line(s), "
-                                     f"{applied} folded, {skipped} skipped (apply={inbound_apply()})",
-                             severity="INFO",
-                             details={"new": len(new_lines), "applied": applied, "skipped": skipped})
-        return {"new": len(new_lines), "applied": applied, "skipped": skipped}
+                             message=f"Trendyol orders: {len(new_lines)} new line(s) recorded "
+                                     f"(stock folded via stock-delta reconcile, not per-line)",
+                             severity="INFO", details={"new": len(new_lines)})
+        return {"new": len(new_lines), "recorded": len(new_lines)}
     except Exception as e:
         alerting.warning("trendyol.orders_poll", f"orders poll failed: {e}", {})
         return {"error": str(e)}
@@ -346,7 +420,11 @@ def orders_poll() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------------------------------
 
 def reconcile() -> Dict[str, Any]:
-    """Scheduled hourly. Trendyol approved-products quantity vs pool Q; drift -> re-push + report."""
+    """Scheduled ~5 min. Full approved-products read, then two passes on ONE snapshot:
+      INBOUND  — a Trendyol qty BELOW the accounted anchor = marketplace sales -> fold ONCE
+                 (stock-delta, split/cancel-proof) BEFORE any push, so a push can't erase a sale.
+      OUTBOUND — remaining pool-vs-Trendyol drift (Shopify-side moves) -> re-push + report.
+    Also refreshes the UI snapshot and flags unmapped/unapproved/missing items."""
     if not (sync_enabled() and ty.configured()):
         return {"disabled": True}
     db = SessionLocal()
@@ -382,6 +460,25 @@ def reconcile() -> Dict[str, Any]:
                  "ar": t["archived"], "bc": bc})
         db.commit()
 
+        # INBOUND PASS (stock-delta) — fold Trendyol-side sales BEFORE the outbound push below.
+        in_folded = in_units = 0
+        for m in db.query(models.TrendyolMapping).filter_by(active=True).all():
+            if not m.ean_barcode:
+                continue
+            t = ty_stock.get(m.trendyol_barcode)
+            if t is None or not t["approved"] or t["archived"]:
+                continue                                   # only approved, listed items carry a stock signal
+            acc, st = _mapping_anchor(db, m.trendyol_barcode)
+            if acc is None:
+                _seed_anchor(db, m.trendyol_barcode, t["q"])   # first sight: establish baseline, no fold
+                continue
+            if st in ("submitted", "failed"):
+                continue                                   # our own push in flight — Trendyol state uncertain
+            r = _inbound_fold(db, m.trendyol_barcode, m.ean_barcode, t["q"], acc)
+            if r.get("folded"):
+                in_folded += 1
+                in_units += r["sold"]
+
         maps = db.query(models.TrendyolMapping).filter_by(active=True).all()
         drift, not_on_ty, unapproved, pushed = [], [], [], 0
         for m in maps:
@@ -411,18 +508,21 @@ def reconcile() -> Dict[str, Any]:
         unmapped = [bc for bc in ty_stock if not db.query(models.TrendyolMapping)
                     .filter_by(trendyol_barcode=bc).first()]
         audit_logger.log(category="RECONCILIATION", action="trendyol_reconcile",
-                         message=f"Trendyol reconcile: {len(ty_stock)} items; drift={len(drift)} "
+                         message=f"Trendyol reconcile: {len(ty_stock)} items; inbound folded "
+                                 f"{in_folded} sale(s)/-{in_units}u; drift={len(drift)} "
                                  f"(re-pushed {pushed}), unapproved-drifting={len(unapproved)}, "
                                  f"mapped-but-missing={len(not_on_ty)}, unmapped-on-trendyol={len(unmapped)}",
                          severity="WARN" if drift else "INFO",
-                         details={"drift": drift[:25], "unapproved": unapproved[:15],
+                         details={"inbound_folded": in_folded, "inbound_units": in_units,
+                                  "drift": drift[:25], "unapproved": unapproved[:15],
                                   "not_on_trendyol": not_on_ty[:15],
                                   "unmapped_count": len(unmapped), "unmapped_sample": unmapped[:15]})
         if drift and not push_enabled():
             alerting.warning("trendyol.drift",
                              f"Trendyol stock drift on {len(drift)} item(s) (push disabled — read-only)",
                              {"examples": drift[:10]})
-        return {"approved": len(ty_stock), "drift": len(drift), "pushed": pushed,
+        return {"approved": len(ty_stock), "inbound_folded": in_folded, "inbound_units": in_units,
+                "drift": len(drift), "pushed": pushed,
                 "not_on_trendyol": len(not_on_ty), "unmapped": len(unmapped)}
     except Exception as e:
         alerting.warning("trendyol.reconcile", f"reconcile failed: {e}", {})

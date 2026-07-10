@@ -376,6 +376,11 @@ class TrendyolMapping(Base):
     trendyol_approved = Column(BOOLEAN, nullable=True)
     trendyol_archived = Column(BOOLEAN, nullable=True)
     ty_synced_at = Column(DateTime(timezone=True), nullable=True)
+    # INBOUND ANCHOR: the Trendyol quantity we have already accounted for (advanced to the value we
+    # SET on every push, and to the observed value after folding a Trendyol sale). A Trendyol qty
+    # BELOW this anchor = marketplace sales since we last accounted = fold that decrease ONCE. This is
+    # stock-level (not order-line) so it is immune to package-split double-counting and cancellations.
+    ty_accounted_qty = Column(Integer, nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 

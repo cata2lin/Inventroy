@@ -132,3 +132,18 @@ def get_approved_products(page: int = 0, size: int = PRODUCTS_PAGE_SIZE) -> Dict
         return res
     d = res["data"] or {}
     return {"ok": True, "content": d.get("content") or [], "total_pages": d.get("totalPages", 1)}
+
+
+def get_product(barcode: str) -> Dict[str, Any]:
+    """Fresh single-product read by barcode (current quantity + approval), for inbound-safe pushing:
+    a push must never SET Trendyol back UP over a sale it hasn't folded yet. Returns found=False if
+    the barcode isn't listed."""
+    res = _get(f"/product/sellers/{SELLER_ID}/products", {"barcode": barcode, "size": 50})
+    if not res["ok"]:
+        return res
+    for it in (res["data"] or {}).get("content") or []:
+        if str(it.get("barcode") or "") == str(barcode):
+            return {"ok": True, "found": True, "quantity": int(it.get("quantity") or 0),
+                    "approved": bool(it.get("approved", False)),
+                    "archived": bool(it.get("archived", False))}
+    return {"ok": True, "found": False}
