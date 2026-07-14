@@ -245,16 +245,22 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
                 if inv_level and inv_level.available is not None:
                     last_known = inv_level.available
 
-            if last_known is not None:
-                delta = new_available - last_known
-            else:
-                delta = None  # First time — no baseline, use absolute fallback
+            # FLOORED-ENDPOINT delta (2026-07-14): max(observed,0) - max(last_known,0). The
+            # negative-stock test stores (CONTINUE policy) track sales below zero; the pool never
+            # held those units, so raw math turned a later restock-set into set+backlog (-300 -> 500
+            # propagated +800) and inflated every sibling store by the oversold amount.
+            delta = sync_guards.effective_delta(last_known, new_available)
+            if delta is None:
+                pass  # First time — no baseline, use absolute fallback
 
             # --- ECHO DETECTION (delta-based) ---
             # If delta == 0, the stock didn't actually change from our perspective.
-            # This happens when our own propagation write bounces back as a webhook.
+            # This happens when our own propagation write bounces back as a webhook — or when a
+            # CONTINUE store moves below the floor (pool-irrelevant). Keep the raw mirror exact.
             if delta is not None and delta == 0:
                 print(f"[SYNC] Suppressed echo for {barcode} at store {store_id} (delta=0).")
+                if new_available != last_known:
+                    _resync_local_baseline(db, variant.id, payload.get("location_id"), new_available)
                 return
 
             # Per-item WriteIntent echo guard (covers reconciliation/absolute-SET and any case
@@ -380,7 +386,7 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
                                  store_id=store_id, target=barcode, severity="WARN",
                                  details={"observed": new_available, "live": live, "last_known": last_known})
                 new_available = live
-                delta = live - last_known
+                delta = sync_guards.effective_delta(last_known, live)
                 if delta == 0:
                     # Pure stale echo of a value we already hold: anchor and stop.
                     _update_authoritative_version(db, barcode, store_id, live, source_timestamp)
@@ -870,6 +876,8 @@ def _find_self_echo(db: Session, store_id: int, inventory_item_id: Optional[int]
     # flipping the flag off instantly reverts behaviour even for already-stamped markers.
     use_auth = (auth is not None and observed is not None and barcode is not None
                 and sync_guards.echo_authoritative_for(barcode))
+    # Residual uses FLOORED endpoints too: a CONTINUE store selling past zero on top of our write
+    # (auth 0, observed -2) is pool-irrelevant (residual 0 => pure echo), never a -2 to propagate.
     if not use_auth:
         # TWO-TIER value-independent window (2026-07-14): markers now live ECHO_TTL_SECONDS (15 min)
         # so a LATE echo of our own write is still recognised, but blanket value-independent
@@ -885,7 +893,7 @@ def _find_self_echo(db: Session, store_id: int, inventory_item_id: Optional[int]
             # Aged marker, different value: a genuine external change. Leave the marker in place —
             # the actual echo of our write (== marker.quantity) may still arrive within the TTL.
             return None
-    residual = (observed - auth) if use_auth else None
+    residual = sync_guards.effective_delta(auth, observed) if use_auth else None
     try:
         db.delete(marker)
         db.commit()

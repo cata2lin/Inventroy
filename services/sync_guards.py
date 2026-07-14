@@ -196,6 +196,24 @@ def floor_breach_rejects(current_available: Optional[int], delta: int,
     return breach > tolerance, breach
 
 
+def effective_delta(prev: Optional[int], observed: int,
+                    floor: int = INVENTORY_FLOOR) -> Optional[int]:
+    """The pool-relevant delta between two observations of one listing, with FLOORED endpoints:
+
+        effective_delta = max(observed, floor) - max(prev, floor)
+
+    Raw endpoint math poisons pools through the negative-stock test stores (inventory_policy
+    CONTINUE, sales tracked below zero): the pool itself is floored at 0, so units sold below zero
+    were never subtracted from it — but a later restock-set computed raw (500 - (-300)) = +800 and
+    INFLATED the pool by the oversold backlog on every oversell->restock cycle (the origin of the
+    21497/38095-class pool quantities, and hence of the 'impossible' negative deltas that the old
+    code floored to 0). With floored endpoints: movement below the floor contributes 0 (the pool
+    never held those units) and a restock-set propagates exactly the set value."""
+    if prev is None:
+        return None
+    return max(observed, floor) - max(prev, floor)
+
+
 def should_verify_drop(last_known: Optional[int], observed: int,
                        threshold: Optional[int] = None) -> bool:
     """True when an observed drop is big enough to demand live-Shopify verification before it is
@@ -224,7 +242,10 @@ def classify_fold(q_old: Optional[int], source_prev_observed: Optional[int], obs
         return "apply", max(observed, floor), 0
     if source_prev_observed is None:
         return "apply", q_old, 0
-    raw = q_old + (observed - source_prev_observed)
+    # FLOORED endpoints (see effective_delta): movement below the floor never held pool units, so
+    # it must contribute 0 — otherwise a restock-set after tracked oversell (CONTINUE test stores,
+    # baseline -300 -> set 500) folds +800 and inflates the pool by the oversold backlog.
+    raw = q_old + (max(observed, floor) - max(source_prev_observed, floor))
     if raw >= floor:
         return "apply", raw, 0
     deficit = floor - raw

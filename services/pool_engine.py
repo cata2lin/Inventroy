@@ -98,16 +98,21 @@ def fold_observation(q_old: Optional[int], source_prev_observed: Optional[int],
       • Pool not yet initialised (q_old is None)      -> bootstrap to `observed`.
       • First observation from this source (prev None) -> a replica joining; do NOT move the pool
         (it will be CONVERGED to Q instead). Returns q_old unchanged.
-      • Otherwise apply this source's OWN signed change, clamped to the floor:
-            Q_new = max(q_old + (observed - source_prev_observed), floor)
+      • Otherwise apply this source's OWN signed change with FLOORED ENDPOINTS, clamped to the floor:
+            Q_new = max(q_old + (max(observed, floor) - max(source_prev_observed, floor)), floor)
 
     This is conservation, not last-writer-wins: concurrent independent changes on different stores
-    each apply their own delta, so no sale is lost and no oversell is amplified."""
+    each apply their own delta, so no sale is lost and no oversell is amplified.
+
+    Endpoints are floored (2026-07-14) because the negative-stock test stores (CONTINUE policy,
+    sales tracked below zero) otherwise poison the fold: the pool is floored at 0, so units sold
+    below zero were never subtracted from it — a later restock-set then folded raw
+    (500 - (-300)) = +800, inflating Q by the oversold backlog on every cycle."""
     if q_old is None:
         return max(observed, floor)
     if source_prev_observed is None:
         return q_old
-    return max(q_old + (observed - source_prev_observed), floor)
+    return max(q_old + (max(observed, floor) - max(source_prev_observed, floor)), floor)
 
 
 def is_stale_for_source(prev_source_timestamp, new_source_timestamp) -> bool:

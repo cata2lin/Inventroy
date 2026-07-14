@@ -225,6 +225,33 @@ def test_classify_fold_deep_deficit_rejects_pool_unmoved():
     assert deficit == 66
 
 
+# --- 6. negative-stock test stores (CONTINUE policy, sales tracked below zero) ----------------------
+
+def test_effective_delta_restock_after_tracked_oversell():
+    # THE pool-poisoning mechanism: a test store tracks sales to -300, then the operator sets the
+    # real stock (500). Raw math propagated 500-(-300) = +800 — the pool (floored at 0 the whole
+    # time) inflated by the oversold backlog on every cycle. Floored endpoints propagate exactly 500.
+    assert g.effective_delta(-300, 500) == 500
+    assert g.effective_delta(-300, -301) == 0      # selling below zero is pool-irrelevant
+    assert g.effective_delta(-300, -100) == 0      # backlog recovery below zero too
+    assert g.effective_delta(500, -300) == -500    # pool loses only the 500 it actually held
+    assert g.effective_delta(3, 5) == 2            # normal movement unchanged
+    assert g.effective_delta(None, 5) is None      # no baseline -> absolute fallback
+
+
+def test_classify_fold_restock_after_tracked_oversell_not_inflated():
+    verdict, q, deficit = g.classify_fold(0, -300, 500)
+    assert (verdict, q, deficit) == ("apply", 500, 0), \
+        "pool must become the SET value, never set + oversold backlog"
+
+
+def test_fold_observation_floored_endpoints():
+    from services.pool_engine import fold_observation
+    assert fold_observation(0, -300, 500) == 500   # was 800 pre-fix: the 21497/38095-class inflation
+    assert fold_observation(100, 50, -20) == 50    # store shipped its 50; backlog is not pool stock
+    assert fold_observation(100, 100, 99) == 99    # normal path unchanged
+
+
 # --- 5. full-sync constraint removed -----------------------------------------------------------------
 
 def test_sku_store_unique_constraint_removed():
