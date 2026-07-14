@@ -30,8 +30,14 @@ from services import pool_backfill, pool_canary, alerting
 def main():
     db = SessionLocal()
     try:
+        # ALL rollback reasons qualify (await_operator_resolution from the 2026-07-14 remediation,
+        # plus the auto-rollbacks tripped during the cascade chaos: repeated_cas_conflict,
+        # oscillation, canary_exception, write_amplification). The recovery gate is the same for
+        # every reason — and stronger than the reason itself: ALL live listings must AGREE and the
+        # live-truth backfill must succeed before the pool returns to the engine. If instability
+        # recurs, evaluate_canary_rollback trips the pool right back out.
         parked = [r[0] for r in db.execute(text(
-            "SELECT barcode FROM pool_canary_rollbacks WHERE reason='await_operator_resolution'"
+            "SELECT barcode FROM pool_canary_rollbacks"
         )).fetchall()]
         if not parked:
             print(f"{datetime.now(timezone.utc).isoformat()} nothing parked — done")
