@@ -26,8 +26,10 @@ from . import audit_logger
 import os
 import time
 
-# Echo suppression TTL for reconciliation writes (same as inventory_sync_service)
-INTENT_TTL_SECONDS = 60
+# Echo suppression TTL for reconciliation writes (same as inventory_sync_service).
+# 900s (was 60): Shopify webhook delivery routinely exceeds a minute under load; value-matched
+# intents can never suppress a genuinely different value, so the long window is safe.
+INTENT_TTL_SECONDS = 900
 
 
 def _legacy_reconcile_enabled() -> bool:

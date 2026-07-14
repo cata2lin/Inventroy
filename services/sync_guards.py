@@ -35,11 +35,28 @@ def _env_bool(name: str, default: bool) -> bool:
 # --- Tunables (env-overridable) ---
 MAX_ABS_DELTA = _env_int("SYNC_MAX_ABS_DELTA", 1000)          # block single deltas bigger than this
 INVENTORY_FLOOR = _env_int("SYNC_INVENTORY_FLOOR", 0)         # never propagate a target below this
-ECHO_TTL_SECONDS = _env_int("SYNC_ECHO_TTL_SECONDS", 45)      # value-independent echo window
+# Echo markers now LIVE for 15 minutes (Shopify webhook delivery routinely exceeds 45s under load —
+# a late echo of our own write re-ingested as an external observation was the self-zeroing loop of
+# 2026-07-13). Suppression is VALUE-INDEPENDENT only within the short window below; an older marker
+# suppresses only an exact value match, so a real change can never be swallowed by the long TTL.
+ECHO_TTL_SECONDS = _env_int("SYNC_ECHO_TTL_SECONDS", 900)
+ECHO_VALUE_INDEPENDENT_SECONDS = _env_int("SYNC_ECHO_VALUE_INDEPENDENT_SECONDS", 45)
 STORM_MAX_PROPAGATIONS = _env_int("SYNC_STORM_MAX_PROPAGATIONS", 6)   # per barcode per window
 STORM_WINDOW_SECONDS = _env_int("SYNC_STORM_WINDOW_SECONDS", 60)
 STORM_QUARANTINE_SECONDS = _env_int("SYNC_STORM_QUARANTINE_SECONDS", 600)
 MAX_PROPAGATION_DEPTH = _env_int("SYNC_MAX_PROPAGATION_DEPTH", 3)
+# Floor-breach policy (2026-07-14): a negative delta LARGER than a target's current stock is evidence
+# the delta is corrupt (a pool cannot lose more than it has) — the write is REJECTED and the barcode
+# quarantined instead of flooring the store to 0 (which destroyed 415/496 real units on 2026-07-13).
+# Tolerance 0 = every breach rejects; raise only to absorb tiny stockout races (last-unit oversells).
+FLOOR_BREACH_TOLERANCE = _env_int("SYNC_FLOOR_BREACH_TOLERANCE", 0)
+FLOOR_BREACH_QUARANTINE_SECONDS = _env_int("SYNC_FLOOR_BREACH_QUARANTINE_SECONDS", 86400)
+# A drop of at least this many units in one observation is verified against the source store's LIVE
+# Shopify value before it is believed (fail-closed: unverifiable big drops do not propagate/fold).
+BIG_DROP_VERIFY_UNITS = _env_int("SYNC_BIG_DROP_VERIFY_UNITS", 50)
+# Engine fold: a fold that would take the pool this far BELOW the floor is corrupt input (poisoned
+# baseline), not sold stock — reject + quarantine instead of silently clamping the pool to 0.
+FOLD_NEGATIVE_TOLERANCE = _env_int("SYNC_FOLD_NEGATIVE_TOLERANCE", 3)
 
 
 def propagation_enabled() -> bool:
@@ -153,6 +170,67 @@ def apply_floor(current_available: Optional[int], delta: int,
     if projected < floor:
         return "set", floor, True
     return "adjust", delta, False
+
+
+def floor_breach_magnitude(current_available: Optional[int], delta: int,
+                           floor: int = INVENTORY_FLOOR) -> int:
+    """How many units BELOW the floor current+delta would land (0 = no breach / unknown current)."""
+    if current_available is None:
+        return 0
+    projected = current_available + delta
+    return max(floor - projected, 0)
+
+
+def floor_breach_rejects(current_available: Optional[int], delta: int,
+                         floor: int = INVENTORY_FLOOR,
+                         tolerance: Optional[int] = None) -> Tuple[bool, int]:
+    """Floor-breach policy: (reject, breach_magnitude).
+
+    A breach beyond FLOOR_BREACH_TOLERANCE means the DELTA IS CORRUPT (you cannot sell more than a
+    store holds) — the caller must reject the whole propagation and quarantine the barcode, never
+    write the floor. A breach within tolerance is a plausible last-units stockout race and may be
+    clamped (visibly) instead."""
+    if tolerance is None:
+        tolerance = FLOOR_BREACH_TOLERANCE
+    breach = floor_breach_magnitude(current_available, delta, floor)
+    return breach > tolerance, breach
+
+
+def should_verify_drop(last_known: Optional[int], observed: int,
+                       threshold: Optional[int] = None) -> bool:
+    """True when an observed drop is big enough to demand live-Shopify verification before it is
+    believed (propagated / folded). Drops below the threshold pass unverified (normal sales)."""
+    if threshold is None:
+        threshold = BIG_DROP_VERIFY_UNITS
+    if last_known is None:
+        return False
+    return (last_known - observed) >= threshold
+
+
+def classify_fold(q_old: Optional[int], source_prev_observed: Optional[int], observed: int,
+                  floor: int = INVENTORY_FLOOR,
+                  tolerance: Optional[int] = None) -> Tuple[str, int, int]:
+    """PURE verdict for one pool fold: (verdict, quantity, deficit).
+
+      ("apply",  q_new, 0)        -> normal fold (bootstrap / replica-join / non-negative result)
+      ("clamp",  floor, deficit)  -> small negative result (<= tolerance): plausible stockout race,
+                                     clamp to the floor but the caller must ALERT (never silent)
+      ("reject", q_old, deficit)  -> deep negative result: the per-source baseline is poisoned or the
+                                     observation is phantom — do NOT move the pool; quarantine + alert.
+    """
+    if tolerance is None:
+        tolerance = FOLD_NEGATIVE_TOLERANCE
+    if q_old is None:
+        return "apply", max(observed, floor), 0
+    if source_prev_observed is None:
+        return "apply", q_old, 0
+    raw = q_old + (observed - source_prev_observed)
+    if raw >= floor:
+        return "apply", raw, 0
+    deficit = floor - raw
+    if deficit <= tolerance:
+        return "clamp", floor, deficit
+    return "reject", q_old, deficit
 
 
 # --- P0.2 backstop: per-barcode storm circuit breaker (in-process) ---

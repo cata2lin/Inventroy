@@ -78,6 +78,15 @@ def spike_corroboration_enabled() -> bool:
 SPIKE_CORROBORATION_TOLERANCE = int(os.getenv("POOL_SPIKE_CORROBORATION_TOLERANCE", "10"))
 
 
+def drop_corroboration_enabled() -> bool:
+    """P0 catastrophic-drop guard (2026-07-14), the DOWN-direction twin of spike corroboration: a
+    big claimed drop (>= sync_guards.BIG_DROP_VERIFY_UNITS) is verified against the SOURCE store's
+    LIVE Shopify value BEFORE it folds. live==observed folds; live!=observed folds LIVE truth
+    instead; live unreadable FAILS CLOSED (the event is skipped — a phantom drop that folds converges
+    every store toward 0, the 2026-07-13 self-zeroing class). Kill switch: SYNC_POOL_DROP_CORROBORATION=false."""
+    return os.getenv("SYNC_POOL_DROP_CORROBORATION", "true").strip().lower() in ("1", "true", "yes", "on")
+
+
 # --------------------------------------------------------------------------------------------------
 # PURE CONVERGENCE CORE (no I/O — this is the part whose correctness is proven by tests)
 # --------------------------------------------------------------------------------------------------
@@ -172,6 +181,7 @@ def _source_prev(db: Session, barcode: str, source_variant_id: Optional[int], be
         SELECT observed_quantity, source_timestamp
         FROM pool_events
         WHERE barcode = :b AND source_variant_id IS NOT DISTINCT FROM :v AND event_id < :e
+          AND kind <> 'rejected_negative_fold'
         ORDER BY event_id DESC LIMIT 1
     """), {"b": barcode, "v": source_variant_id, "e": before_event_id}).mappings().first()
 
@@ -208,7 +218,56 @@ def apply_event(db: Session, event_id: int, skip_lock: bool = False) -> Optional
 
         state = db.query(models.PoolState).filter(models.PoolState.barcode == ev.barcode).first()
         q_old = state.quantity if state else None
-        q_new = fold_observation(q_old, prev_obs, ev.observed_quantity, floor=sync_guards.INVENTORY_FLOOR)
+        # 2026-07-14: the fold no longer SILENTLY clamps a deep-negative result to 0 (that clamp is
+        # what turned a poisoned baseline into a pool-wide zeroing on convergence). A small deficit
+        # (stockout race) clamps VISIBLY; a deep one REJECTS the event — the pool does not move, the
+        # event is excluded from future baselines, and the caller quarantines/alerts.
+        verdict, q_new, deficit = sync_guards.classify_fold(
+            q_old, prev_obs, ev.observed_quantity, floor=sync_guards.INVENTORY_FLOOR)
+        if verdict == "reject":
+            # Live-verify WHICH side is poisoned before excluding the event from baselines:
+            #   live == observed -> the OBSERVATION is truth, the BASELINE is poisoned. Keep the pool
+            #       unmoved but let this event become the new per-source baseline (baseline_reseed) so
+            #       the NEXT fold is sane — otherwise every later genuine observation re-rejects
+            #       against the same poisoned baseline forever (an unrecoverable CRITICAL-alert loop
+            #       in shadow mode).
+            #   live unreadable or disagrees -> the OBSERVATION is phantom: exclude it from baselines.
+            live = _read_source_live(db, ev.source_store_id, ev.inventory_item_id)
+            if live is not None and live == ev.observed_quantity:
+                ev.kind = "baseline_reseed"
+                resolution = "baseline_reseeded"
+            else:
+                ev.kind = "rejected_negative_fold"   # never a future per-source baseline
+                resolution = "event_rejected"
+            db.commit()
+            alerting.critical("pool_engine.negative_fold_rejected",
+                              f"[{ev.barcode}] fold rejected: observation {ev.observed_quantity} vs "
+                              f"baseline {prev_obs} would take pool Q={q_old} {deficit} below floor "
+                              f"— pool NOT moved ({resolution}, live={live}, store {ev.source_store_id})",
+                              {"barcode": ev.barcode, "observed": ev.observed_quantity,
+                               "source_prev": prev_obs, "q_old": q_old, "deficit": deficit,
+                               "source_store_id": ev.source_store_id, "event_id": event_id,
+                               "resolution": resolution, "live": live})
+            audit_logger.log(category="STOCK", action="pool_negative_fold_rejected",
+                             message=f"[{ev.barcode}] negative fold rejected (deficit {deficit}, "
+                                     f"obs {ev.observed_quantity} vs baseline {prev_obs}, Q={q_old}, "
+                                     f"{resolution})",
+                             target=ev.barcode, severity="CRITICAL",
+                             details={"event_id": event_id, "observed": ev.observed_quantity,
+                                      "source_prev": prev_obs, "q_old": q_old, "deficit": deficit,
+                                      "source_store_id": ev.source_store_id,
+                                      "resolution": resolution, "live": live})
+            return {"barcode": ev.barcode, "rejected": "negative_fold", "deficit": deficit,
+                    "observed": ev.observed_quantity, "source_prev": prev_obs, "q_old": q_old,
+                    "source_store_id": ev.source_store_id, "resolution": resolution, "live": live}
+        if verdict == "clamp":
+            alerting.warning("pool_engine.fold_clamped",
+                             f"[{ev.barcode}] fold clamped to floor (deficit {deficit}: obs "
+                             f"{ev.observed_quantity} vs baseline {prev_obs}, Q={q_old}) — "
+                             f"plausible stockout race",
+                             {"barcode": ev.barcode, "observed": ev.observed_quantity,
+                              "source_prev": prev_obs, "q_old": q_old, "deficit": deficit,
+                              "source_store_id": ev.source_store_id, "event_id": event_id})
         delta = q_new - (q_old if q_old is not None else q_new)
 
         if state is None:
@@ -247,6 +306,7 @@ def latest_source_observed(db: Session, barcode: str, source_variant_id: Optiona
     row = db.execute(text("""
         SELECT observed_quantity FROM pool_events
         WHERE barcode = :b AND source_variant_id IS NOT DISTINCT FROM :v
+          AND kind <> 'rejected_negative_fold'
         ORDER BY event_id DESC LIMIT 1
     """), {"b": barcode, "v": source_variant_id}).first()
     return row[0] if row else None
@@ -285,6 +345,32 @@ def corroborate_up_jump(db: Session, *, barcode: str, source_store_id: Optional[
     live = _read_source_live(db, source_store_id, inventory_item_id)
     if corroboration_verdict(prev, observed, live, tol) == "correct":
         return live, {"prev": prev, "claimed": observed, "live": live, "tol": tol}
+    return observed, None
+
+
+def corroborate_big_drop(db: Session, *, barcode: str, source_store_id: Optional[int],
+                         source_variant_id: Optional[int], inventory_item_id: Optional[int],
+                         observed: int, threshold: Optional[int] = None) -> tuple:
+    """DOWN-direction twin of corroborate_up_jump (2026-07-14). Returns (observed_to_use, info):
+
+      • small drop (< threshold vs the per-listing baseline) -> (observed, None): folds unchecked.
+      • big drop, live == observed                           -> (observed, None): genuine, folds.
+      • big drop, live readable but != observed              -> (live, info): fold LIVE truth (the
+        webhook is stale/out-of-order/echo — e.g. our own floored 0 read back late).
+      • big drop, live UNREADABLE                            -> (None, info): FAIL-CLOSED — caller
+        must SKIP the event entirely. Unlike up-jumps (fail-open: blocking a restock only delays
+        sales), folding an unverifiable catastrophic drop converges every store toward 0.
+    """
+    if threshold is None:
+        threshold = sync_guards.BIG_DROP_VERIFY_UNITS
+    prev = latest_source_observed(db, barcode, source_variant_id)
+    if prev is None or (prev - observed) < threshold:
+        return observed, None
+    live = _read_source_live(db, source_store_id, inventory_item_id)
+    if live is None:
+        return None, {"prev": prev, "claimed": observed, "live": None, "threshold": threshold}
+    if live != observed:
+        return live, {"prev": prev, "claimed": observed, "live": live, "threshold": threshold}
     return observed, None
 
 
@@ -503,6 +589,13 @@ def shadow_observe(*, barcode: str, source_store_id: Optional[int], source_varia
                              target=barcode, severity="INFO",
                              details={"webhook_id": webhook_id, "observed": observed_quantity})
             return {"stale_reject": True}
+        if res.get("rejected"):
+            # deep-negative fold rejected (apply_event already alerted CRITICAL) — pool unmoved.
+            audit_logger.log(category="RECONCILIATION", action="pool_shadow_fold_rejected",
+                             message=f"[{barcode}] shadow: negative fold rejected (deficit {res.get('deficit')})",
+                             target=barcode, severity="WARN",
+                             details={"webhook_id": webhook_id, **{k: v for k, v in res.items() if k != 'barcode'}})
+            return {"fold_rejected": True}
 
         q = res["quantity"]
         version = res["version"]

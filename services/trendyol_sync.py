@@ -282,7 +282,9 @@ def _apply_sale(db, ean: str, sold: int, webhook_id: str, ts) -> Optional[int]:
     if ev_id is None:
         return q_now
     res = pool_engine.apply_event(db, ev_id, skip_lock=True)
-    if res is None:
+    if res is None or res.get("rejected"):
+        # "rejected" is unreachable here by construction (the reseed anchors prev to Q, so the fold
+        # is exactly -sold, floored at 0) — guard anyway so a future reject can't KeyError the sweep.
         return None
     pool_engine.converge_pool(db, ean)
     return int(res["quantity"])

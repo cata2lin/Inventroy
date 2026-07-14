@@ -231,6 +231,48 @@ def _canary_handle_inner(db: Session, *, barcode, source_store_id, source_varian
                              {"barcode": barcode, **correction})
             observed_quantity = observed_corrected
 
+    # P0 CATASTROPHIC-DROP CORROBORATION (2026-07-14): the DOWN-direction twin. A big claimed drop is
+    # verified against the SOURCE's live Shopify truth BEFORE it enters the ledger; a stale/echo drop
+    # (e.g. our own floored 0 delivered late) folds LIVE truth instead, and an UNVERIFIABLE big drop
+    # is skipped outright (fail-closed — folding it would converge every store toward 0).
+    if pool_engine.drop_corroboration_enabled():
+        drop_observed, drop_info = pool_engine.corroborate_big_drop(
+            db, barcode=barcode, source_store_id=source_store_id,
+            source_variant_id=source_variant_id,
+            inventory_item_id=inventory_item_id, observed=observed_quantity)
+        if drop_observed is None:
+            golden_capture(db, barcode, "drop_unverifiable", webhook_id=webhook_id, payload=drop_info)
+            alerting.critical("pool_canary.drop_unverifiable",
+                              f"[{barcode}] big drop to {observed_quantity} from store {source_store_id} "
+                              f"could NOT be live-verified — event SKIPPED (fail-closed), pool frozen",
+                              {"barcode": barcode, "source_store_id": source_store_id, **(drop_info or {})})
+            audit_logger.log(category="STOCK", action="pool_canary_drop_unverifiable",
+                             message=f"[{barcode}] unverifiable big drop to {observed_quantity} skipped",
+                             target=barcode, severity="CRITICAL",
+                             details={**(drop_info or {}), "webhook_id": webhook_id,
+                                      "source_store_id": source_store_id})
+            # FREEZE the pool: the skipped event is gone (dedup row committed, Shopify won't
+            # redeliver), so if the drop was GENUINE the stale Q must never be converged back onto
+            # the source's live value (that would resurrect sold stock). Rollback-to-legacy holds
+            # writes until an operator re-backfills from live truth.
+            trigger_rollback(db, barcode, "drop_unverifiable",
+                             {**(drop_info or {}), "source_store_id": source_store_id})
+            return {"barcode": barcode, "result": "drop_unverifiable_blocked"}
+        if drop_info is not None:
+            golden_capture(db, barcode, "drop_corrected", webhook_id=webhook_id, payload=drop_info)
+            audit_logger.log(category="STOCK", action="pool_canary_drop_corrected",
+                             message=f"[{barcode}] stale/phantom drop corrected to live truth: claimed "
+                                     f"{drop_info['claimed']} but live={drop_info['live']} "
+                                     f"(prev {drop_info['prev']}) from store {source_store_id}",
+                             target=barcode, severity="WARN",
+                             details={**drop_info, "webhook_id": webhook_id,
+                                      "source_store_id": source_store_id})
+            alerting.warning("pool_canary.drop_corrected",
+                             f"[{barcode}] phantom/stale drop from store {source_store_id} corrected "
+                             f"{drop_info['claimed']}->{drop_info['live']} (live truth)",
+                             {"barcode": barcode, **drop_info})
+            observed_quantity = drop_observed
+
     ev_id = pool_engine.ingest_event(db, barcode=barcode, source_store_id=source_store_id,
                                      source_variant_id=source_variant_id, inventory_item_id=inventory_item_id,
                                      observed_quantity=observed_quantity, source_timestamp=source_timestamp,
@@ -249,6 +291,15 @@ def _canary_handle_inner(db: Session, *, barcode, source_store_id, source_varian
                          message=f"[{barcode}] canary: out-of-order event rejected (per-source)",
                          target=barcode, severity="INFO", details={"webhook_id": webhook_id})
         return {"barcode": barcode, "result": "stale_reject"}
+    if res.get("rejected"):
+        # Deep-negative fold = corrupt baseline/phantom observation (apply_event alerted CRITICAL and
+        # left the pool unmoved). Quarantine the pool durably: roll back to legacy until an operator
+        # re-backfills from live truth — never converge on evidence this poisoned.
+        golden_capture(db, barcode, "rollback", webhook_id=webhook_id,
+                       payload={"reason": "negative_fold", **{k: v for k, v in res.items() if k != 'barcode'}})
+        trigger_rollback(db, barcode, "negative_fold",
+                         {k: v for k, v in res.items() if k != "barcode"})
+        return {"barcode": barcode, "result": "negative_fold_rejected", "deficit": res.get("deficit")}
 
     q, version = res["quantity"], res["version"]
     golden_capture(db, barcode, "transition", pool_version=version, webhook_id=webhook_id,

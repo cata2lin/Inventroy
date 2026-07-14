@@ -131,12 +131,24 @@ def run_product_sync_for_store(store_id: int, task_id: Optional[str] = None):
         
         # --- 5. Finalize and Clean Up ---
         if snapshot_finished:
-            run.status = 'ok'
-            
+            # (2026-07-14) A run with failed pages is NOT 'ok' — reporting success while dead-lettering
+            # pages is how 927k losses accumulated invisibly since Oct 2025.
+            run.status = 'ok' if run.pages_failed == 0 else 'partial'
+
             # Option B (BUG-24 FIX): Use deleted_at for soft-delete instead of status="DELETED".
             # Only soft-delete on FULL syncs. On incremental syncs, we can't know which products
             # were deleted because we only fetched recently updated ones.
-            if not is_incremental:
+            # (2026-07-14) NEVER soft-delete after a lossy run: products on a failed page keep a
+            # stale last_seen_at and would be marked deleted while still live in Shopify — which
+            # silently removes them from barcode sync.
+            if not is_incremental and run.pages_failed > 0:
+                print(f"[SYNC-WARN] Skipping soft-delete pass for store {store_id}: "
+                      f"{run.pages_failed} failed page(s) make 'unseen' unreliable.")
+                audit_logger.log_sync(store_id, store.name if store else f"store_{store_id}",
+                                      "soft_delete_skipped",
+                                      f"Soft-delete skipped: {run.pages_failed} failed page(s)",
+                                      details={"pages_failed": run.pages_failed})
+            elif not is_incremental:
                 now = datetime.now(timezone.utc)
                 # Soft-delete products not seen in this full sync
                 db.query(models.Product).filter(

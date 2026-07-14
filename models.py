@@ -99,9 +99,11 @@ class ProductVariant(Base):
     inventory_levels = relationship("InventoryLevel", back_populates="variant", cascade="all, delete-orphan")
     inventory_snapshots = relationship("InventorySnapshot", back_populates="product_variant", cascade="all, delete-orphan")
 
-    __table_args__ = (
-        UniqueConstraint('sku', 'store_id', name='product_variants_sku_store_id_key'),
-    )
+    # 2026-07-14: the UNIQUE(sku, store_id) constraint (added 2025-10-03) was WRONG — Shopify allows
+    # duplicate SKUs per store and this business deliberately runs same-store duplicate listings.
+    # It dead-lettered ~927k product bundles (full sync effectively dead since Oct 2025) and the
+    # BUG-33 clear-before-upsert workaround corrupted sibling SKUs on every sync. Dropped by
+    # migrate_p0_cascade_kill.py; row identity is the Shopify variant id.
 
 class Location(Base):
     __tablename__ = "locations"

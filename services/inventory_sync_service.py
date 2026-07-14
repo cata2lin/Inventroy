@@ -18,7 +18,7 @@ from typing import Dict, Any, List, Optional
 import threading
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 
 import models
 from database import SessionLocal
@@ -32,7 +32,11 @@ from services import pool_engine
 from services import pool_canary
 
 # --- Configuration ---
-INTENT_TTL_SECONDS = 60
+# 900s (was 60): Shopify webhook delivery routinely exceeds a minute under load; an expired intent
+# let the app read its own floor-write of 0 back as an external observation (2026-07-13 self-zeroing
+# loop). _is_echo matches on exact (store, barcode, quantity[, item]) so a long window can never
+# suppress a genuinely different value.
+INTENT_TTL_SECONDS = 900
 DUPLICATE_TTL_SECONDS = 120
 LOCK_TIMEOUT_SECONDS = 30
 
@@ -165,6 +169,44 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
             db.rollback()
             print(f"[SYNC-WARN] Dedup check failed, proceeding anyway: {e}")
 
+        # SOURCE-STORE GATE (2026-07-14): a disabled store must be inert as an observation SOURCE
+        # too, not merely excluded as a write target — before this gate its webhooks still drove
+        # deltas/folds into every other store, so a manual stock correction on a "disabled" store
+        # propagated as a phantom delta. We keep the local mirror exact (so re-enabling starts from
+        # delta=0) and, for engine pools, reseed the per-listing ledger baseline WITHOUT folding
+        # (idempotent on webhook_id; an out-of-order OLDER observation is dropped, never rewound to).
+        source_store = db.query(models.Store).filter(models.Store.id == store_id).first()
+        if source_store is not None and not source_store.enabled:
+            try:
+                prev = db.execute(text("""
+                    SELECT source_timestamp FROM pool_events
+                    WHERE barcode = :b AND source_variant_id IS NOT DISTINCT FROM :v
+                      AND kind <> 'rejected_negative_fold'
+                    ORDER BY event_id DESC LIMIT 1"""),
+                    {"b": barcode, "v": variant.id}).first()
+                if prev is not None and pool_engine.is_stale_for_source(prev[0], source_timestamp):
+                    print(f"[SYNC] Ignored: out-of-order disabled-store event for {barcode}@{store_id}.")
+                    return
+            except Exception:
+                db.rollback()
+            _resync_local_baseline(db, variant.id, payload.get("location_id"), new_available)
+            try:
+                pstate = db.query(models.PoolState).filter(models.PoolState.barcode == barcode).first()
+                if pstate is not None:
+                    pool_engine.ingest_event(
+                        db, barcode=barcode, source_store_id=store_id, source_variant_id=variant.id,
+                        inventory_item_id=inventory_item_id, observed_quantity=new_available,
+                        source_timestamp=source_timestamp, webhook_id=webhook_id,
+                        kind="disabled_store_baseline")
+            except Exception:
+                db.rollback()
+            print(f"[SYNC] Store {store_id} is disabled: mirrored {barcode} qty {new_available}, no propagation.")
+            audit_logger.log(category="STOCK", action="disabled_store_ingest",
+                             message=f"[{barcode}] observation from DISABLED store {store_id} mirrored only (qty {new_available})",
+                             store_id=store_id, target=barcode, severity="INFO",
+                             details={"quantity": new_available})
+            return
+
         # P0.5/P0.2: self-echo suppression. If we wrote to THIS exact inventory item within the
         # echo window, this webhook is (at least partly) the echo of our own write.
         #   - VALUE-INDEPENDENT path (default; flag off OR no captured authoritative qty): suppress
@@ -193,7 +235,7 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
         if not authoritative_residual:
             # Get the last known stock for this variant at this store's sync location.
             # This is what WE think the stock was before this webhook event.
-            store = db.query(models.Store).filter(models.Store.id == store_id).first()
+            store = source_store
             last_known = None
             if store and store.sync_location_id:
                 inv_level = db.query(models.InventoryLevel).filter(
@@ -288,6 +330,68 @@ def handle_webhook(store_id: int, payload: Dict[str, Any], triggered_at_str: str
         if not is_authoritative:
             print(f"[SYNC] Ignored: Stale event for {barcode} from store {store_id}.")
             return
+
+        # CATASTROPHIC-DROP VERIFICATION (2026-07-14): a big drop (e.g. 995 -> 0) must be confirmed
+        # by the SOURCE store's LIVE Shopify value BEFORE it is believed — and BEFORE it anchors the
+        # mirror/version (an unverified phantom 0 as the baseline would arm a huge phantom POSITIVE
+        # delta on the next genuine webhook). Semantics mirror the engine's corroborate_big_drop:
+        #   live == observed  -> genuine: fall through, anchor, propagate.
+        #   live != observed  -> stale/out-of-order/echo: adopt LIVE truth as the observation and
+        #                        recompute the delta (a pure stale echo yields delta 0 and stops).
+        #   live unreadable   -> FAIL-CLOSED: nothing anchored, nothing propagated; short quarantine
+        #                        so nothing propagates off suspect state until it can be verified.
+        # Authoritative residuals are already Shopify-anchored and skip this.
+        if (not authoritative_residual and delta is not None and delta < 0
+                and sync_guards.should_verify_drop(last_known, new_available)):
+            live = None
+            if source_store is not None and source_store.sync_location_id and inventory_item_id:
+                try:
+                    svc = ShopifyService(store_url=source_store.shopify_url, token=source_store.api_token)
+                    live = svc.get_available_single(
+                        f"gid://shopify/InventoryItem/{inventory_item_id}",
+                        f"gid://shopify/Location/{source_store.sync_location_id}")
+                except Exception as e:
+                    print(f"[SYNC-WARN] Big-drop live verification read failed for {barcode}@{store_id}: {e}")
+            if live is None:
+                _trip_breaker(db, barcode, reason="drop_unverifiable",
+                              details={"store_id": store_id, "last_known": last_known,
+                                       "observed": new_available, "delta": delta})
+                alerting.critical("inventory_sync.drop_unverifiable",
+                                  f"Big drop {last_known}->{new_available} for {barcode} on store "
+                                  f"{store_id} could NOT be live-verified — blocked + quarantined, "
+                                  f"baseline left at {last_known}",
+                                  {"barcode": barcode, "store_id": store_id,
+                                   "last_known": last_known, "observed": new_available, "delta": delta})
+                audit_logger.log(category="STOCK", action="drop_unverifiable_blocked",
+                                 message=f"[{barcode}] big drop {last_known}->{new_available} unverifiable — blocked + quarantined",
+                                 store_id=store_id, target=barcode, severity="CRITICAL",
+                                 details={"last_known": last_known, "observed": new_available, "delta": delta})
+                return
+            if live != new_available:
+                # Shopify no longer holds the observed value. Adopt LIVE truth as the observation —
+                # never discard a possibly-genuine drop (the engine twin folds live the same way).
+                alerting.warning("inventory_sync.drop_corrected",
+                                 f"Big drop to {new_available} for {barcode} on store {store_id} "
+                                 f"superseded by live truth ({live}) — folding live value",
+                                 {"barcode": barcode, "store_id": store_id, "observed": new_available,
+                                  "live": live, "last_known": last_known})
+                audit_logger.log(category="STOCK", action="drop_corrected_by_live",
+                                 message=f"[{barcode}] drop to {new_available} corrected to live ({live})",
+                                 store_id=store_id, target=barcode, severity="WARN",
+                                 details={"observed": new_available, "live": live, "last_known": last_known})
+                new_available = live
+                delta = live - last_known
+                if delta == 0:
+                    # Pure stale echo of a value we already hold: anchor and stop.
+                    _update_authoritative_version(db, barcode, store_id, live, source_timestamp)
+                    _resync_local_baseline(db, variant.id, payload.get("location_id"), live)
+                    return
+            else:
+                alerting.warning("inventory_sync.drop_verified",
+                                 f"Big drop {last_known}->{new_available} for {barcode} on store "
+                                 f"{store_id} CONFIRMED by live truth — propagating",
+                                 {"barcode": barcode, "store_id": store_id,
+                                  "last_known": last_known, "observed": new_available, "delta": delta})
 
         # 1. Update the authoritative version + keep the source store's local mirror exact.
         _update_authoritative_version(db, barcode, store_id, new_available, source_timestamp)
@@ -766,6 +870,21 @@ def _find_self_echo(db: Session, store_id: int, inventory_item_id: Optional[int]
     # flipping the flag off instantly reverts behaviour even for already-stamped markers.
     use_auth = (auth is not None and observed is not None and barcode is not None
                 and sync_guards.echo_authoritative_for(barcode))
+    if not use_auth:
+        # TWO-TIER value-independent window (2026-07-14): markers now live ECHO_TTL_SECONDS (15 min)
+        # so a LATE echo of our own write is still recognised, but blanket value-independent
+        # suppression is confined to the first ECHO_VALUE_INDEPENDENT_SECONDS. Past that, an aged
+        # marker suppresses ONLY an exact value match (observed == the qty we wrote) — a late echo of
+        # our own 0-write matches and is dropped; a REAL change to a different value never is.
+        created = marker.created_at
+        if created is not None and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age_s = ((datetime.now(timezone.utc) - created).total_seconds()
+                 if created is not None else float("inf"))
+        if age_s > sync_guards.ECHO_VALUE_INDEPENDENT_SECONDS and observed != marker.quantity:
+            # Aged marker, different value: a genuine external change. Leave the marker in place —
+            # the actual echo of our write (== marker.quantity) may still arrive within the TTL.
+            return None
     residual = (observed - auth) if use_auth else None
     try:
         db.delete(marker)
@@ -782,7 +901,16 @@ def _create_echo_marker(db: Session, barcode: str, target_store_id: int, invento
     """Record an outbound-write lineage marker so the resulting webhook echo is recognised as ours.
     expected_qty feeds the legacy value-based fallback. authoritative_qty (when set, from a single-item
     mutation's Shopify-authoritative post-write `available` quantity) enables exact residual detection.
-    Returns the created marker so the caller can patch authoritative_qty after the write returns."""
+    Returns the created marker so the caller can patch authoritative_qty after the write returns.
+
+    TTL: a marker with a KNOWN written value lives the full ECHO_TTL (its aged tier suppresses only
+    an exact value match, so a late echo of e.g. our 0-write is still caught). A marker whose
+    post-write value is UNKNOWN (expected_qty None — the no-baseline relative-adjust paths)
+    stores a 0 SENTINEL in the NOT NULL quantity column; letting IT reach the aged exact-match tier
+    would falsely suppress a genuine later drop-to-zero, so its life is capped at the
+    value-independent window (exactly the pre-2026-07-14 behaviour)."""
+    ttl = (sync_guards.ECHO_TTL_SECONDS if expected_qty is not None
+           else min(sync_guards.ECHO_VALUE_INDEPENDENT_SECONDS, sync_guards.ECHO_TTL_SECONDS))
     marker = models.WriteIntent(
         barcode=barcode,
         target_store_id=target_store_id,
@@ -794,7 +922,7 @@ def _create_echo_marker(db: Session, barcode: str, target_store_id: int, invento
         origin_inventory_item_id=origin_item_id,
         propagation_depth=depth,
         authoritative_qty=authoritative_qty,
-        expires_at=datetime.now(timezone.utc) + timedelta(seconds=sync_guards.ECHO_TTL_SECONDS),
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl),
     )
     db.add(marker)
     return marker
@@ -817,10 +945,13 @@ def _is_barcode_broken(db: Session, barcode: str) -> bool:
         return False
 
 
-def _trip_breaker(db: Session, barcode: str, reason: str, details: Optional[Dict[str, Any]] = None):
+def _trip_breaker(db: Session, barcode: str, reason: str, details: Optional[Dict[str, Any]] = None,
+                  quarantine_seconds: Optional[int] = None):
     """Persist a circuit-breaker row (and set the in-process quarantine) so this barcode is
     refused for propagation until it expires."""
-    expires = datetime.now(timezone.utc) + timedelta(seconds=sync_guards.STORM_QUARANTINE_SECONDS)
+    if quarantine_seconds is None:
+        quarantine_seconds = sync_guards.STORM_QUARANTINE_SECONDS
+    expires = datetime.now(timezone.utc) + timedelta(seconds=quarantine_seconds)
     try:
         existing = db.query(models.BarcodeCircuitBreaker).filter_by(barcode=barcode).first()
         if existing:
@@ -860,9 +991,21 @@ def _is_echo(db: Session, store_id: int, barcode: str, observed_total: int,
         ))
     intent = q.first()
     if intent:
-        # BUG-34 FIX: Do NOT delete the WriteIntent. If Shopify fires duplicate webhooks
-        # (or if multiple workers race), the intent must remain to suppress all echoes
-        # within the TTL window.
+        # BUG-34: don't DELETE the intent — Shopify duplicate deliveries in the next couple of
+        # minutes must still be suppressed. But with the 15-min TTL (2026-07-14) an immortal
+        # value-matched intent would swallow a GENUINE change back to the same value minutes later
+        # (A->B->A revert). First match means the echo has arrived: shrink the intent's remaining
+        # life to the duplicate window instead of leaving it live for the full TTL.
+        try:
+            cap = datetime.now(timezone.utc) + timedelta(seconds=DUPLICATE_TTL_SECONDS)
+            exp = intent.expires_at
+            if exp is not None and exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp is None or exp > cap:
+                intent.expires_at = cap
+                db.commit()
+        except Exception:
+            db.rollback()
         return True
     return False
 
@@ -978,6 +1121,59 @@ def _is_stale_compare(ue: Optional[List[Dict[str, Any]]]) -> bool:
     return False
 
 
+def _reject_floor_breach(db: Session, barcode: str, store: models.Store, current: Optional[int],
+                         delta: int, breach: int, sync_op: str):
+    """A negative delta larger than a target's current stock is corrupt-input evidence (a store
+    cannot lose more than it holds), NOT sold stock. NEVER write the floor: refuse the whole
+    propagation, quarantine the barcode durably, and alert CRITICAL so an operator resolves the
+    divergence with evidence. (Flooring to 0 here destroyed 415/496 real units on 2026-07-13.)"""
+    _trip_breaker(db, barcode, reason="floor_breach",
+                  details={"store_id": store.id, "store": store.name, "current": current,
+                           "delta": delta, "breach": breach, "sync_operation_uuid": sync_op},
+                  quarantine_seconds=sync_guards.FLOOR_BREACH_QUARANTINE_SECONDS)
+    alerting.critical("inventory_sync.floor_breach_rejected",
+                      f"REJECTED delta {delta} for {barcode}: would breach floor on '{store.name}' "
+                      f"(current {current}) by {breach} — barcode quarantined, nothing written",
+                      {"barcode": barcode, "store": store.name, "current": current,
+                       "delta": delta, "breach": breach})
+    audit_logger.log(category="STOCK", action="floor_breach_rejected",
+                     message=f"[{barcode}] delta {delta} rejected: floor breach of {breach} on "
+                             f"'{store.name}' (current {current}) — quarantined, no write",
+                     store_id=store.id, target=barcode, severity="CRITICAL",
+                     details={"current": current, "delta": delta, "breach": breach,
+                              "sync_operation_uuid": sync_op,
+                              "quarantine_seconds": sync_guards.FLOOR_BREACH_QUARANTINE_SECONDS})
+
+
+def _scan_floor_breach(db: Session, barcode: str, delta: int,
+                       target_stores: List[models.Store],
+                       store_variant_map: Dict[int, List[models.ProductVariant]],
+                       sync_op: str) -> bool:
+    """Pre-scan EVERY target before anything is written: if the delta would breach the floor beyond
+    tolerance on ANY target, reject the whole propagation (True = rejected). Runs before the first
+    Shopify call so a corrupt delta writes to zero stores, not 'all stores before the bad one'."""
+    if delta >= 0:
+        return False
+    store_lookup = {s.id: s for s in target_stores}
+    for sid, variants_to_update in store_variant_map.items():
+        store = store_lookup.get(sid)
+        if not store or not store.sync_location_id:
+            continue
+        for v in variants_to_update:
+            if not v.inventory_item_id:
+                continue
+            level = db.query(models.InventoryLevel).filter(
+                models.InventoryLevel.variant_id == v.id,
+                models.InventoryLevel.location_id == store.sync_location_id,
+            ).first()
+            current = level.available if (level and level.available is not None) else None
+            reject, breach = sync_guards.floor_breach_rejects(current, delta)
+            if reject:
+                _reject_floor_breach(db, barcode, store, current, delta, breach, sync_op)
+                return True
+    return False
+
+
 def _propagate_delta_single_item(db: Session, barcode: str, delta: int, new_source_qty: int,
                                  store: models.Store, location_gid: str,
                                  variants_to_update: List[models.ProductVariant], ref_uri: str,
@@ -999,6 +1195,12 @@ def _propagate_delta_single_item(db: Session, barcode: str, delta: int, new_sour
         ).first()
         current = level.available if (level and level.available is not None) else None
         op, floor_value, clamped = sync_guards.apply_floor(current, delta)
+        if clamped:
+            # Defense-in-depth behind the caller's pre-scan (the mirror could have moved since).
+            reject, breach = sync_guards.floor_breach_rejects(current, delta)
+            if reject:
+                _reject_floor_breach(db, barcode, store, current, delta, breach, sync_op)
+                return True
         # The absolute target we intend to land on this item.
         target = floor_value if clamped else ((current + delta) if current is not None else None)
         item_gid = f"gid://shopify/InventoryItem/{v.inventory_item_id}"
@@ -1053,6 +1255,17 @@ def _propagate_delta_single_item(db: Session, barcode: str, delta: int, new_sour
                         true_cur = service.get_available_single(item_gid, location_gid)
                         if true_cur is None:
                             break
+                        # Same floor-breach policy against Shopify's LIVE current: a delta bigger
+                        # than the live stock is corrupt input — reject, never land the floor.
+                        reject, breach = sync_guards.floor_breach_rejects(true_cur, delta)
+                        if reject:
+                            try:
+                                db.delete(marker)
+                                db.commit()
+                            except Exception:
+                                db.rollback()
+                            _reject_floor_breach(db, barcode, store, true_cur, delta, breach, sync_op)
+                            return True
                         new_target = max(true_cur + delta, sync_guards.INVENTORY_FLOOR)
                         raw_r, ue_r = service.set_inventory_quantities_single(
                             item_gid, location_gid, new_target, reference_uri=ref_uri, compare_quantity=true_cur)
@@ -1101,6 +1314,7 @@ def _propagate_delta_single_item(db: Session, barcode: str, delta: int, new_sour
             audit_logger.log_error("inventory_sync_service._propagate_delta_single_item",
                                    f"Failed to propagate barcode {barcode} to store '{store.name}'",
                                    details={"barcode": barcode, "delta": delta}, exc=e)
+    return False  # no floor-breach rejection; caller may continue with the remaining stores
 
 
 def _execute_delta_propagation(
@@ -1117,10 +1331,14 @@ def _execute_delta_propagation(
     """
     DELTA-based propagation to the canonical target variant of each store.
 
-    P0.4 floor: before each write we project current+delta; if it would breach the floor we
-    SET that item to the floor (absolute) instead of applying the raw negative delta, and alert.
+    P0.4 floor (2026-07-14 policy): before ANY write we project current+delta on EVERY target; a
+    breach beyond tolerance REJECTS the whole propagation (quarantine + CRITICAL alert, zero writes —
+    a delta bigger than a store's stock is corrupt input). A within-tolerance breach (stockout race)
+    still clamps that item to the floor, visibly.
     P0.2 lineage: each write records a value-independent echo marker carrying the sync op + origin.
     """
+    if _scan_floor_breach(db, barcode, delta, target_stores, store_variant_map, sync_op):
+        return
     store_lookup = {s.id: s for s in target_stores}
     ref_uri = f"inventory-sync://op/{sync_op}"
 
@@ -1136,8 +1354,10 @@ def _execute_delta_propagation(
         # SYNC_ECHO_AUTHORITATIVE: write each item via its own single-item mutation so the
         # Shopify-authoritative post-write quantity is attributable and stamped on the marker.
         if sync_guards.echo_authoritative_for(barcode):
-            _propagate_delta_single_item(db, barcode, delta, new_source_qty, store, location_gid,
-                                         variants_to_update, ref_uri, sync_op, origin_store_id, origin_item_id)
+            if _propagate_delta_single_item(db, barcode, delta, new_source_qty, store, location_gid,
+                                            variants_to_update, ref_uri, sync_op, origin_store_id,
+                                            origin_item_id):
+                return  # floor breach: barcode quarantined — write nothing to the remaining stores
             continue
 
         adjust_payload, adjust_ids = [], []
@@ -1154,6 +1374,13 @@ def _execute_delta_propagation(
                 ).first()
                 current = level.available if (level and level.available is not None) else None
                 op, value, clamped = sync_guards.apply_floor(current, delta)
+                if clamped:
+                    # Defense-in-depth behind the pre-scan (the mirror could have moved since).
+                    reject, breach = sync_guards.floor_breach_rejects(current, delta)
+                    if reject:
+                        db.rollback()  # discard markers staged for this store, nothing written yet
+                        _reject_floor_breach(db, barcode, store, current, delta, breach, sync_op)
+                        return
                 expected = value if clamped else ((current + delta) if current is not None else None)
 
                 _create_echo_marker(db, barcode, store.id, v.inventory_item_id, expected,
@@ -1233,6 +1460,21 @@ def _execute_absolute_propagation(
     ABSOLUTE propagation (first-time sync, no baseline). SETs the canonical target of each
     store to desired_total (floored), recording value-independent echo markers + lineage.
     """
+    # A NEGATIVE absolute target is corrupt input (Shopify can report negative `available`, but
+    # replicating it across stores destroys stock) — clamp-at-source is wrong too: reject + alert.
+    if desired_total < sync_guards.INVENTORY_FLOOR:
+        alerting.critical("inventory_sync.negative_absolute_rejected",
+                          f"REJECTED absolute propagation of {desired_total} for {barcode} "
+                          f"(below floor {sync_guards.INVENTORY_FLOOR}) — nothing written",
+                          {"barcode": barcode, "desired_total": desired_total,
+                           "origin_store_id": origin_store_id})
+        audit_logger.log(category="STOCK", action="negative_absolute_rejected",
+                         message=f"[{barcode}] absolute propagation of {desired_total} rejected "
+                                 f"(below floor)", target=barcode, severity="CRITICAL",
+                         details={"desired_total": desired_total, "sync_operation_uuid": sync_op,
+                                  "origin_store_id": origin_store_id})
+        return
+
     store_lookup = {s.id: s for s in target_stores}
     ref_uri = f"inventory-sync://op/{sync_op}"
     value = max(desired_total, sync_guards.INVENTORY_FLOOR)

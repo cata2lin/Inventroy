@@ -220,21 +220,11 @@ def create_or_update_products(db: Session, store_id: int, run_id: int, items: Li
                 
                 for v_data in v_data_list:
                     v_row = _extract_variant_fields(v_data, p_row["id"], store_id, last_seen_at)
-                    
-                    # BUG-33 FIX: Clear SKU from other variants on same store to prevent
-                    # UniqueConstraint violation on (sku, store_id). Shopify is source of truth:
-                    # if it says this variant owns the SKU, any old claim must be released.
-                    if v_row.get("sku"):
-                        db.execute(
-                            models.ProductVariant.__table__.update()
-                            .where(
-                                models.ProductVariant.store_id == store_id,
-                                models.ProductVariant.sku == v_row["sku"],
-                                models.ProductVariant.id != v_row["id"],
-                            )
-                            .values(sku=None)
-                        )
-                    
+
+                    # (2026-07-14) The BUG-33 "clear sibling SKUs" workaround is gone with the
+                    # UNIQUE(sku, store_id) constraint it served: duplicate same-store SKUs are
+                    # legitimate here, and NULLing siblings corrupted the mirror on every sync.
+
                     variant_stmt = pg_insert(models.ProductVariant).values(v_row)
                     variant_stmt = variant_stmt.on_conflict_do_update(
                         index_elements=['id'],
@@ -438,26 +428,15 @@ def _update_variants_incrementally(db: Session, product_id: int, store_id: int, 
         try:
             # Use a savepoint so one variant failure doesn't roll back others
             nested = db.begin_nested()
-            
+
             # Check if variant exists
             db_variant = db.query(models.ProductVariant).filter(
                 models.ProductVariant.id == variant_id
             ).first()
-            
-            # BUG-33 FIX: Before setting a SKU, release it from any OTHER variant
-            # on the same store. Shopify is the source of truth for SKU ownership.
-            new_sku = v_data.get("sku")
-            if new_sku and new_sku.strip():
-                db.execute(
-                    models.ProductVariant.__table__.update()
-                    .where(
-                        models.ProductVariant.store_id == store_id,
-                        models.ProductVariant.sku == (new_sku or None),
-                        models.ProductVariant.id != variant_id,
-                    )
-                    .values(sku=None)
-                )
-            
+
+            # (2026-07-14) BUG-33 sibling-SKU clearing removed with the UNIQUE(sku, store_id)
+            # constraint — duplicate same-store SKUs are legitimate; NULLing siblings corrupted them.
+
             if db_variant:
                 # Update existing variant
                 updates = {}
@@ -651,4 +630,25 @@ def adjust_inventory_levels_for_variants(db: Session, variant_ids: List[int], lo
         models.InventoryLevel.updated_at: now,
         models.InventoryLevel.last_fetched_at: now,
     }, synchronize_session=False)
+
+    # (2026-07-14) Never let the mirror drift negative SILENTLY: a negative baseline seeds phantom
+    # deltas (the -8 that caused the HA-1193-1 amplification). Clamp to 0 and ALERT — the echo of the
+    # real Shopify value re-anchors the mirror if Shopify genuinely sits elsewhere.
+    if delta < 0:
+        negative_rows = db.query(models.InventoryLevel).filter(
+            models.InventoryLevel.variant_id.in_(variant_ids),
+            models.InventoryLevel.location_id == location_id,
+            models.InventoryLevel.available < 0,
+        ).all()
+        if negative_rows:
+            detail = [{"variant_id": r.variant_id, "available": r.available} for r in negative_rows]
+            for r in negative_rows:
+                r.available = 0
+                if r.on_hand is not None and r.on_hand < 0:
+                    r.on_hand = 0
+            from services import alerting  # lazy: keep crud import-order independent
+            alerting.warning("inventory_mirror.negative_clamped",
+                             f"Local mirror went negative after delta {delta} at location "
+                             f"{location_id} — clamped to 0",
+                             {"location_id": location_id, "delta": delta, "rows": detail})
     db.commit()
