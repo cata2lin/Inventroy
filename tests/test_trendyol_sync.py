@@ -82,7 +82,7 @@ def test_inbound_is_stock_delta_not_order_line():
 def test_inbound_fold_is_idempotent_transition():
     # replaying the SAME anchor->qty transition must NOT subtract twice (split/re-observe safe)
     src = _read("services/trendyol_sync.py")
-    assert 'f"trendyol-in:{tb}:{acc}:{ty_now}"' in src      # transition-keyed webhook_id
+    assert 'f"trendyol-in:{tb}:{acc}:{new_acc}"' in src     # transition-keyed webhook_id (order-verified fold)
     ap = src[src.index("def _apply_sale"):src.index("def _inbound_fold")]
     assert "SELECT 1 FROM pool_events WHERE webhook_id" in ap    # dedup before any mutation
 
@@ -186,3 +186,27 @@ if __name__ == "__main__":
             print(f"ERROR {fn.__name__}: {type(e).__name__}: {e}")
     print(f"\n{passed}/{len(fns)} trendyol-sync tests passed")
     sys.exit(0 if passed == len(fns) else 1)
+
+
+# --- 2026-07-15: order-verified inbound (238 phantom units removed by glitch 0-reads) -------------
+
+def test_select_lines_for_drop_exact_and_partial():
+    from services.trendyol_sync import select_lines_for_drop
+    lines = [{"id": 1, "quantity": 1}, {"id": 2, "quantity": 2}, {"id": 3, "quantity": 1}]
+    assert select_lines_for_drop(lines, 4) == (4, [1, 2, 3])   # all fit
+    assert select_lines_for_drop(lines, 2) == (2, [1, 3])      # line 2 (qty 2) would overflow after 1
+    assert select_lines_for_drop(lines, 1) == (1, [1])
+    assert select_lines_for_drop(lines, 0) == (0, [])
+
+
+def test_select_lines_for_drop_no_orders_means_no_fold():
+    from services.trendyol_sync import select_lines_for_drop
+    # The Jul-10/15 incident shape: drop of 34 (anchor->0) with ZERO recorded orders.
+    assert select_lines_for_drop([], 34) == (0, []), \
+        "a qty drop with no order lines must fold NOTHING (glitch read, not sales)"
+
+
+def test_select_lines_for_drop_line_bigger_than_drop_waits():
+    from services.trendyol_sync import select_lines_for_drop
+    # A 3-unit order but Trendyol only shows a 2-unit drop so far -> wait, fold nothing.
+    assert select_lines_for_drop([{"id": 9, "quantity": 3}], 2) == (0, [])

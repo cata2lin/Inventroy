@@ -290,42 +290,95 @@ def _apply_sale(db, ean: str, sold: int, webhook_id: str, ts) -> Optional[int]:
     return int(res["quantity"])
 
 
+def select_lines_for_drop(lines: List[Dict[str, Any]], drop: int) -> tuple:
+    """PURE: pick whole order lines (oldest first) whose quantities fit inside the observed
+    Trendyol qty drop. Returns (fold_qty, [line ids]). A line bigger than the remaining drop is
+    left for a later cycle (fold only what BOTH the orders and the qty movement agree on)."""
+    fold_qty, ids = 0, []
+    for ln in lines:
+        q = int(ln.get("quantity") or 0)
+        if q <= 0:
+            continue
+        if fold_qty + q > drop:
+            continue
+        fold_qty += q
+        ids.append(ln["id"])
+    return fold_qty, ids
+
+
 def _inbound_fold(db, tb: str, ean: str, ty_now: int, acc: Optional[int], ts=None) -> Dict[str, Any]:
-    """STOCK-DELTA inbound (split/cancel-proof, cannot double-count): Trendyol's current quantity
-    BELOW the value we last SET on it (`acc`, the accounted anchor) = real marketplace sales since we
-    last accounted -> fold that decrease exactly ONCE and advance the anchor to ty_now. A qty at/above
-    the anchor is never a sale (equal = our push landed; higher = our push not yet applied / a restock
-    we don't honour inbound). No order lines are involved, so package splits and cancellations can
-    never inflate the subtraction. Idempotent (webhook_id encodes the acc->ty_now transition)."""
+    """ORDER-VERIFIED inbound (2026-07-15): a Trendyol qty BELOW the accounted anchor is only the
+    TRIGGER — the folded amount must be backed by REAL recorded Trendyol order lines
+    (trendyol_order_lines, applied=false, non-cancelled). fold_qty = whole order lines that fit
+    inside the observed drop; consumed lines are marked applied so they fold exactly once.
+
+    Why: the previous stock-delta-only version trusted the qty drop itself, and Trendyol
+    glitch/limbo reads of 0 (batch in flight, listing state flaps) turned entire anchors into
+    phantom \"sales\" — 238 units were removed from Grandia pools on Jul 10-15 with ZERO real
+    orders behind them. Now: a drop with NO matching orders folds NOTHING, alerts, and leaves the
+    anchor untouched (if real orders are merely late, the ~3-min orders_poll records them and the
+    next reconcile folds the verified amount; if it was a glitch, the next outbound push re-asserts
+    our stock on Trendyol and the drop evaporates). Direction stays one-way: Shopify pushes stock
+    TO Trendyol; Trendyol only ever sends back SALES, never stock levels."""
     if acc is None:
         return {"folded": False, "reason": "no_anchor"}
-    sold = int(acc) - int(ty_now)
-    if sold <= 0:
+    drop = int(acc) - int(ty_now)
+    if drop <= 0:
         return {"folded": False, "reason": "no_decrease"}
-    if sold > MAX_INBOUND_DROP:
+    if drop > MAX_INBOUND_DROP:
         alerting.warning("trendyol.inbound_drop",
-                         f"[{tb}] Trendyol qty {acc}->{ty_now} dropped {sold} (> {MAX_INBOUND_DROP}) "
+                         f"[{tb}] Trendyol qty {acc}->{ty_now} dropped {drop} (> {MAX_INBOUND_DROP}) "
                          f"— NOT folded (looks like a glitch/archive, not sales)",
                          {"tb": tb, "ean": ean, "acc": acc, "ty_now": ty_now})
-        return {"folded": False, "reason": "suspicious_drop", "sold": sold}
+        return {"folded": False, "reason": "suspicious_drop", "sold": drop}
     if not inbound_apply():
-        return {"folded": False, "reason": "dry_run", "sold": sold}
+        return {"folded": False, "reason": "dry_run", "sold": drop}
+
+    # ORDER CORROBORATION: unconsumed, non-cancelled order lines for this barcode (14-day lookback).
+    lines = [dict(r) for r in db.execute(text("""
+        SELECT id, quantity FROM trendyol_order_lines
+        WHERE trendyol_barcode = :tb
+          AND COALESCE(applied, false) = false
+          AND COALESCE(order_status, '') NOT IN ('Cancelled')
+          AND order_date_ms >= (extract(epoch from now() - interval '14 days') * 1000)::bigint
+        ORDER BY order_date_ms, id""" ), {"tb": tb}).mappings()]
+    fold_qty, line_ids = select_lines_for_drop(lines, drop)
+    if fold_qty <= 0:
+        alerting.warning("trendyol.inbound_unverified",
+                         f"[{tb}] Trendyol qty dropped {acc}->{ty_now} (-{drop}) but NO recorded "
+                         f"orders back it — NOT folded (glitch/limbo read; anchor kept)",
+                         {"tb": tb, "ean": ean, "acc": acc, "ty_now": ty_now, "drop": drop,
+                          "unapplied_lines": len(lines)})
+        audit_logger.log(category="STOCK", action="trendyol_inbound_unverified",
+                         message=f"[{ean}] Trendyol drop -{drop} ({acc}->{ty_now}) has no order lines — skipped",
+                         target=ean, severity="WARN",
+                         details={"tb": tb, "acc": acc, "ty_now": ty_now, "drop": drop})
+        return {"folded": False, "reason": "unverified_drop", "sold": drop}
+
     handle = dist_lock.acquire(f"barcode:{ean}")
     if handle is None:
-        return {"folded": False, "reason": "locked", "sold": sold}
+        return {"folded": False, "reason": "locked", "sold": fold_qty}
     try:
-        new_q = _apply_sale(db, ean, sold, f"trendyol-in:{tb}:{acc}:{ty_now}",
+        new_acc = int(acc) - fold_qty
+        new_q = _apply_sale(db, ean, fold_qty, f"trendyol-in:{tb}:{acc}:{new_acc}",
                             ts or datetime.now(timezone.utc))
         if new_q is None:
-            return {"folded": False, "reason": "not_authoritative", "sold": sold}
+            return {"folded": False, "reason": "not_authoritative", "sold": fold_qty}
+        # Advance the anchor by exactly what was folded (NOT to ty_now: an unverified remainder of
+        # the drop must stay visible until orders confirm it or the next push overwrites it).
         db.execute(text("UPDATE trendyol_mappings SET ty_accounted_qty=:a WHERE trendyol_barcode=:tb"),
-                   {"a": int(ty_now), "tb": tb})
+                   {"a": new_acc, "tb": tb})
+        db.execute(text("""UPDATE trendyol_order_lines
+                           SET applied = true, skip_reason = 'folded_stock_delta'
+                           WHERE id = ANY(:ids)"""), {"ids": line_ids})
         db.commit()
         audit_logger.log(category="STOCK", action="trendyol_sale_folded",
-                         message=f"[{ean}] Trendyol sale -{sold} folded ({acc}->{ty_now}) -> Q={new_q} ({tb})",
+                         message=f"[{ean}] Trendyol sale -{fold_qty} folded (order-verified, {len(line_ids)} "
+                                 f"lines; drop {acc}->{ty_now}) -> Q={new_q} ({tb})",
                          target=ean, severity="INFO",
-                         details={"sold": sold, "acc": acc, "ty_now": ty_now, "new_Q": new_q, "tb": tb})
-        return {"folded": True, "sold": sold, "new_q": new_q}
+                         details={"sold": fold_qty, "order_lines": len(line_ids), "acc": acc,
+                                  "ty_now": ty_now, "new_acc": new_acc, "new_Q": new_q, "tb": tb})
+        return {"folded": True, "sold": fold_qty, "new_q": new_q}
     finally:
         dist_lock.release(handle)
 
