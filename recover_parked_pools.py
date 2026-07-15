@@ -27,6 +27,37 @@ from database import SessionLocal
 from services import pool_backfill, pool_canary, alerting
 
 
+def reanchor_uniform_drift(db) -> int:
+    """Self-heal the 'uniform collapse' class: the validation sweep flags engine pools whose Q
+    disagrees with a value ALL stores agree on (pool_validation_engine_q_drift). Stores-in-agreement
+    is exactly the audited backfill's safety bar, so re-anchor Q from live truth instead of alerting
+    forever. Event-driven off recent audit rows — no full-fleet live scan."""
+    recent = [r[0] for r in db.execute(text("""
+        SELECT DISTINCT target FROM audit_logs
+        WHERE action = 'pool_validation_engine_q_drift'
+          AND timestamp >= now() - interval '45 minutes'
+          AND target IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM pool_canary_rollbacks r WHERE r.barcode = target)
+    """)).fetchall()]
+    healed = 0
+    for bc in recent:
+        try:
+            plan = pool_backfill.plan_backfill(db, bc)
+            if plan["safe"]:
+                res = pool_backfill.backfill_pool_state_from_live_truth(
+                    [bc], dry_run=False, operator_confirmed=True)
+                if res.get("backfilled"):
+                    healed += 1
+                    print(f"  drift re-anchored: {bc} -> {plan['computed_Q']}")
+        except Exception as e:
+            print(f"  {bc}: drift re-anchor ERROR {e}")
+    if healed:
+        alerting.warning("pool_remediation.drift_reanchored",
+                         f"{healed} engine pools with uniform Q-drift re-anchored from live truth",
+                         {"healed": healed})
+    return healed
+
+
 def main():
     db = SessionLocal()
     try:
@@ -36,11 +67,13 @@ def main():
         # every reason — and stronger than the reason itself: ALL live listings must AGREE and the
         # live-truth backfill must succeed before the pool returns to the engine. If instability
         # recurs, evaluate_canary_rollback trips the pool right back out.
+        drift_healed = reanchor_uniform_drift(db)
         parked = [r[0] for r in db.execute(text(
             "SELECT barcode FROM pool_canary_rollbacks"
         )).fetchall()]
         if not parked:
-            print(f"{datetime.now(timezone.utc).isoformat()} nothing parked — done")
+            print(f"{datetime.now(timezone.utc).isoformat()} nothing parked — done "
+                  f"(drift_healed={drift_healed})")
             return
         recovered, still = 0, 0
         for bc in parked:

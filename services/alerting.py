@@ -28,28 +28,37 @@ ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL", "").strip()
 
 # --- Email sink (config read lazily so .env is honoured; secrets live in .env, not unit files) ---
 EMAIL_SOURCE_COOLDOWN_S = int(os.getenv("ALERT_EMAIL_SOURCE_COOLDOWN_S", "300"))
+# A REPEAT of the same (source, barcode) waits much longer — the 30-min sweeps re-alert unresolved
+# conditions forever (one diverged pool sent 24+ near-identical emails on day one). A NEW barcode
+# from the same source is a new problem and only waits the short source cooldown.
+EMAIL_KEY_COOLDOWN_S = int(os.getenv("ALERT_EMAIL_KEY_COOLDOWN_S", "21600"))
 EMAIL_MAX_PER_HOUR = int(os.getenv("ALERT_EMAIL_MAX_PER_HOUR", "20"))
 
 _email_lock = threading.Lock()
 _email_last_by_source: Dict[str, float] = {}
+_email_last_by_key: Dict[str, float] = {}
 _email_sent_times: deque = deque()
 _email_suppressed = 0
 
 
-def _email_allowed(source: str) -> bool:
-    """Throttle: one email per source per cooldown, capped per hour. Suppressed alerts are
-    counted and reported in the next email that goes through."""
+def _email_allowed(source: str, key: Optional[str] = None) -> bool:
+    """Throttle: short cooldown per source, LONG cooldown per exact (source, barcode) repeat,
+    capped per hour. Suppressed alerts are counted and reported in the next email through."""
     global _email_suppressed
     now = time.monotonic()
     with _email_lock:
         while _email_sent_times and _email_sent_times[0] < now - 3600:
             _email_sent_times.popleft()
-        last = _email_last_by_source.get(source)
-        if (last is not None and now - last < EMAIL_SOURCE_COOLDOWN_S) \
+        last_src = _email_last_by_source.get(source)
+        last_key = _email_last_by_key.get(key) if key else None
+        if (last_src is not None and now - last_src < EMAIL_SOURCE_COOLDOWN_S) \
+                or (last_key is not None and now - last_key < EMAIL_KEY_COOLDOWN_S) \
                 or len(_email_sent_times) >= EMAIL_MAX_PER_HOUR:
             _email_suppressed += 1
             return False
         _email_last_by_source[source] = now
+        if key:
+            _email_last_by_key[key] = now
         _email_sent_times.append(now)
         return True
 
@@ -151,7 +160,8 @@ def alert(severity: str, source: str, title: str, context: Optional[Dict[str, An
         else ("WARNING", "WARN", "CRITICAL", "ERROR")
     if os.getenv("ALERT_EMAIL_TO", "").strip() and severity in email_severities:
         try:
-            if _email_allowed(source):
+            key = f"{source}:{context.get('barcode') or context.get('target') or ''}"
+            if _email_allowed(source, key=key):
                 threading.Thread(target=_send_email, args=(severity, source, title, context),
                                  daemon=True).start()
         except Exception:
